@@ -9,10 +9,32 @@ future module plugs into, so nothing has to be redesigned later.
 
 The packaged form of the platform is one executable: `dist/weaverbird`,
 built by `./build.sh`. That single file is the app. Future platform
-stages — generation workers, playtest runners, a local app mode (for
-example `weaverbird app`) — ship inside this same executable as new
-library modules and new commands. They are not separate services a
+stages — generation workers, playtest runners — ship inside this same
+executable as new library modules. They are not separate services a
 user has to assemble.
+
+## Entry model (v0.3)
+
+The app is the product surface. Bare `weaverbird` starts the local
+server (workspace = the current folder, where projects are
+discovered) and opens the app in the user's browser; `--workspace`,
+`--port` and `--no-open` adjust the launch, and Ctrl+C stops it.
+There is no separate app command. The CLI surface is minimalist —
+bare launch, `weaverbird update`, `weaverbird version`,
+`weaverbird help` — with the project commands (init, scope, brain,
+skeleton, pipeline, finish, ledger, provenance, connectors,
+settings, doctor, identity) kept underneath for scripting, listed in
+help under "Project commands (scripting)". The server and every
+command call the same library, so the surfaces cannot drift apart.
+
+`weaverbird update [--check]` keeps the executable current from the
+GitHub releases of wrenly40/weaverbird: the standalone executable
+downloads the release's `weaverbird` asset, verifies it runs and
+reports the new version before swapping itself (the old file is kept
+as `weaverbird.bak`); a source checkout is pulled and rebuilt (and
+refused while dirty); other installs are told the exact upgrade
+command. Releases are therefore published with the built executable
+attached.
 
 ## How the pieces fit
 
@@ -43,10 +65,21 @@ user has to assemble.
   report, the grouped interview questions, and approval (which is
   refused while the scope is incomplete). The pipeline cannot leave
   this stage without a complete, approved scope.
-- Future: the interview conversation itself (a scope-interview module
-  that reads and writes the scope file through the library, extracts
-  answers from the prompt, and shows style samples). It plugs into:
-  scope parser, pipeline state, ledger (its model calls are logged).
+- Built in v0.3: the bring-your-own-key brain (`brain.py`) and the
+  interview's first working form. `weaverbird scope interview <dir>
+  --prompt "..."` stores the prompt in the scope file, then the cheap
+  tier extracts answers for the still-empty REQUIRED fields (strict
+  JSON, unsure fields stay empty, filled fields are never
+  overwritten) and the remaining grouped questions are printed. The
+  call is logged to the ledger under the scope stage. Without a
+  configured model it degrades plainly: the prompt is stored, nothing
+  is extracted, and the questions carry the interview. The app's
+  scope view is the same flow as a form over the same library, with
+  the prompt box and the approve button.
+- Future: the multi-turn interview conversation (follow-up rounds
+  driven by the model, style samples shown and picked during the
+  interview). It plugs into: scope parser, pipeline state, ledger
+  (its model calls are logged).
 
 ### 2. Design and skeleton
 - Inputs: the approved scope file, the archetype templates.
@@ -129,8 +162,22 @@ user has to assemble.
 - Built in v0.1: the checklist lives in pipeline state, and the
   pipeline refuses to enter or leave the finished stage while any
   item is untrue. Iteration and token caps come from global settings.
-- Future: automatic evidence for each checklist item, gathered by the
-  test and playtest stages instead of being set by hand.
+- Built in v0.3: the evidence-based finish check (`finish.py`).
+  `weaverbird finish check <dir>` inspects the real evidence and
+  marks the items it can back — scenario tests and crashes from the
+  skeleton validation runs, menus/save/settings from the generated
+  game's scripts, the win half of winnable-and-losable from the flow
+  smoke — each mark stored with who marked it, when, and the
+  evidence note. Items it cannot evidence stay open with a plain
+  reason (the lose path, performance, content counts and the polish
+  gate have no honest evidence yet). A test report at
+  `.weaverbird/test_report.json`, when present, takes precedence over
+  the skeleton report — that is the file the test and playtest stages
+  will write.
+- Future: richer evidence as the test and playtest stages land
+  (lose-path runs, measured performance, content counted against the
+  scope, a real icon from asset generation), so more of the checklist
+  can be marked by evidence instead of staying open.
 
 ### 8. Approval
 - Inputs: the finished game, its price and store copy drafts.
@@ -139,8 +186,20 @@ user has to assemble.
 - Built in v0.1: the stage's place in the pipeline; scope approval is
   the working model for how approvals are recorded (a named person, a
   date, written into the record).
-- Future: the approval view (captured playthrough, drafts, one place
-  to say yes or send it back), shipped in the app.
+- Built in v0.3: the document the approval stage consumes.
+  `weaverbird finish report <dir>` runs the finish check and writes
+  `FINISH_REPORT.md`: the game's title and pitch, an opening summary
+  (written by the frontier model from the structured facts when one
+  is configured — clearly labelled as the only model-written part —
+  otherwise a template paragraph from the same facts), stage history,
+  what was built, the definition-of-done table with its evidence, the
+  test summary, the full cost ledger by stage and tier, the
+  provenance summary with the store disclosure draft, and the
+  decisions left for the human (open items, price, platforms,
+  storefronts, store copy, playing the release candidate). The app's
+  project view shows the same checklist and evidence.
+- Future: the approval view itself (captured playthrough, drafts,
+  one place to say yes or send it back), shipped in the app.
 
 ### 9. Publishing through connectors
 - Inputs: the approved game, per-store permission from the user.

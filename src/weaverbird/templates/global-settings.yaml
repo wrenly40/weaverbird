@@ -10,9 +10,18 @@ budgets:
   warn_at_percent_of_cap: 80
 
 models:                        # the ladder — cheap first, frontier only for judgement
-  cheap:  { connector: null, model: null }   # classification, log digests, formatting
-  mid:    { connector: null, model: null }   # routine code edits
-  frontier: { connector: null, model: null } # design, hard debugging, play-test judgement
+  # BYOK: you bring your own keys. api_key_env is the NAME of an
+  # environment variable that holds your key — never the key itself.
+  # Keys are read from the environment when a call is made and are
+  # never written to any file, log, ledger or report.
+  # provider is "openai" (OpenAI-compatible chat completions — OpenAI,
+  # OpenRouter, Together, or a local server such as Ollama / LM Studio
+  # via base_url) or "anthropic" (Messages API). Leave model empty to
+  # leave a tier unconfigured. cost_per_1k_tokens is optional and only
+  # used to price the ledger entry; tokens are always recorded.
+  cheap:    { provider: openai, model: "", base_url: null, api_key_env: OPENAI_API_KEY, cost_per_1k_tokens: null }  # classification, extraction, digests
+  mid:      { provider: openai, model: "", base_url: null, api_key_env: OPENAI_API_KEY, cost_per_1k_tokens: null }  # routine code edits
+  frontier: { provider: anthropic, model: "", base_url: null, api_key_env: ANTHROPIC_API_KEY, cost_per_1k_tokens: null } # design, hard debugging, judgement
   allow_local_models: true
 
 engine:

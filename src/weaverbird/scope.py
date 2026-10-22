@@ -68,6 +68,7 @@ class ScopeField:
     name: str
     section: str
     value: str = ""
+    line_no: int | None = None
 
     @property
     def filled(self) -> bool:
@@ -79,6 +80,7 @@ class Scope:
     path: Path | None
     fields: list[ScopeField] = field(default_factory=list)
     approval: str = ""
+    original_prompt: str = ""
 
     @property
     def required_fields(self) -> list[ScopeField]:
@@ -113,7 +115,8 @@ def _clean_value(raw: str) -> str:
     return value
 
 
-def _parse_required_line(text: str, section: str) -> ScopeField | None:
+def _parse_required_line(text: str, section: str,
+                         line_no: int | None = None) -> ScopeField | None:
     """Parse one bullet line into a required ScopeField, if it is one."""
     if "REQUIRED" not in text:
         return None
@@ -121,17 +124,17 @@ def _parse_required_line(text: str, section: str) -> ScopeField | None:
         rest = text[len("REQUIRED"):].strip()
         name, _, raw_value = rest.partition(":")
         return ScopeField(name=name.strip(), section=section,
-                          value=_clean_value(raw_value))
+                          value=_clean_value(raw_value), line_no=line_no)
     # Shape like: "Telemetry: off by default — REQUIRED explicit yes/no:"
     name = text.split(":", 1)[0].strip()
-    return ScopeField(name=name, section=section, value="")
+    return ScopeField(name=name, section=section, value="", line_no=line_no)
 
 
 def parse_scope_text(text: str, path=None) -> Scope:
     """Parse SCOPE.md text into a Scope."""
     scope = Scope(path=Path(path) if path else None)
     section = "General"
-    for line in text.splitlines():
+    for line_no, line in enumerate(text.splitlines()):
         stripped = line.strip()
         if stripped.startswith("## "):
             section = stripped[3:].strip()
@@ -142,7 +145,10 @@ def parse_scope_text(text: str, path=None) -> Scope:
         if content.startswith("Approval:"):
             scope.approval = _clean_value(content.partition(":")[2])
             continue
-        parsed = _parse_required_line(content, section)
+        if content.startswith("Original prompt"):
+            scope.original_prompt = content.partition(":")[2].strip()
+            continue
+        parsed = _parse_required_line(content, section, line_no=line_no)
         if parsed is not None:
             scope.fields.append(parsed)
     return scope
@@ -208,3 +214,60 @@ def scope_path_for(project_dir) -> Path:
     if path.is_file():
         return path
     return path / "SCOPE.md"
+
+
+# ---------------------------------------------------------------------------
+# Writing values back into the scope file.
+#
+# Both writers keep the file's structure intact: only the one line that
+# holds the value is rewritten, everything else stays as it was. They
+# are used by the scope interview (storing the prompt, applying answers
+# a model extracted) and by the app's scope form.
+
+_ORIGINAL_PROMPT_RE = re.compile(r"^- Original prompt.*$", re.MULTILINE)
+
+
+def _one_line(value) -> str:
+    return " ".join(str(value).split())
+
+
+def set_original_prompt(path, prompt: str) -> Scope:
+    """Store the user's prompt in the scope file's Original prompt line."""
+    path = Path(path)
+    if not path.exists():
+        raise ScopeError(f"Scope file not found: {path}")
+    line = f"- Original prompt (verbatim): {_one_line(prompt)}"
+    text = path.read_text(encoding="utf-8")
+    if _ORIGINAL_PROMPT_RE.search(text):
+        text = _ORIGINAL_PROMPT_RE.sub(line, text, count=1)
+    elif "## Identity" in text:
+        text = text.replace("## Identity", "## Identity\n" + line, 1)
+    else:
+        text = text.rstrip("\n") + "\n" + line + "\n"
+    path.write_text(text, encoding="utf-8")
+    return load_scope(path)
+
+
+def set_field_value(path, field_name: str, value) -> Scope:
+    """Write one field's value into the scope file, in place.
+
+    The line is rewritten in the plain "- REQUIRED Name: value" shape
+    the parser reads, so the file stays a valid scope file. Raises
+    ScopeError when the field is not part of the scope file.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise ScopeError(f"Scope file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    parsed = parse_scope_text(text, path=path)
+    target = None
+    for fld in parsed.fields:
+        if fld.name == field_name:
+            target = fld
+            break
+    if target is None or target.line_no is None:
+        raise ScopeError(f"Scope file {path} has no field named {field_name!r}.")
+    lines = text.splitlines()
+    lines[target.line_no] = f"- REQUIRED {field_name}: {_one_line(value)}"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return load_scope(path)

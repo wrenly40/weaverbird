@@ -3,8 +3,11 @@
 This module is deliberately thin: it parses arguments, calls the
 library in this package, and prints plain results. All of the logic
 lives in the library modules (settings, scope, connectors, ledger,
-provenance, state, vcs, godot), so a future desktop or web platform
-and a background job runner can call the same core.
+provenance, state, vcs, godot, skeleton, brain, finish, update), so
+the app (bare ``weaverbird``) and any future job runner call the
+same core. The everyday CLI surface is deliberately minimal — bare
+launch, ``update``, ``version``, ``help``; the project commands stay
+underneath for scripting.
 """
 
 from __future__ import annotations
@@ -18,7 +21,11 @@ import sys
 from pathlib import Path
 
 from . import __version__, template_text
+from . import app as app_module
+from . import brain as brain_module
+from . import update as update_module
 from . import connectors as connectors_module
+from . import finish as finish_module
 from . import godot as godot_module
 from . import identity as identity_module
 from . import ledger as ledger_module
@@ -194,6 +201,146 @@ def cmd_scope_approve(args) -> int:
     except scope_module.ScopeError as exc:
         return _fail(str(exc))
     return _ok(f"Scope approved by {args.by} and frozen. Approval line: {parsed.approval}")
+
+
+def cmd_scope_interview(args) -> int:
+    try:
+        outcome = brain_module.interview_from_prompt(
+            args.dir, args.prompt, settings_path=args.settings)
+    except scope_module.ScopeError as exc:
+        return _fail(str(exc))
+    print("Prompt stored in the scope file's Original prompt field.")
+    if outcome["applied"]:
+        print("Extracted from the prompt (only empty fields were filled):")
+        for name, value in outcome["applied"].items():
+            print(f"- {name}: {value}")
+    result = outcome.get("brain_result")
+    if result is not None and result.ok:
+        print(f"Model call logged to the ledger: stage scope, tier cheap, "
+              f"{result.total_tokens} tokens ({result.prompt_tokens} in, "
+              f"{result.completion_tokens} out), cost {result.cost:.4f}.")
+    if outcome.get("note"):
+        print(outcome["note"])
+    questions = outcome.get("questions") or []
+    if questions:
+        print(f"\nStill missing {outcome['missing_count']} required field(s). "
+              "Next interview round:")
+        for section, group in questions:
+            print(f"\n{section}:")
+            for question in group:
+                print(f"- {question}")
+        return 0
+    return _ok("The scope is now complete — ready to approve.")
+
+
+def cmd_brain_check(args) -> int:
+    settings_file, data = brain_module.resolve_settings(args.settings,
+                                                        args.project)
+    if settings_file:
+        print(f"Settings: {settings_file}")
+    else:
+        print("Settings: no global settings file found — no model is "
+              "configured. Weaverbird is bring-your-own-key: create a "
+              "global-settings.yaml and fill in the models ladder.")
+    statuses = brain_module.brain_status(data)
+    for tier in brain_module.TIERS:
+        st = statuses[tier]
+        if st["configured"]:
+            line = (f"- {tier}: provider {st['provider']}, model {st['model']}, "
+                    f"key ({st['api_key_env']}): "
+                    f"{'present' if st['key_present'] else 'not set'}")
+            if st["base_url"]:
+                line += f", base url {st['base_url']}"
+            print(line)
+        else:
+            print(f"- {tier}: not configured — {st['reason']}")
+    if not args.live:
+        print("Add --live to make one tiny test call per usable tier.")
+        return 0
+    project = args.project
+    scratch = None
+    if not project:
+        import tempfile
+        scratch = tempfile.mkdtemp(prefix="weaverbird-brain-check-")
+        project = scratch
+        print(f"No --project given: live calls are logged to a scratch "
+              f"ledger in {scratch}.")
+    for tier in brain_module.TIERS:
+        st = statuses[tier]
+        if not st["usable"]:
+            print(f"- {tier}: skipped — {st['reason']}")
+            continue
+        try:
+            result = brain_module.complete(
+                project, tier,
+                [{"role": "user", "content": "Reply with the word ok"}],
+                stage="brain-check", settings_path=settings_file,
+                max_tokens=8)
+        except brain_module.BrainBudgetError as exc:
+            print(f"- {tier}: refused — {exc}")
+            continue
+        if result.ok:
+            print(f"- {tier}: live call ok — reply {result.text.strip()!r}, "
+                  f"{result.total_tokens} tokens logged "
+                  f"({result.prompt_tokens} in, {result.completion_tokens} out).")
+            if result.warning:
+                print(f"  {result.warning}")
+        else:
+            print(f"- {tier}: live call failed — {result.error}")
+    return 0
+
+
+def cmd_finish_check(args) -> int:
+    try:
+        result = finish_module.evaluate_finish(args.dir)
+    except finish_module.FinishError as exc:
+        return _fail(str(exc))
+    print("Finish check — the factory marks only what it can evidence:")
+    if result["marked_now"]:
+        print("Marked now (evidence found):")
+        for key, note in result["marked_now"].items():
+            print(f"- ✓ {finish_module.DOD_LABELS.get(key, key)} — {note}")
+    if result["already_marked"]:
+        print("Already marked:")
+        for key, note in result["already_marked"].items():
+            print(f"- ✓ {finish_module.DOD_LABELS.get(key, key)} — {note}")
+    if result["open"]:
+        print("Still open:")
+        for key, reason in result["open"].items():
+            print(f"- – {finish_module.DOD_LABELS.get(key, key)} — {reason}")
+        return _fail(
+            f"Not finished yet: {len(result['open'])} of "
+            f"{len(state_module.DEFINITION_OF_DONE)} definition-of-done "
+            "items are still open.")
+    return _ok("Finished: every definition-of-done item is marked, each "
+               "with its evidence. The finished gate now passes.")
+
+
+def cmd_finish_report(args) -> int:
+    try:
+        path = finish_module.build_finish_report(
+            args.dir, settings_path=args.settings)
+    except finish_module.FinishError as exc:
+        return _fail(str(exc))
+    return _ok(f"Finish report written: {path}\n"
+               "It is the document the approval stage reads: what was "
+               "built, the definition of done with its evidence, what "
+               "everything cost, and the decisions left for the human.")
+
+
+def cmd_launch(args) -> int:
+    """Bare `weaverbird`: the app is the product surface — launch it."""
+    workspace = Path(args.workspace) if args.workspace else Path.cwd()
+    return app_module.run_app(workspace, port=args.port or 8765,
+                              open_browser=not args.no_open)
+
+
+def cmd_version(_args) -> int:
+    return _ok(f"weaverbird {__version__}")
+
+
+def cmd_update(args) -> int:
+    return update_module.run_update(check_only=args.check)
 
 
 def cmd_settings_check(args) -> int:
@@ -372,7 +519,15 @@ def cmd_pipeline_status(args) -> int:
     dod = state.get("definition_of_done", {})
     done = [k for k, v in dod.items() if v]
     open_items = [k for k, v in dod.items() if not v]
+    evidence = state.get("dod_evidence", {})
     print(f"Definition of done: {len(done)} of {len(dod)} items true")
+    for key in done:
+        note = evidence.get(key, {})
+        if note:
+            print(f"- done: {key} — {note.get('note', '')} "
+                  f"(marked by {note.get('by', 'weaverbird')})")
+        else:
+            print(f"- done: {key}")
     for key in open_items:
         print(f"- still open: {key}")
     reasons = state_module.gate_reasons(args.dir, state)
@@ -428,10 +583,24 @@ def cmd_pipeline_advance(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="weaverbird",
-        description="Weaverbird — a game factory on top of Godot (infrastructure).",
+        description="Weaverbird — a game factory on top of Godot. "
+                    "Run it with no command to open the app.",
     )
     parser.add_argument("--version", action="version", version=f"weaverbird {__version__}")
+    parser.add_argument("--workspace", default=None, metavar="DIR",
+                        help="Workspace for the app launch (default: the "
+                             "current folder).")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Port for the app launch (default: 8765).")
+    parser.add_argument("--no-open", action="store_true",
+                        help="Serve the app without opening a browser.")
     sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("version", help="Print the Weaverbird version.")
+    update_cmd = sub.add_parser(
+        "update", help="Update Weaverbird from its GitHub releases.")
+    update_cmd.add_argument("--check", action="store_true",
+                            help="Only report whether an update exists.")
 
     sub.add_parser("doctor", help="Check python, git, GitHub login, Godot and settings.")
 
@@ -457,6 +626,45 @@ def build_parser() -> argparse.ArgumentParser:
     approve = scope_sub.add_parser("approve", help="Approve a complete scope.")
     approve.add_argument("dir")
     approve.add_argument("--by", required=True, help="Name of the person approving.")
+    interview = scope_sub.add_parser(
+        "interview",
+        help="Store a prompt in the scope and extract answers from it "
+             "(bring-your-own-key brain; degrades gracefully without one).")
+    interview.add_argument("dir")
+    interview.add_argument("--prompt", required=True,
+                           help="The maker's description of the game.")
+    interview.add_argument("--settings", default=None,
+                           help="Global settings file (default: search the "
+                                "usual places).")
+
+    brain_cmd = sub.add_parser(
+        "brain", help="Check the bring-your-own-key model ladder.")
+    brain_sub = brain_cmd.add_subparsers(dest="brain_command")
+    brain_check = brain_sub.add_parser(
+        "check", help="Show per-tier provider, model and whether the key "
+                      "environment variable is set (never its value).")
+    brain_check.add_argument("--settings", default=None,
+                             help="Global settings file (default: search the usual places).")
+    brain_check.add_argument("--project", default=None,
+                             help="Project directory (helps find the settings file; "
+                                  "its ledger receives --live call entries).")
+    brain_check.add_argument("--live", action="store_true",
+                             help="Also make one tiny call per usable tier and "
+                                  "show the token counts it logged.")
+
+    finish_cmd = sub.add_parser(
+        "finish", help="Evidence-based definition-of-done check and report.")
+    finish_sub = finish_cmd.add_subparsers(dest="finish_command")
+    finish_check = finish_sub.add_parser(
+        "check", help="Mark definition-of-done items the evidence supports.")
+    finish_check.add_argument("dir")
+    finish_report = finish_sub.add_parser(
+        "report", help="Run the check and write FINISH_REPORT.md.")
+    finish_report.add_argument("dir")
+    finish_report.add_argument("--settings", default=None,
+                               help="Global settings file for the optional "
+                                    "frontier-written summary.")
+
 
     settings_cmd = sub.add_parser("settings", help="Work with the global settings file.")
     settings_sub = settings_cmd.add_subparsers(dest="settings_command")
@@ -526,6 +734,12 @@ _HANDLERS = {
     ("scope", "check"): cmd_scope_check,
     ("scope", "questions"): cmd_scope_questions,
     ("scope", "approve"): cmd_scope_approve,
+    ("scope", "interview"): cmd_scope_interview,
+    ("brain", "check"): cmd_brain_check,
+    ("finish", "check"): cmd_finish_check,
+    ("finish", "report"): cmd_finish_report,
+    ("version", None): cmd_version,
+    ("update", None): cmd_update,
     ("settings", "check"): cmd_settings_check,
     ("connectors", "list"): cmd_connectors_list,
     ("connectors", "check"): cmd_connectors_check,
@@ -542,6 +756,8 @@ _HANDLERS = {
 
 _SUBCOMMAND_ATTRS = {
     "scope": "scope_command",
+    "brain": "brain_command",
+    "finish": "finish_command",
     "settings": "settings_command",
     "connectors": "connectors_command",
     "ledger": "ledger_command",
@@ -551,44 +767,57 @@ _SUBCOMMAND_ATTRS = {
 }
 
 
-def overview_text() -> str:
-    """The bare `weaverbird` overview: the workflow and the main commands."""
+def help_text() -> str:
+    """`weaverbird help`: the app first, the scripting commands quiet."""
     return f"""Weaverbird {__version__} — a game factory on top of Godot
 
-A prompt becomes a game, one stage at a time:
+The app is the product. Run Weaverbird and the app opens in your
+browser — a prompt becomes a game there, one stage at a time:
+scope → skeleton → assets → build → headless test → playtest →
+finished → approval → publish → live.
 
-  scope → skeleton → assets → build → headless test → playtest →
-  finished → approval → publish → live
+  weaverbird                      open the app (workspace = this folder)
+  weaverbird --workspace <dir>    open the app for another workspace
+  weaverbird --port <n>           serve on another port (default 8765)
+  weaverbird --no-open            serve without opening a browser
 
-Start here:
-  weaverbird doctor                    check your setup
-  weaverbird init <dir>                start a new game project
-  weaverbird scope questions <dir>     the next scope interview round
-  weaverbird scope check <dir>         what the scope still needs
+Keep it current:
+  weaverbird update               update to the latest release
+  weaverbird update --check       just say whether an update exists
+  weaverbird version              print the version
 
-Working with a project:
-  weaverbird scope approve <dir> --by <name>
-  weaverbird skeleton build <dir>      build the grey-box Godot skeleton
-  weaverbird pipeline status <dir>     where the game is, and its gates
-  weaverbird pipeline advance <dir>    move one stage, if the gate passes
-  weaverbird ledger show <dir>         what the game has cost so far
-  weaverbird provenance list <dir>     how its assets were made
-
-The factory itself:
-  weaverbird settings check <file>     validate the global budgets
-  weaverbird connectors list           what outside services may do
-  weaverbird identity                  the Weaverbird look, in short
+Project commands (scripting) — the same work the app does, as
+commands, for scripts and terminals:
+  weaverbird doctor                     check the setup
+  weaverbird init <dir>                 start a new game project
+  weaverbird scope ...                  the scope file and the interview
+  weaverbird brain check                the bring-your-own-key ladder
+  weaverbird skeleton build <dir>       build the grey-box skeleton
+  weaverbird pipeline ...               stage, gates, advance
+  weaverbird finish check|report <dir>  the evidence-based finish
+  weaverbird ledger ...                 what a game has cost
+  weaverbird provenance ...             how its assets were made
+  weaverbird connectors ...             what outside services may do
+  weaverbird settings check <file>      validate the global budgets
+  weaverbird identity                   the Weaverbird look, in short
 
 Run 'weaverbird <command> --help' for the details of any command.
 """
 
 
+# Kept for compatibility: the v0.1/v0.2 overview is now the help text.
+overview_text = help_text
+
+
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("help", "-h", "--help"):
+        print(help_text(), end="")
+        return 0
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
-        print(overview_text(), end="")
-        return 0
+        return cmd_launch(args)
     sub_name = None
     attr = _SUBCOMMAND_ATTRS.get(args.command)
     if attr:

@@ -65,6 +65,10 @@ def new_state() -> dict:
         "stage": STAGES[0],
         "history": [{"stage": STAGES[0], "at": _now(), "note": "Pipeline created."}],
         "definition_of_done": dict(DEFINITION_OF_DONE),
+        # Evidence for definition-of-done items the factory marked
+        # itself: item -> {"by": who/what marked it, "at": iso time,
+        # "note": the evidence, in plain words}.
+        "dod_evidence": {},
     }
 
 
@@ -91,6 +95,7 @@ def load_state(project_dir) -> dict:
     if state.get("stage") not in STAGES:
         raise PipelineError(f"Pipeline state has an unknown stage: {state.get('stage')!r}")
     state.setdefault("definition_of_done", dict(DEFINITION_OF_DONE))
+    state.setdefault("dod_evidence", {})
     state.setdefault("history", [])
     return state
 
@@ -156,6 +161,36 @@ def set_definition_of_done(project_dir, key: str, value: bool = True) -> dict:
     state["definition_of_done"][key] = bool(value)
     save_state(project_dir, state)
     return state
+
+
+def mark_definition_of_done(project_dir, key: str, note: str,
+                            by: str = "weaverbird") -> dict:
+    """Mark a definition-of-done item true, with the evidence for it.
+
+    This is how the factory marks checkboxes itself (see finish.py):
+    the item is only ever marked together with a plain note saying
+    what evidence backs it, who/what marked it, and when.
+    """
+    if key not in DEFINITION_OF_DONE:
+        raise PipelineError(
+            f"Unknown definition-of-done item {key!r}. "
+            f"Known items: {', '.join(DEFINITION_OF_DONE)}"
+        )
+    state = load_state(project_dir)
+    state["definition_of_done"][key] = True
+    state.setdefault("dod_evidence", {})[key] = {
+        "by": by,
+        "at": _now(),
+        "note": str(note),
+    }
+    save_state(project_dir, state)
+    return state
+
+
+def dod_evidence(project_dir, state: dict | None = None) -> dict:
+    """The evidence notes for marked definition-of-done items."""
+    state = state or load_state(project_dir)
+    return dict(state.get("dod_evidence", {}))
 
 
 def _gate(project_dir, state: dict, from_stage: str, to_stage: str) -> list[str]:

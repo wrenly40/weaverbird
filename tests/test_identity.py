@@ -46,13 +46,29 @@ class IdentityTests(unittest.TestCase):
             self.assertTrue((Path(tmp) / "design_tokens.json").exists())
             self.assertTrue((Path(tmp) / "weaverbird.svg").exists())
 
-    def test_bare_cli_prints_the_workflow_overview(self):
-        code, out = run_cli()
+    def test_bare_cli_launches_the_app(self):
+        # App-first entry model (v0.3): bare `weaverbird` starts the
+        # app for the current folder instead of printing an overview.
+        # The launch itself is mocked — no server starts in a test.
+        from unittest import mock
+
+        from weaverbird import app as app_module
+        with mock.patch.object(app_module, "run_app",
+                               return_value=0) as run_app:
+            code, _ = run_cli()
         self.assertEqual(code, 0)
+        args, kwargs = run_app.call_args
+        self.assertEqual(Path(args[0]), Path.cwd())
+        self.assertEqual(kwargs.get("open_browser"), True)
+
+    def test_help_prints_the_overview_and_the_scripting_group(self):
+        code, out = run_cli("help")
+        self.assertEqual(code, 0)
+        self.assertIn("The app is the product", out)
         self.assertIn("scope", out)
         self.assertIn("playtest", out)
-        self.assertIn("weaverbird init", out)
-        self.assertNotIn("usage:", out.lower().split("start here")[0])
+        self.assertIn("Project commands (scripting)", out)
+        self.assertIn("weaverbird update", out)
 
     def test_doctor_uses_consistent_markers(self):
         code, out = run_cli("doctor")

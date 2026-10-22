@@ -3,16 +3,16 @@
 This package is the factory: global settings and budgets, the scope
 interview file, the connector registry, the token ledger, the asset
 provenance log, the pipeline state machine, local git helpers, Godot
-detection, and (since 0.2.0) the skeleton builder, which turns an
-approved scope into a playable grey-box Godot project and validates
-it by running Godot. Asset generation and the later stages are not
-built yet.
+detection, the skeleton builder (0.2.0), and since 0.3.0 the
+bring-your-own-key brain, the local app, and the evidence-based
+finish check with its report. Real game and asset generation and the
+test stage are not built yet.
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
