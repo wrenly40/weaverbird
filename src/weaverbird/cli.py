@@ -25,6 +25,7 @@ from . import ledger as ledger_module
 from . import provenance as provenance_module
 from . import scope as scope_module
 from . import settings as settings_module
+from . import skeleton as skeleton_module
 from . import state as state_module
 from . import vcs as vcs_module
 
@@ -387,7 +388,33 @@ def cmd_pipeline_status(args) -> int:
     return 0
 
 
+def cmd_skeleton_build(args) -> int:
+    try:
+        report = skeleton_module.build_skeleton(args.dir)
+    except skeleton_module.SkeletonError as exc:
+        return _fail(str(exc))
+    game_dir = Path(args.dir) / skeleton_module.GAME_DIR_NAME
+    print(f"Built the grey-box Godot skeleton in {game_dir}:")
+    for rel in report["files"]:
+        print(f"- {rel}")
+    validation = report.get("validation", {})
+    if validation.get("passed"):
+        runs = ", ".join(run["name"] for run in validation.get("runs", []))
+        print(f"Godot validation passed ({validation.get('godot_version')}): "
+              f"{runs} — all clean.")
+        print(f"Known-good tag: {report.get('known_good_tag')}")
+    print("Cost: one ledger entry for the skeleton stage, 0 tokens, 0 cost — "
+          "this stage is deterministic and calls no model.")
+    print(f"Next step: open {game_dir} in Godot and press play, or check "
+          f"'weaverbird pipeline status {args.dir}'.")
+    return 0
+
+
 def cmd_pipeline_advance(args) -> int:
+    # Stage handlers live in the library; registering them here means
+    # advancing out of the scope stage runs the skeleton builder
+    # through the normal gate machinery.
+    skeleton_module.register_stage_handlers()
     try:
         state = state_module.advance(args.dir)
     except state_module.PipelineError as exc:
@@ -480,6 +507,15 @@ def build_parser() -> argparse.ArgumentParser:
     padvance = pipeline_sub.add_parser("advance", help="Advance one stage, if the gate passes.")
     padvance.add_argument("dir")
 
+    skeleton_cmd = sub.add_parser(
+        "skeleton", help="Build the grey-box Godot skeleton from an approved scope."
+    )
+    skeleton_sub = skeleton_cmd.add_subparsers(dest="skeleton_command")
+    sbuild = skeleton_sub.add_parser(
+        "build", help="Generate the Godot project and validate it with Godot."
+    )
+    sbuild.add_argument("dir")
+
     return parser
 
 
@@ -501,6 +537,7 @@ _HANDLERS = {
     ("provenance", "disclosure"): cmd_provenance_disclosure,
     ("pipeline", "status"): cmd_pipeline_status,
     ("pipeline", "advance"): cmd_pipeline_advance,
+    ("skeleton", "build"): cmd_skeleton_build,
 }
 
 _SUBCOMMAND_ATTRS = {
@@ -510,6 +547,7 @@ _SUBCOMMAND_ATTRS = {
     "ledger": "ledger_command",
     "provenance": "provenance_command",
     "pipeline": "pipeline_command",
+    "skeleton": "skeleton_command",
 }
 
 
@@ -530,6 +568,7 @@ Start here:
 
 Working with a project:
   weaverbird scope approve <dir> --by <name>
+  weaverbird skeleton build <dir>      build the grey-box Godot skeleton
   weaverbird pipeline status <dir>     where the game is, and its gates
   weaverbird pipeline advance <dir>    move one stage, if the gate passes
   weaverbird ledger show <dir>         what the game has cost so far

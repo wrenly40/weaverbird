@@ -55,8 +55,24 @@ user has to assemble.
 - Built in v0.1: the pipeline stage and its place in the order,
   Godot detection (`godot.py`) and a `project.godot` reader, local
   git initialisation helpers.
-- Future: archetype templates and the skeleton builder. It plugs
-  into: pipeline state (registered as a stage handler), the stage
+- Built in v0.2: the skeleton builder itself (`skeleton.py`, with
+  the templates packaged in `skeleton_templates/`). It refuses an
+  incomplete or unapproved scope, renders one generic grey-box
+  archetype (arena, collect-the-targets, hazards, a round timer)
+  with the scope's title, pitch, target count, round length and
+  style colours filled in, records every generated file in the
+  provenance log, adds a zero-cost ledger entry, and validates the
+  result by running Godot headless: import, menu scene, game scene,
+  and the flow smoke run shipped in the project
+  (`game/smoke/smoke.gd`, menu → game → win). Results land in
+  `.weaverbird/skeleton_report.json`; a passing build is committed
+  and tagged `known-good/skeleton`. It is registered as a pipeline
+  stage handler (`register_stage_handlers()` in `skeleton.py`), so
+  advancing out of the scope stage runs it through the gates, and
+  `weaverbird skeleton build <dir>` runs it directly.
+- Future: more archetypes (the builder takes the archetype from the
+  scope), and design work beyond the grey-box loop. It plugs into:
+  pipeline state (registered as a stage handler), the stage
   registry in `state.py`, git commits per iteration.
 
 ### 3. Asset generation

@@ -1,15 +1,18 @@
 """Weaverbird — a game factory on top of Godot.
 
-This package is the factory infrastructure: global settings and budgets,
-the scope interview file, the connector registry, the token ledger, the
-asset provenance log, the pipeline state machine, local git helpers and
-Godot detection. Game generation itself is not built yet.
+This package is the factory: global settings and budgets, the scope
+interview file, the connector registry, the token ledger, the asset
+provenance log, the pipeline state machine, local git helpers, Godot
+detection, and (since 0.2.0) the skeleton builder, which turns an
+approved scope into a playable grey-box Godot project and validates
+it by running Godot. Asset generation and the later stages are not
+built yet.
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

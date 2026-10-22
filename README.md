@@ -6,9 +6,12 @@ questions until the scope is complete, then builds the game, tests it,
 has AI players play it, publishes it through store connectors with
 your permission, and keeps polishing it from player feedback.
 
-It is a full end-to-end platform, being built in stages. This release
-(v0.1) is the infrastructure — the backbone the rest of the platform
-plugs into.
+It is a full end-to-end platform, being built in stages. The v0.1
+release was the infrastructure — the backbone the rest of the platform
+plugs into. This release (v0.2) adds the first working stage on top
+of it: the skeleton builder, which turns an approved scope into a
+playable grey-box Godot game and proves it runs by running Godot
+against it.
 
 ## Quickstart
 
@@ -39,7 +42,15 @@ Then start a project:
 ./dist/weaverbird init my-game --with-settings
 ./dist/weaverbird scope questions my-game
 ./dist/weaverbird scope check my-game
+./dist/weaverbird scope approve my-game --by <your name>
+./dist/weaverbird skeleton build my-game
 ```
+
+The last command generates the grey-box Godot project into
+`my-game/game/`, validates it with Godot, and tags it known-good in
+the project's git history. Advancing the pipeline out of the scope
+stage (`weaverbird pipeline advance my-game`) runs the same builder
+through the pipeline's gates.
 
 ## The pipeline
 
@@ -58,7 +69,32 @@ See `docs/PLATFORM.md` for the full platform map — what each stage
 takes in, what it produces, and what is built now versus later — and
 `docs/DESIGN.md` for the full design.
 
-## What works today (v0.1 infrastructure)
+## What works today
+
+New in v0.2:
+
+- The skeleton builder (`weaverbird skeleton build <dir>`, and the
+  pipeline's skeleton stage). From a complete, approved scope it
+  generates a complete Godot 4 project into `<dir>/game/`: main menu
+  with the scope's title and pitch, settings with a saved volume
+  slider, pause, win and game-over screens, save/load of settings
+  and run stats, and a genuinely playable grey-box loop — move with
+  WASD or arrows, collect every target before the timer ends, avoid
+  the hazards. Title, target count, round length and colours are
+  taken from the scope where it states them. Everything is generated
+  from templates in code: no model is called, and the stage writes a
+  zero-cost entry to the ledger to prove it. Every generated file is
+  recorded in the provenance log.
+- Real validation, not just generation. The builder runs Godot
+  headless against the project it just made — an import pass, a run
+  of the menu scene, a run of the game scene, and a flow smoke run
+  shipped in the project (`game/smoke/smoke.gd`) that plays
+  menu → game → win by itself. Any Godot error fails the build with
+  a short digest, the pipeline does not advance, and the results are
+  written to `.weaverbird/skeleton_report.json`. A passing build is
+  committed to the project's git and tagged `known-good/skeleton`.
+
+From v0.1, the infrastructure:
 
 - Global settings with budgets. Token and cost caps live in one
   global settings file, never in a single game's scope. Settings are
@@ -90,7 +126,7 @@ takes in, what it produces, and what is built now versus later — and
 - Godot detection and a `project.godot` reader.
 - A command-line front end over all of the above (`doctor`, `init`,
   `scope`, `settings`, `connectors`, `ledger`, `provenance`,
-  `pipeline`).
+  `pipeline`, `skeleton`).
 
 ## Platform stages still to build
 
@@ -99,8 +135,9 @@ pipeline runs — not things left out of scope:
 
 - The scope interview conversation itself (today the questions are
   printed; answering them in conversation is the next module).
-- Archetype templates and skeleton building, asset generation,
-  generated game code, and the build loop around them.
+- More archetype templates for the skeleton (today there is one
+  generic grey-box loop), asset generation, generated game code, and
+  the build loop around them.
 - The headless test runner and the three AI playtesters (breaker,
   competent player, first-time player).
 - The background job runner, so long stages run, checkpoint and

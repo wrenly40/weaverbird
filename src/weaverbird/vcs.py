@@ -44,6 +44,19 @@ def init_repo(path) -> Path:
     return path
 
 
+def ensure_local_identity(path, name: str = "Weaverbird",
+                          email: str = "weaverbird@localhost") -> None:
+    """Make sure commits in this repo have an identity.
+
+    Only fills in values that are not already configured (locally or
+    globally) — a user's own git identity is never overridden.
+    """
+    for key, value in (("user.name", name), ("user.email", email)):
+        result = _git(path, "config", key, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            _git(path, "config", "--local", key, value)
+
+
 def commit_all(path, message: str) -> str:
     """Stage everything and commit it. Returns the commit hash."""
     _git(path, "add", "-A")
