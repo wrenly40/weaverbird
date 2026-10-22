@@ -20,7 +20,16 @@ games: three archetype generators chosen from the scope, asset
 generation (vector sprites, a real icon, synthesised audio), and a
 headless test stage where scripted players — competent, breaker,
 first-time — play the game for real, so the finish check can now
-mark its whole checklist from evidence.
+mark its whole checklist from evidence. This release (v0.5) closes
+the loop after the game exists: player feedback is fetched and
+triaged, approved items become patches that must pass the test
+stage and a save-compatibility check before they ship as a tagged
+version; failing test runs can repair themselves within strict
+bounds; and a model-driven playtester — your own vision model,
+playing through a bridge inside the game — joins the scripted
+players, filing its confusions straight back into the feedback
+queue. Publishing stays last, on purpose: the store connectors are
+still to come.
 
 ## Quickstart
 
@@ -152,6 +161,67 @@ takes in, what it produces, and what is built now versus later — and
 
 ## What works today
 
+New in v0.5:
+
+- The feedback + patch loop (`weaverbird feedback …`,
+  `weaverbird patch start <dir> --item <id>`, and the app's
+  Feedback view). Feedback lands in `.weaverbird/feedback.json`
+  from three sources: GitHub Issues of the project's linked repo
+  (through the `gh` CLI), itch.io comments when `ITCH_API_KEY` is
+  set (best-effort — a failed source is recorded, never fatal),
+  and a manual inbox (`feedback add`, or files dropped in
+  `feedback-inbox/`). Triage classifies and clusters
+  deterministically (bug / balance / confusion / request /
+  praise), ranked by mentions × severity; a configured cheap
+  brain tier may refine it under validation. Only items you
+  approve can patch, and only in-scope ones: balance items tune
+  `game_config.json` within the generator's bounds, confusion
+  items rewrite the objective hint, known-class bugs get their
+  matching remedy — anything else becomes a PATCH_PLAN.md and
+  stops, and requests always need your decision. A patch ships
+  only if it passes the full test stage AND a save-compatibility
+  check (a save captured from the pre-patch build must load in
+  the patched build with its stats intact). Shipping bumps the
+  game version in `game/VERSION`, appends `CHANGELOG.md`, and
+  tags `known-good/patch-<version>`; failing either gate restores
+  the pre-patch checkpoint exactly.
+- Self-repair (`weaverbird repair run <dir>`, or automatically
+  after a failed test run when `repair.max_attempts` > 0 in the
+  global settings, default 3). Failures are classified —
+  crash_or_error, win_not_proven, lose_not_proven,
+  performance_low, breaker_stuck, missing_assets — and each
+  attempt applies one strategy from a fixed menu (bounded config
+  nudges, asset/game regeneration for known crash classes)
+  behind a git checkpoint. A change survives only if the re-run
+  strictly improves; otherwise the checkpoint is restored.
+  Success tags `known-good/repair`; running out of attempts
+  restores the best state and writes REPAIR_REPORT.md saying
+  what needs you. The project is never left worse than it
+  started — that is proven by a test that sabotages a game into
+  an unwinnable state and watches repair bring it back.
+- The model-driven playtester (`weaverbird playtest model
+  <dir>`), the fourth player. Generated games ship a bridge
+  (`game/tests/model_bridge.gd`): launched with
+  `--model-bridge`, the game publishes its honestly exposed
+  state and a screenshot every decision tick, pauses, and
+  applies the chosen action as real input. The driver asks a
+  vision-capable tier of your own brain (BYOK, ledgered) for one
+  strict-JSON action at a time, stops at the win/lose screens,
+  the decision cap, or repeated invalid replies, and writes
+  `.weaverbird/model_playtest.json` plus a "model" entry in the
+  test report. Its confusion notes are filed as feedback items,
+  so the loop above consumes them. With no vision tier
+  configured it says exactly what is missing and touches
+  nothing. The scripted players remain the deterministic gate;
+  the model player is judgement on top — verified here with a
+  scripted policy driving the real bridge, since no live model
+  call can be made without a key.
+- The app grew the matching surfaces: a Feedback view per
+  project (fetch, triage, add, approve/dismiss, ship-as-patch),
+  a repair button on failing test reports, and a Model playtest
+  button that reports the missing-brain message cleanly. The
+  finish report now lists shipped patches.
+
 New in v0.4:
 
 - Real game generation (`weaverbird build game <dir>`, and the
@@ -197,8 +267,8 @@ New in v0.4:
   defaults to 30 and can be set under `testing:` in the global
   settings, plus scene load time). The verdict lands in
   `.weaverbird/test_report.json`. These players are deterministic
-  scripted bots — model-driven, vision-using playtesters remain
-  future work.
+  scripted bots; the model-driven, vision-using playtester that
+  joins them arrived in v0.5 (above).
 - The finish check now closes its checklist. With a test report on
   record, the lose half of "winnable and losable" is marked from
   the competent player's two runs, performance from the measured
@@ -331,12 +401,10 @@ pipeline runs — not things left out of scope:
 - More archetypes beyond the first three, generated game code
   beyond the archetype cores (model-written diffs for what makes a
   game different), and the iterate loop around them.
-- Model-driven playtesters — vision at decision points, judgement
-  about fun and clarity — beyond the scripted players shipped now.
 - The background job runner, so long stages run, checkpoint and
   resume instead of blocking a terminal or a page.
 - Store connectors that upload and publish (itch first), signing and
-  notarisation, feedback reading and triage, and the patch loop.
+  notarisation. Publishing comes last, by the user's direction.
 
 ## Look and feel
 

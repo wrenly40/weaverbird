@@ -28,11 +28,15 @@ from . import generate as generate_module
 from . import testing as testing_module
 from . import update as update_module
 from . import connectors as connectors_module
+from . import feedback as feedback_module
 from . import finish as finish_module
 from . import godot as godot_module
 from . import identity as identity_module
 from . import ledger as ledger_module
+from . import modelplayer as modelplayer_module
+from . import patch as patch_module
 from . import provenance as provenance_module
+from . import repair as repair_module
 from . import scope as scope_module
 from . import settings as settings_module
 from . import skeleton as skeleton_module
@@ -618,6 +622,134 @@ def cmd_test_run(args) -> int:
     return 0 if report.get("ok") else 1
 
 
+def cmd_feedback_fetch(args) -> int:
+    report = feedback_module.fetch_feedback(args.dir)
+    total = 0
+    for source, entry in report.items():
+        total += entry["added"]
+        print(f"{source}: {entry['status']} — {entry['detail']} "
+              f"(+{entry['added']} new)")
+    print(f"Fetched. {total} new item(s) in the feedback store "
+          f"(.weaverbird/feedback.json). Triage with "
+          f"'weaverbird feedback triage {args.dir}'.")
+    return 0
+
+
+def cmd_feedback_add(args) -> int:
+    item, created = feedback_module.add_item(
+        args.dir, source="manual", text=args.text, author=args.author or "")
+    print(f"{'Added' if created else 'Already on record'}: "
+          f"[{item['id']}] {item['text']}")
+    return 0
+
+
+def cmd_feedback_list(args) -> int:
+    store = feedback_module.load_store(args.dir)
+    if not store["items"]:
+        print("No feedback yet. Fetch it with "
+              f"'weaverbird feedback fetch {args.dir}' or add some with "
+              "'weaverbird feedback add'.")
+        return 0
+    print("Feedback queue (run triage to rank it):")
+    for line in feedback_module.queue_lines(
+            feedback_module.ranked_queue(store)):
+        print("- " + line)
+    return 0
+
+
+def cmd_feedback_triage(args) -> int:
+    try:
+        result = feedback_module.triage(args.dir, settings_path=args.settings)
+    except feedback_module.FeedbackError as exc:
+        return _fail(str(exc))
+    print(f"Triage: {result['note']}.")
+    if not result["items"]:
+        print("The feedback queue is empty.")
+        return 0
+    print("Ranked queue (cluster mentions × severity):")
+    for line in feedback_module.queue_lines(result["items"]):
+        print("- " + line)
+    return 0
+
+
+def cmd_feedback_approve(args) -> int:
+    try:
+        item = feedback_module.set_status(args.dir, args.item, "approved")
+    except feedback_module.FeedbackError as exc:
+        return _fail(str(exc))
+    return _ok(f"[{item['id']}] approved — it can enter the patch loop: "
+               f"'weaverbird patch start {args.dir} --item {item['id']}'.")
+
+
+def cmd_feedback_dismiss(args) -> int:
+    try:
+        item = feedback_module.set_status(args.dir, args.item, "dismissed")
+    except feedback_module.FeedbackError as exc:
+        return _fail(str(exc))
+    return _ok(f"[{item['id']}] dismissed.")
+
+
+def cmd_patch_start(args) -> int:
+    try:
+        result = patch_module.start_patch(
+            args.dir, args.item, settings_path=args.settings)
+    except patch_module.PatchError as exc:
+        return _fail(str(exc))
+    if result["outcome"] == "patched":
+        print(f"Patch shipped: version {result['version']} "
+              f"(tagged known-good/patch-{result['version']}).")
+        print(f"Change: {result['change']}")
+        print("Gates passed: the full test suite, and save "
+              "compatibility (a pre-patch save loads with stats intact).")
+        print("CHANGELOG.md and .weaverbird/patch_log.json updated; "
+              "the feedback item is marked patched.")
+        return 0
+    if result["outcome"] == "planned":
+        print("No automatic patch for this item — a patch plan was "
+              f"written instead: {result['plan']}")
+        print(f"Why: {result['reason']}")
+        return 0
+    print(f"Patch rejected: {result['reason']}")
+    print("The working tree was restored to the pre-patch checkpoint; "
+          "the item is back to approved with the failure recorded.")
+    return 1
+
+
+def cmd_repair_run(args) -> int:
+    try:
+        result = repair_module.run_repair(
+            args.dir, settings_path=args.settings,
+            max_attempts=args.max_attempts)
+    except repair_module.RepairError as exc:
+        return _fail(str(exc))
+    print(f"Self-repair: {result['outcome']} — {result['note']}")
+    for attempt in result["attempts"]:
+        print(f"- attempt {attempt['attempt']}: {attempt['outcome']}")
+        for strategy in attempt.get("strategies", []):
+            print(f"    {strategy}")
+    print("Full record: REPAIR_REPORT.md in the project.")
+    return 0 if result["outcome"] in ("repaired", "already_passing") else 1
+
+
+def cmd_playtest_model(args) -> int:
+    try:
+        record = modelplayer_module.run_model_playtest(
+            args.dir, settings_path=args.settings,
+            max_decisions=args.max_decisions)
+    except modelplayer_module.ModelPlayerError as exc:
+        return _fail(f"Model playtest did not run: {exc}")
+    print(f"Model playtest finished: {record['outcome']} — "
+          f"{record['decisions']} decisions, {record['deaths']} deaths, "
+          f"{record['time_s']}s.")
+    if record["finished"]:
+        print(f"The model {record['result']} the game.")
+    for note in record["confusion_notes"]:
+        print(f"Confusion (filed as feedback): {note}")
+    print("Transcript: .weaverbird/model_playtest.json; screenshots "
+          "in .weaverbird/model_playtest/shots/.")
+    return 0 if record["finished"] else 1
+
+
 def register_all_stage_handlers() -> None:
     """Register every built stage handler with the pipeline.
 
@@ -826,6 +958,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     trun.add_argument("dir")
 
+    feedback_cmd = sub.add_parser(
+        "feedback", help="Player feedback: fetch, triage, approve.")
+    feedback_sub = feedback_cmd.add_subparsers(dest="feedback_command")
+    ffetch = feedback_sub.add_parser(
+        "fetch", help="Pull GitHub issues, itch comments (best-effort) "
+                      "and feedback-inbox/ files into the store.")
+    ffetch.add_argument("dir")
+    fadd = feedback_sub.add_parser(
+        "add", help="Add one feedback item by hand.")
+    fadd.add_argument("dir")
+    fadd.add_argument("--text", required=True)
+    fadd.add_argument("--author", default="")
+    flist = feedback_sub.add_parser(
+        "list", help="Show the feedback queue, ranked.")
+    flist.add_argument("dir")
+    ftriage = feedback_sub.add_parser(
+        "triage", help="Classify, cluster and rank the queue.")
+    ftriage.add_argument("dir")
+    ftriage.add_argument("--settings", default=None)
+    for name, help_text in (("approve", "Approve an item for the patch loop."),
+                            ("dismiss", "Dismiss an item.")):
+        p = feedback_sub.add_parser(name, help=help_text)
+        p.add_argument("dir")
+        p.add_argument("--item", required=True)
+
+    patch_cmd = sub.add_parser(
+        "patch", help="Ship an approved feedback item as a verified patch.")
+    patch_sub = patch_cmd.add_subparsers(dest="patch_command")
+    pstart = patch_sub.add_parser(
+        "start", help="Apply the item's fix, run the test suite and the "
+                      "save-compatibility gate, then version + changelog "
+                      "+ tag — or restore and record the rejection.")
+    pstart.add_argument("dir")
+    pstart.add_argument("--item", required=True)
+    pstart.add_argument("--settings", default=None)
+
+    repair_cmd = sub.add_parser(
+        "repair", help="Self-repair: bounded automatic fixes for a "
+                       "failing test suite, with git checkpoints.")
+    repair_sub = repair_cmd.add_subparsers(dest="repair_command")
+    rrun = repair_sub.add_parser(
+        "run", help="Classify the failures and try strategies until "
+                    "the suite passes or attempts run out.")
+    rrun.add_argument("dir")
+    rrun.add_argument("--settings", default=None)
+    rrun.add_argument("--max-attempts", type=int, default=None,
+                      help="Override repair.max_attempts from settings.")
+
+    playtest_cmd = sub.add_parser(
+        "playtest", help="Playtesters beyond the scripted three.")
+    playtest_sub = playtest_cmd.add_subparsers(dest="playtest_command")
+    pmodel = playtest_sub.add_parser(
+        "model", help="A vision model plays the game from screenshots "
+                      "through the in-game bridge (BYOK).")
+    pmodel.add_argument("dir")
+    pmodel.add_argument("--settings", default=None)
+    pmodel.add_argument("--max-decisions", type=int, default=None,
+                        help="Decision cap (default: playtest."
+                             "model_max_decisions, else 40).")
+
     return parser
 
 
@@ -857,6 +1049,15 @@ _HANDLERS = {
     ("assets", "generate"): cmd_assets_generate,
     ("build", "game"): cmd_build_game,
     ("test", "run"): cmd_test_run,
+    ("feedback", "fetch"): cmd_feedback_fetch,
+    ("feedback", "add"): cmd_feedback_add,
+    ("feedback", "list"): cmd_feedback_list,
+    ("feedback", "triage"): cmd_feedback_triage,
+    ("feedback", "approve"): cmd_feedback_approve,
+    ("feedback", "dismiss"): cmd_feedback_dismiss,
+    ("patch", "start"): cmd_patch_start,
+    ("repair", "run"): cmd_repair_run,
+    ("playtest", "model"): cmd_playtest_model,
 }
 
 _SUBCOMMAND_ATTRS = {
@@ -872,6 +1073,10 @@ _SUBCOMMAND_ATTRS = {
     "assets": "assets_command",
     "build": "build_command",
     "test": "test_command",
+    "feedback": "feedback_command",
+    "patch": "patch_command",
+    "repair": "repair_command",
+    "playtest": "playtest_command",
 }
 
 
@@ -904,6 +1109,10 @@ commands, for scripts and terminals:
   weaverbird assets generate <dir>      sprites, icon and audio
   weaverbird build game <dir>           generate the real game
   weaverbird test run <dir>             headless tests + scripted players
+  weaverbird repair run <dir>           self-repair a failing suite
+  weaverbird playtest model <dir>       a vision model plays the game
+  weaverbird feedback ...               fetch, triage, approve player feedback
+  weaverbird patch start <dir>          ship an approved item as a patch
   weaverbird pipeline ...               stage, gates, advance
   weaverbird finish check|report <dir>  the evidence-based finish
   weaverbird ledger ...                 what a game has cost

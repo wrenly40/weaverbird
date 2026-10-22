@@ -8,6 +8,7 @@ const SETTINGS_SCENE := "res://scenes/settings.tscn"
 
 
 func _ready() -> void:
+	_maybe_add_model_bridge()
 	InputSetup.ensure_actions()
 	SettingsStore.apply_volume(SettingsStore.get_volume())
 	add_child(UiTheme.background())
@@ -39,3 +40,22 @@ func start_game() -> void:
 func _on_settings_pressed() -> void:
 	RunInfo.settings_return_scene = "res://scenes/main_menu.tscn"
 	get_tree().change_scene_to_file(SETTINGS_SCENE)
+
+func _maybe_add_model_bridge() -> void:
+	var args: Array = Array(OS.get_cmdline_args()) + Array(OS.get_cmdline_user_args())
+	if not args.has("--model-bridge"):
+		return
+	if get_tree().root.get_node_or_null("WbModelBridge") != null:
+		return
+	if not ResourceLoader.exists("res://tests/model_bridge.gd"):
+		return
+	var bridge: Node = load("res://tests/model_bridge.gd").new()
+	bridge.name = "WbModelBridge"
+	get_tree().root.add_child.call_deferred(bridge)
+
+func bridge_actions() -> Array:
+	return ["start", "wait"]
+
+
+func bridge_state() -> Dictionary:
+	return {"at_menu": true}

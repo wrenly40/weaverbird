@@ -18,8 +18,10 @@ The suite:
   a corner to check the game notices; and a **first-time** player
   who starts from the menu's real Play button and follows only the
   on-screen hint. These are deterministic scripted players, not
-  model-driven agents — the report says so; vision/model playtesting
-  remains future work (see docs/PLATFORM.md).
+  model-driven agents — the report says so. The model-driven
+  playtester lives in modelplayer.py: it plays the same games
+  through the bridge the build stage ships in game/tests/,
+  deciding from screenshots and the game's honestly exposed state.
 - Performance: during the competent win run, the player samples the
   loop's average FPS and the game-scene load time. The FPS target
   defaults to 30 and can be set in the global settings under
@@ -111,12 +113,19 @@ def _run(godot_bin: str, game_dir: Path, args: list, timeout: int) -> dict:
     }
 
 
-def run_tests(project_dir, godot_path=None, settings_path=None) -> dict:
+def run_tests(project_dir, godot_path=None, settings_path=None,
+              allow_repair: bool = True) -> dict:
     """Run the full suite for a project. Returns the test report.
 
     The report is written even when the suite fails — what failed
     is evidence too. Raises TestingError only when the stage cannot
     run at all (no game, no test scripts, no Godot).
+
+    When the suite fails and a global settings file gives
+    ``repair.max_attempts`` > 0 (default 3 when the section exists),
+    the self-repair loop runs once at the end and the report that
+    comes back is the post-repair one. Callers inside the repair
+    loop pass allow_repair=False — repair never recurses.
     """
     project = Path(project_dir)
     game_dir = project / GAME_DIR_NAME
@@ -251,6 +260,29 @@ def run_tests(project_dir, godot_path=None, settings_path=None) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     ledger_module.add_entry(project, "headless_test", "cheap", 0, 0.0)
+
+    if allow_repair and not report.get("ok"):
+        _settings_file, data = brain_module.resolve_settings(
+            settings_path, project)
+        attempts = None
+        if isinstance(data, dict):
+            section = data.get("repair")
+            if isinstance(section, dict) and "max_attempts" in section:
+                attempts = section.get("max_attempts")
+            elif isinstance(section, dict):
+                attempts = 3
+        if isinstance(attempts, (int, float)) and attempts > 0:
+            from . import repair as repair_module  # lazy: no cycle
+            try:
+                outcome = repair_module.run_repair(
+                    project, settings_path=settings_path,
+                    godot_path=godot_path, max_attempts=int(attempts))
+            except repair_module.RepairError:
+                outcome = None
+            if outcome and outcome.get("outcome") == "repaired":
+                refreshed = load_report(project)
+                if refreshed is not None:
+                    return refreshed
     return report
 
 

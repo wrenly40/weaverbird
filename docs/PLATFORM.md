@@ -3,9 +3,9 @@
 Weaverbird is a full end-to-end platform for making games, not a single
 narrow tool. A user arrives with a prompt and leaves with a published
 game that keeps getting polished from player feedback. The stages below
-are the whole journey. Some are built in the v0.1 infrastructure, most
-are future modules — this document says which is which, and what each
-future module plugs into, so nothing has to be redesigned later.
+are the whole journey. Most are built; the ones that are not say so,
+and what each future module plugs into, so nothing has to be redesigned
+later.
 
 The packaged form of the platform is one executable: `dist/weaverbird`,
 built by `./build.sh`. That single file is the app. Future platform
@@ -184,6 +184,22 @@ attached.
   lands in `.weaverbird/test_report.json`, the report the finish
   check reads with precedence over the skeleton report. The stage
   fails when any base run or a win/lose proof fails.
+- Built in v0.5: bounded self-repair (`repair.py`, `weaverbird
+  repair run <dir>`, and automatically at the end of a failed test
+  run when the global setting `repair.max_attempts` > 0, default
+  3). Failures are classified (crash_or_error, win_not_proven,
+  lose_not_proven, performance_low, breaker_stuck, missing_assets)
+  and each attempt applies one matching strategy from a fixed menu
+  — config nudges clamped to the generator's bounds, asset or game
+  regeneration for the known crash classes — behind a git
+  checkpoint. A change is kept only when the re-run's pass count
+  strictly improves or its failure class is resolved; otherwise
+  the checkpoint is restored and another strategy tried. Success
+  tags `known-good/repair`; exhaustion restores the best
+  checkpoint and writes REPAIR_REPORT.md escalating to the user.
+  The project is never left worse than it started. A configured
+  brain may choose among the offered strategies; it never invents
+  new edit types.
 - Future: longer scenario matrices, per-level coverage reports.
   It plugs into: godot module, pipeline state, ledger.
 
@@ -213,11 +229,33 @@ attached.
   Honest limit: these are scripted bots, not model agents; they
   prove the game works end to end, they do not judge whether it is
   fun.
-- Future: the model-driven playtesters, with screenshots taken
-  sparingly at decision points to keep token spend down, and
-  judgement reports (clarity, difficulty, feel) feeding the
-  iterate loop. They plug into: pipeline state, ledger (every
-  run is costed), global budgets, brain.
+- Built in v0.5: the model-driven playtester (`modelplayer.py`,
+  `weaverbird playtest model <dir>`). Every generated game ships
+  a control bridge (`game/tests/model_bridge.gd`): launched with
+  `--model-bridge`, the game writes its honestly exposed state
+  (scene, counts, lives, timer, positions — for the arena game,
+  target and hazard positions and hazard patrols) plus a viewport
+  screenshot every 0.75s tick, pauses, and applies the driver's
+  chosen action as real input. The driver sends the screenshot
+  and state to a vision-capable tier of the user's own brain
+  (BYOK, ledgered under stage "playtest") and validates the
+  strict-JSON reply against the scene's action set. Runs stop at
+  the win/lose screens, the decision cap (global setting
+  `playtest.model_max_decisions`, default 40), or three
+  consecutive invalid decisions, and land in
+  `.weaverbird/model_playtest.json`, folded into the test report's
+  playtesters as "model". Confusions the model flags — and stuck
+  loops the driver detects — are filed as feedback items (stage
+  10), by design. Without a usable vision tier the command says
+  exactly what is missing and touches nothing. Honest split: the
+  scripted players are the deterministic gate; the model player
+  is judgement and exploration on top, and in this environment it
+  is verified with a scripted policy driving the real bridge —
+  no live model call has been made with a real key.
+- Future: judgement reports (clarity, difficulty, feel) as a
+  scored rubric feeding the iterate loop. It plugs into:
+  pipeline state, ledger (every run is costed), global budgets,
+  brain.
 
 ### 7. Finished gate
 - Inputs: the definition-of-done checklist.
@@ -306,9 +344,35 @@ attached.
   with approval. Every patch must pass a save-compatibility check.
 - Built in v0.1: the stage's place in the pipeline, and the feedback
   connector's declared capabilities in the registry.
-- Future: feedback readers, triage, the patch loop and reply drafting.
-  They plug into: connectors, pipeline state, ledger, vcs (each patch
-  is a tagged version).
+- Built in v0.5: the feedback store and patch loop (`feedback.py`,
+  `patch.py`; `weaverbird feedback fetch|add|list|triage|approve|
+  dismiss`, `weaverbird patch start`, and the app's Feedback
+  view). Fetch sources: GitHub Issues of the project's linked
+  repo through the `gh` CLI; itch.io comments when ITCH_API_KEY
+  is set and the project records an itch page — best-effort by
+  design, a failed source is recorded in the fetch report and
+  never crashes the run; and a manual inbox
+  (`feedback-inbox/*.txt|*.md`). Fetches dedupe by source and
+  content hash. Triage is a deterministic keyword classifier and
+  clusterer, ranked by mentions × severity; a configured cheap
+  brain tier may refine categories and clusters under strict-JSON
+  validation, and any failure keeps the deterministic result.
+  Only approved items patch, and only in-scope categories:
+  balance (bounded config tuning, clamped to the generator's
+  bounds), confusion (the objective hint, length-capped), and
+  bugs that match a known remedy class; anything else produces
+  PATCH_PLAN.md and stops, and requests/scope/price items always
+  need the user's decision. Every applied patch must pass the
+  full test stage AND a save-compatibility check (a save captured
+  from the pre-patch build through the game's own save system
+  must load in the patched build with its stats intact, proven
+  by a savecheck scene shipped in the game). Passing bumps the
+  game version (game/VERSION, semver patch), appends CHANGELOG.md,
+  commits and tags `known-good/patch-<version>`; failing either
+  gate restores the pre-patch checkpoint exactly.
+- Future: reply drafting and posting through the feedback
+  connectors. They plug into: connectors, pipeline state, ledger,
+  vcs (each patch is a tagged version).
 
 ## Jobs and the runner model (future, designed now)
 

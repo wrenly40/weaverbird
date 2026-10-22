@@ -53,6 +53,7 @@ var _music: AudioStreamPlayer
 
 
 func _ready() -> void:
+    _maybe_add_model_bridge()
     InputSetup.ensure_actions()
     _load_config()
     SettingsStore.apply_volume(SettingsStore.get_volume())
@@ -409,3 +410,32 @@ func _draw() -> void:
             draw_colored_polygon(PackedVector2Array([
                 Vector2(x0, base_y), Vector2(x0 + 8, base_y - 18),
                 Vector2(x0 + 16, base_y)]), SPIKE_COLOR)
+
+func _maybe_add_model_bridge() -> void:
+    var args: Array = Array(OS.get_cmdline_args()) + Array(OS.get_cmdline_user_args())
+    if not args.has("--model-bridge"):
+        return
+    if get_tree().root.get_node_or_null("WbModelBridge") != null:
+        return
+    if not ResourceLoader.exists("res://tests/model_bridge.gd"):
+        return
+    var bridge: Node = load("res://tests/model_bridge.gd").new()
+    bridge.name = "WbModelBridge"
+    get_tree().root.add_child.call_deferred(bridge)
+
+func bridge_actions() -> Array:
+    return ["move_left", "move_right", "jump", "pause", "wait", "start"]
+
+
+func bridge_state() -> Dictionary:
+    return {
+        "player_pos": [round(_player.global_position.x), round(_player.global_position.y)],
+        "exit_pos": [round(_exit_pos.x), round(_exit_pos.y)],
+        "lives": lives,
+        "deaths": deaths,
+        "stars": stars_collected,
+        "level": level_index + 1,
+        "levels": levels.size(),
+        "hint": str(cfg.get("objective_hint", "")),
+        "finished": _finished,
+    }

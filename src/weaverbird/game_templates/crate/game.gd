@@ -54,6 +54,7 @@ const DIRS := {
 
 
 func _ready() -> void:
+    _maybe_add_model_bridge()
     InputSetup.ensure_actions()
     _load_config()
     SettingsStore.apply_volume(SettingsStore.get_volume())
@@ -380,3 +381,37 @@ func _draw() -> void:
         draw_circle(_cell_center(_player_cell), CELL * 0.32, accent)
         draw_circle(_cell_center(_player_cell), CELL * 0.14,
                     Color(1, 1, 1, 0.85))
+
+func _maybe_add_model_bridge() -> void:
+    var args: Array = Array(OS.get_cmdline_args()) + Array(OS.get_cmdline_user_args())
+    if not args.has("--model-bridge"):
+        return
+    if get_tree().root.get_node_or_null("WbModelBridge") != null:
+        return
+    if not ResourceLoader.exists("res://tests/model_bridge.gd"):
+        return
+    var bridge: Node = load("res://tests/model_bridge.gd").new()
+    bridge.name = "WbModelBridge"
+    get_tree().root.add_child.call_deferred(bridge)
+
+func bridge_actions() -> Array:
+    return ["move_left", "move_right", "move_up", "move_down", "interact", "wait", "start"]
+
+
+func bridge_state() -> Dictionary:
+    var on_pads := 0
+    for crate in _crates:
+        if crate in _pads:
+            on_pads += 1
+    return {
+        "player_cell": [_player_cell.x, _player_cell.y],
+        "crates": _crates.size(),
+        "crates_on_pads": on_pads,
+        "moves_used": moves_used,
+        "move_budget": move_budget,
+        "puzzle": puzzle_index + 1,
+        "puzzles": puzzles.size(),
+        "deadlock": deadlock_detected,
+        "hint": str(cfg.get("objective_hint", "")),
+        "finished": _finished,
+    }

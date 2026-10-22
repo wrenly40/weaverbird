@@ -84,6 +84,12 @@ def list_tags(path) -> list[str]:
 current_tags = list_tags
 
 
+def reset_to_commit(path, ref: str) -> None:
+    """Hard-reset the working tree to a commit (used by the patch
+    and repair loops to restore a checkpoint exactly)."""
+    _git(path, "reset", "--hard", "--quiet", ref)
+
+
 def rollback_to_tag(path, name: str) -> None:
     """Roll the working tree back to a known-good tag (hard reset).
 

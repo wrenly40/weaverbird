@@ -31,6 +31,13 @@ engine:
 testing:                       # the headless test stage's targets
   target_fps: 30               # average FPS the competent win run must reach
 
+repair:                        # self-repair for failing test suites
+  max_attempts: 3              # bounded tries before escalating to you; 0 = off
+
+playtest:                      # the model-driven playtester
+  model_tier: mid              # which ladder tier plays (must be vision-capable)
+  model_max_decisions: 40      # decision cap per model playtest run
+
 defaults_for_scope_interviews:
   telemetry: false
   reply_approval_required: true

@@ -704,6 +704,8 @@ def _archetype_files(archetype: str) -> dict:
     tdir = TEMPLATE_DIRS[archetype]
     files = {
         "scripts/asset_loader.gd": ("shared", "asset_loader.gd"),
+        "tests/savecheck.gd": ("shared", "savecheck.gd"),
+        "tests/model_bridge.gd": ("shared", "model_bridge.gd"),
         "tests/competent_win.gd": (tdir, "competent_win.gd"),
         "tests/competent_lose.gd": (tdir, "competent_lose.gd"),
         "tests/breaker.gd": (tdir, "breaker.gd"),

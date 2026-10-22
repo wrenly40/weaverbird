@@ -565,6 +565,18 @@ def build_finish_report(project_dir, settings_path=None,
         )
         for warning in test_report.get("warnings", []):
             lines.append(f"- Warning: {warning}")
+    from . import patch as patch_module
+    patch_log = patch_module.load_patch_log(project)
+    if patch_log:
+        lines.append("")
+        lines.append("Patches shipped from player feedback (each passed "
+                     "the test suite and the save-compatibility gate):")
+        for record in patch_log:
+            lines.append(
+                f"- {record.get('version')} — feedback "
+                f"[{record.get('item')}] ({record.get('category')}): "
+                f"“{record.get('feedback_text', '')}” → "
+                f"{record.get('change', '')}")
     lines.append("")
 
     lines.append("## Definition of done")

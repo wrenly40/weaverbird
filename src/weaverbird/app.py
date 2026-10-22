@@ -34,12 +34,16 @@ import yaml
 from . import __version__
 from . import assets_gen as assets_module
 from . import brain as brain_module
+from . import feedback as feedback_module
 from . import finish as finish_module
 from . import generate as generate_module
 from . import testing as testing_module
 from . import godot as godot_module
 from . import ledger as ledger_module
+from . import modelplayer as modelplayer_module
+from . import patch as patch_module
 from . import provenance as provenance_module
+from . import repair as repair_module
 from . import scope as scope_module
 from . import settings as settings_module
 from . import skeleton as skeleton_module
@@ -450,6 +454,12 @@ Validation: {'passed in Godot' if generation.get('validation', {}).get('passed')
             findings = data.get("findings") or []
             for finding in findings[:2]:
                 bits.append(str(finding))
+            for note in (data.get("confusion") or [])[:2]:
+                bits.append("confused: " + str(note))
+            if data.get("decisions"):
+                bits.append(f"{data['decisions']} decisions")
+            if data.get("result"):
+                bits.append("result: " + str(data["result"]))
             ok = data.get("ok")
             box = "✓" if ok else "–"
             cls = "" if ok else " open"
@@ -468,13 +478,33 @@ Validation: {'passed in Godot' if generation.get('validation', {}).get('passed')
                 bits.append("win and lose proven")
             comp_line = (f'<div class="check"><div class="box">✓</div>'
                          f'<div>Competent player<small>{_esc(", ".join(bits))}</small></div></div>')
+        model_data = players.get("model", {}) if isinstance(players, dict) else {}
+        model_line = ""
+        if isinstance(model_data, dict) and model_data:
+            model_line = player_line("Model playtester (vision)", model_data)
+        repair_button = ""
+        if not test_report.get("ok"):
+            repair_button = (
+                f'<form class="action" method="post" '
+                f'action="/project/{quoted}/repair" style="margin-top:12px">'
+                '<button class="btn" type="submit">Repair automatically</button></form>'
+                '<span class="hint">Bounded self-repair: classify the '
+                'failures, try config fixes behind git checkpoints, keep '
+                'only what improves the suite.</span>')
+        model_button = (
+            f'<form class="action" method="post" '
+            f'action="/project/{quoted}/model-playtest" style="margin-top:12px">'
+            '<button class="btn ghost" type="submit">Model playtest</button></form>'
+            '<span class="hint">A vision model (your key) plays from '
+            'screenshots. Its confusion is filed as feedback.</span>')
         test_card = f"""
 <div class="card" style="margin-top:20px"><h3>Test summary</h3>
 <p class="hint" style="margin:6px 0 10px">Verdict: <b>{'PASS' if test_report.get('ok') else 'FAIL'}</b> ·
 Win proven: {'yes' if test_report.get('win_proven') else 'no'} · Lose proven: {'yes' if test_report.get('lose_proven') else 'no'} ·
 Performance: {_esc(perf.get('avg_fps', '?'))} avg FPS (target {_esc(perf.get('target_fps', '?'))}), scene load {_esc(perf.get('load_time_s', '?'))}s ·
-Scripted players (deterministic bots — model playtesting is future work)</p>
-{comp_line}{player_line("Breaker", players.get("breaker", {}))}{player_line("First-time player", players.get("first_time", {}))}</div>"""
+Scripted players are deterministic bots; the model playtester plays from screenshots</p>
+{comp_line}{player_line("Breaker", players.get("breaker", {}))}{player_line("First-time player", players.get("first_time", {}))}{model_line}
+{repair_button}{model_button}</div>"""
 
     reasons = state_module.gate_reasons(path, state) if state else []
     gate_html = ""
@@ -484,7 +514,8 @@ Scripted players (deterministic bots — model playtesting is future work)</p>
 
     body = f"""
 <div class="top"><div><h1>{_esc(facts['title'])}</h1><div class="sub">{_esc(facts['pitch'] or 'No pitch in the scope yet.')}</div></div>
-<div><a class="btn ghost" href="/project/{quoted}/scope">Scope interview</a></div></div>
+<div><a class="btn ghost" href="/project/{quoted}/scope">Scope interview</a>
+<a class="btn ghost" href="/project/{quoted}/feedback">Feedback</a></div></div>
 {notice_html}
 {_stepper(facts['stage'])}
 <div class="actions">
@@ -510,6 +541,62 @@ Scripted players (deterministic bots — model playtesting is future work)</p>
 <div class="card" style="margin-top:20px"><h3>Provenance</h3>
 <table><tr><th>Asset</th><th>Source</th><th>Provider</th><th>Note</th></tr>{prov_rows}</table></div>"""
     return _layout(facts["title"], "projects", body)
+
+
+def render_feedback(server, name: str, notice: str = "",
+                    notice_kind: str = "ok") -> str:
+    project = server.project_by_name(name)
+    path = project["path"]
+    quoted = urllib.parse.quote(name)
+    store = feedback_module.load_store(path)
+    items = feedback_module.ranked_queue(store)
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
+    rows = ""
+    for item in items:
+        item_id = _esc(item.get("id", ""))
+        actions = ""
+        status = item.get("status", "new")
+        if status in ("new", "triaged"):
+            actions = (
+                f'<form class="action" method="post" action="/project/{quoted}/feedback/{item_id}/approve">'
+                '<button class="btn ghost" type="submit">Approve</button></form>'
+                f'<form class="action" method="post" action="/project/{quoted}/feedback/{item_id}/dismiss">'
+                '<button class="btn ghost" type="submit">Dismiss</button></form>')
+        elif status == "approved":
+            actions = (
+                f'<form class="action" method="post" action="/project/{quoted}/patch/{item_id}">'
+                '<button class="btn" type="submit">Ship as patch</button></form>'
+                f'<form class="action" method="post" action="/project/{quoted}/feedback/{item_id}/dismiss">'
+                '<button class="btn ghost" type="submit">Dismiss</button></form>')
+        elif status == "patched":
+            actions = f'<span class="chip green">patched in {_esc(item.get("patch_version", ""))}</span>'
+        version = (f' · v{_esc(item["patch_version"])}'
+                   if item.get("patch_version") else "")
+        rows += f"""
+<div class="check"><div class="box{' open' if status in ('new', 'triaged') else ''}">{'–' if status in ('new', 'triaged') else '✓'}</div>
+<div style="flex:1"><b>[{item_id}]</b> {_esc(item.get('text', ''))}
+<small>{_esc(item.get('category', 'unknown'))} · severity {_esc(item.get('severity', '?'))} · score {_esc(item.get('score', 0))} · cluster {_esc(item.get('cluster', '') or '—')} · {_esc(status)}{version} · from {_esc(item.get('source', ''))}{(' — ' + _esc(item['note'])) if item.get('note') else ''}</small></div>
+<div>{actions}</div></div>"""
+    if not rows:
+        rows = ('<p class="hint">No feedback yet. Fetch from GitHub '
+                'issues, itch comments and the feedback-inbox, add an '
+                'item below, or let the model playtester file its '
+                'confusion here.</p>')
+    body = f"""
+<div class="top"><div><h1>Feedback</h1><div class="sub">{_esc(name)} — what players said, triaged and ranked. Approving an item lets the patch loop try to ship it as a tested patch; requests and price are always the maker's call.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}
+<div class="actions">
+  <form class="action" method="post" action="/project/{quoted}/feedback/fetch"><button class="btn" type="submit">Fetch feedback</button></form>
+  <form class="action" method="post" action="/project/{quoted}/feedback/triage"><button class="btn ghost" type="submit">Triage</button></form>
+</div>
+<div class="card" style="margin-top:20px"><h3>The queue</h3>{rows}</div>
+<div class="card" style="margin-top:20px"><h3>Add feedback by hand</h3>
+<form method="post" action="/project/{quoted}/feedback/add">
+<p style="margin:10px 0"><textarea name="text" rows="2" style="width:100%" placeholder="What did the player say?"></textarea></p>
+<button class="btn ghost" type="submit">Add item</button></form></div>"""
+    return _layout("Feedback", "projects", body)
 
 
 def render_scope(server, name: str, notice: str = "",
@@ -744,6 +831,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._send_html(render_project(self.app, name))
                 if len(parts) == 3 and parts[2] == "scope":
                     return self._send_html(render_scope(self.app, name))
+                if len(parts) == 3 and parts[2] == "feedback":
+                    return self._send_html(render_feedback(self.app, name))
             return self._fail_page("That page does not exist here.", 404)
         except AppError as exc:
             return self._fail_page(str(exc), 404)
@@ -759,6 +848,14 @@ class _Handler(BaseHTTPRequestHandler):
             if parts[0] == "project" and len(parts) >= 3:
                 name = urllib.parse.unquote(parts[1])
                 action = parts[2]
+                if action == "feedback":
+                    return self._post_feedback(name, parts)
+                if action == "patch" and len(parts) == 4:
+                    return self._post_patch_start(name, parts[3])
+                if action == "repair":
+                    return self._post_repair(name)
+                if action == "model-playtest":
+                    return self._post_model_playtest(name)
                 if action == "build-skeleton":
                     return self._post_build_skeleton(name)
                 if action == "generate-assets":
@@ -786,6 +883,114 @@ class _Handler(BaseHTTPRequestHandler):
             return self._fail_page(f"{type(exc).__name__}: {exc}", 500)
 
     # -- actions ---------------------------------------------------------
+    def _post_feedback(self, name: str, parts: list) -> None:
+        project = self.app.project_by_name(name)
+        path = project["path"]
+        sub = parts[3] if len(parts) > 3 else ""
+        if sub == "fetch" and len(parts) == 4:
+            report = feedback_module.fetch_feedback(path)
+            bits = "; ".join(
+                f"{source}: {entry['detail']} (+{entry['added']})"
+                for source, entry in report.items())
+            return self._send_html(render_feedback(
+                self.app, name, notice=_esc("Fetch done. " + bits),
+                notice_kind="ok"))
+        if sub == "triage" and len(parts) == 4:
+            settings_path, _ = workspace_settings(self.app.workspace)
+            result = feedback_module.triage(path, settings_path=settings_path)
+            return self._send_html(render_feedback(
+                self.app, name,
+                notice=_esc(f"Triage done: {result['note']}. "
+                            f"{len(result['items'])} item(s) in the queue."),
+                notice_kind="ok"))
+        if sub == "add" and len(parts) == 4:
+            form = self._form()
+            text = form.get("text", "").strip()
+            if not text:
+                return self._send_html(render_feedback(
+                    self.app, name, notice="The item was empty — nothing added.",
+                    notice_kind="warn"))
+            item, created = feedback_module.add_item(
+                path, source="manual", text=text)
+            return self._send_html(render_feedback(
+                self.app, name,
+                notice=_esc(f"{'Added' if created else 'Already on record'}: "
+                            f"[{item['id']}] {item['text']}"),
+                notice_kind="ok"))
+        if len(parts) == 5 and parts[4] in ("approve", "dismiss"):
+            try:
+                item = feedback_module.set_status(
+                    path, parts[3],
+                    "approved" if parts[4] == "approve" else "dismissed")
+            except feedback_module.FeedbackError as exc:
+                return self._send_html(render_feedback(
+                    self.app, name, notice=_esc(str(exc)), notice_kind="bad"))
+            return self._send_html(render_feedback(
+                self.app, name,
+                notice=_esc(f"[{item['id']}] is now {item['status']}."),
+                notice_kind="ok"))
+        return self._fail_page("That feedback action does not exist here.", 404)
+
+    def _post_patch_start(self, name: str, item_id: str) -> None:
+        project = self.app.project_by_name(name)
+        settings_path, _ = workspace_settings(self.app.workspace)
+        try:
+            result = patch_module.start_patch(
+                project["path"], item_id, settings_path=settings_path)
+        except patch_module.PatchError as exc:
+            return self._send_html(render_feedback(
+                self.app, name, notice=_esc(f"Patch refused. {exc}"),
+                notice_kind="bad"))
+        if result["outcome"] == "patched":
+            notice, kind = (f"Patch shipped: version {result['version']} — "
+                            f"{result['change']}. Tests and save "
+                            "compatibility both passed.", "ok")
+        elif result["outcome"] == "planned":
+            notice, kind = (f"No automatic patch — a plan was written to "
+                            f"PATCH_PLAN.md. {result['reason']}", "warn")
+        else:
+            notice, kind = (f"Patch rejected and the tree restored: "
+                            f"{result['reason']}", "bad")
+        return self._send_html(render_feedback(
+            self.app, name, notice=_esc(notice), notice_kind=kind))
+
+    def _post_repair(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        settings_path, _ = workspace_settings(self.app.workspace)
+        try:
+            result = repair_module.run_repair(
+                project["path"], settings_path=settings_path)
+        except repair_module.RepairError as exc:
+            return self._send_html(render_project(
+                self.app, name, notice=_esc(f"Repair not run. {exc}"),
+                notice_kind="bad"))
+        kind = "ok" if result["outcome"] in ("repaired", "already_passing") \
+            else "warn"
+        return self._send_html(render_project(
+            self.app, name,
+            notice=_esc(f"Self-repair: {result['outcome']} — {result['note']} "
+                        "Full record in REPAIR_REPORT.md."),
+            notice_kind=kind))
+
+    def _post_model_playtest(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        settings_path, _ = workspace_settings(self.app.workspace)
+        try:
+            record = modelplayer_module.run_model_playtest(
+                project["path"], settings_path=settings_path)
+        except modelplayer_module.ModelPlayerError as exc:
+            return self._send_html(render_project(
+                self.app, name,
+                notice=_esc(f"Model playtest did not run: {exc}"),
+                notice_kind="warn"))
+        return self._send_html(render_project(
+            self.app, name,
+            notice=_esc(
+                f"Model playtest: {record['outcome']} — "
+                f"{record['decisions']} decisions, {record['deaths']} "
+                f"deaths. Confusion notes were filed as feedback."),
+            notice_kind="ok" if record["finished"] else "warn"))
+
     def _post_build_skeleton(self, name: str) -> None:
         project = self.app.project_by_name(name)
         back = f"/project/{urllib.parse.quote(name)}"

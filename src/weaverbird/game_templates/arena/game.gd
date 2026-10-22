@@ -50,6 +50,7 @@ var _music: AudioStreamPlayer
 
 
 func _ready() -> void:
+    _maybe_add_model_bridge()
     InputSetup.ensure_actions()
     _load_config()
     SettingsStore.apply_volume(SettingsStore.get_volume())
@@ -282,3 +283,52 @@ func _draw() -> void:
     draw_rect(Rect2(0, 0, 1152, 648), BACKGROUND_COLOR)
     draw_rect(ARENA, FLOOR_COLOR)
     draw_rect(ARENA, Color(1, 1, 1, 0.25), false, 2.0)
+
+func _maybe_add_model_bridge() -> void:
+    var args: Array = Array(OS.get_cmdline_args()) + Array(OS.get_cmdline_user_args())
+    if not args.has("--model-bridge"):
+        return
+    if get_tree().root.get_node_or_null("WbModelBridge") != null:
+        return
+    if not ResourceLoader.exists("res://tests/model_bridge.gd"):
+        return
+    var bridge: Node = load("res://tests/model_bridge.gd").new()
+    bridge.name = "WbModelBridge"
+    get_tree().root.add_child.call_deferred(bridge)
+
+func bridge_actions() -> Array:
+    return ["move_left", "move_right", "move_up", "move_down", "pause", "wait", "start"]
+
+
+func bridge_state() -> Dictionary:
+    var goal := mini(targets_per_round + _round_index, TARGET_SPOTS.size())
+    var spots: Array = []
+    for target in get_tree().get_nodes_in_group("targets"):
+        var node := target as Node2D
+        if node != null:
+            spots.append([round(node.global_position.x), round(node.global_position.y)])
+    var dangers: Array = []
+    var patrols: Array = []
+    for hazard in get_tree().get_nodes_in_group("hazards"):
+        var node := hazard as Node2D
+        if node != null:
+            dangers.append([round(node.global_position.x), round(node.global_position.y)])
+            var base: Vector2 = hazard.get("_base")
+            var span: float = float(hazard.get("patrol_range"))
+            patrols.append([round(base.x - span), round(base.y),
+                            round(base.x + span), round(base.y)])
+    return {
+        "player_pos": [round(_player.global_position.x), round(_player.global_position.y)],
+        "targets_pos": spots,
+        "hazards_pos": dangers,
+        "hazards_patrol": patrols,
+        "collected_this_round": _collected,
+        "round_goal": goal,
+        "total_collected": _total_collected,
+        "round": _round_index + 1,
+        "rounds": rounds_total,
+        "time_left": int(ceil(_time_left)),
+        "targets_left": spots.size(),
+        "hint": str(cfg.get("objective_hint", "")),
+        "finished": _finished,
+    }

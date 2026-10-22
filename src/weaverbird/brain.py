@@ -249,6 +249,50 @@ def _text_anthropic(payload: dict) -> str:
     )
 
 
+def _image_block_openai(image_bytes: bytes, media_type: str) -> dict:
+    import base64
+    data_uri = "data:%s;base64,%s" % (
+        media_type, base64.b64encode(image_bytes).decode("ascii"))
+    return {"type": "image_url", "image_url": {"url": data_uri}}
+
+
+def _image_block_anthropic(image_bytes: bytes, media_type: str) -> dict:
+    import base64
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64.b64encode(image_bytes).decode("ascii"),
+        },
+    }
+
+
+def _with_image(messages: list, image_bytes: bytes, media_type: str,
+                provider: str) -> list:
+    """Return a copy of messages with the image attached to the last
+    user turn, shaped for the provider: OpenAI-compatible calls take
+    a content-parts list with an image_url data URI; Anthropic takes
+    content blocks with a base64 image source."""
+    block = (_image_block_anthropic(image_bytes, media_type)
+             if provider == "anthropic"
+             else _image_block_openai(image_bytes, media_type))
+    out = [dict(m) for m in messages]
+    for index in range(len(out) - 1, -1, -1):
+        if out[index].get("role") == "user":
+            text = out[index].get("content", "")
+            out[index] = {"role": "user",
+                          "content": [{"type": "text", "text": text}, block]}
+            return out
+    out.append({"role": "user", "content": [block]})
+    return out
+
+
+_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg", ".webp": "image/webp",
+                ".gif": "image/gif"}
+
+
 def _call_provider(config: dict, key: str | None, messages: list,
                    max_tokens: int | None) -> tuple[int, int, str]:
     """Make the raw provider call. Returns (prompt, completion, text)."""
@@ -309,6 +353,48 @@ def complete(project_dir, tier: str, messages: list, stage: str,
     ledger is already at or over the global per-game token cap,
     BrainBudgetError is raised before any call is made.
     """
+    return _complete_core(project_dir, tier, messages, stage,
+                          settings_path=settings_path,
+                          max_tokens=max_tokens)
+
+
+def complete_with_image(project_dir, tier: str, text: str, image_path,
+                        stage: str, settings_path=None,
+                        max_tokens: int | None = None) -> BrainResult:
+    """One vision call: a text prompt plus one image file.
+
+    The image is attached to the user turn in the provider's own
+    shape (OpenAI-compatible: an image_url part with a base64 data
+    URI; Anthropic: a base64 image content block). Everything else —
+    tier resolution, the budget refusal, the ledger entry written
+    before the result is returned — is the same as `complete`.
+    An unreadable image comes back as ok=False, never a raise.
+    """
+    path = Path(image_path)
+    media_type = _MEDIA_TYPES.get(path.suffix.lower())
+    if media_type is None or not path.is_file():
+        result = BrainResult(ok=False, tier=tier, stage=stage)
+        result.error = (f"The image {path} is missing or not a "
+                        "supported image file (png/jpg/webp/gif).")
+        return result
+    try:
+        image_bytes = path.read_bytes()
+    except OSError as exc:
+        result = BrainResult(ok=False, tier=tier, stage=stage)
+        result.error = f"The image {path} could not be read: {exc}"
+        return result
+
+    def shape(messages, provider):
+        return _with_image(messages, image_bytes, media_type, provider)
+
+    return _complete_core(
+        project_dir, tier, [{"role": "user", "content": text}], stage,
+        settings_path=settings_path, max_tokens=max_tokens, shape=shape)
+
+
+def _complete_core(project_dir, tier: str, messages: list, stage: str,
+                   settings_path=None, max_tokens: int | None = None,
+                   shape=None) -> BrainResult:
     result = BrainResult(ok=False, tier=tier, stage=stage)
     if tier not in TIERS:
         result.error = f"Unknown tier {tier!r}. Known tiers: {', '.join(TIERS)}."
@@ -342,6 +428,8 @@ def complete(project_dir, tier: str, messages: list, stage: str,
             "refused. Raise the cap in the global settings if you want to go on."
         )
 
+    if shape is not None:
+        messages = shape(messages, config["provider"])
     key_env = _key_env_for(config)
     key = os.environ.get(key_env) if key_env else None
     try:
@@ -387,6 +475,28 @@ _EXTRACTION_SYSTEM = (
     "enough about a field, use an empty string for it. Never invent "
     "details the maker did not give."
 )
+
+
+def extract_json(text: str) -> dict:
+    """Parse a JSON object out of a model reply, tolerating stray
+    prose and code fences. Returns {} when nothing parses. Values
+    keep their JSON types (nested objects stay objects) — use this
+    for structured replies; `_parse_extraction` flattens to strings."""
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned,
+                     flags=re.MULTILINE).strip()
+    candidates = [cleaned]
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        candidates.append(match.group(0))
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
 
 
 def _parse_extraction(text: str) -> dict:
