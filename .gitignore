@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+*.egg
+
+# The built single-file executable (rebuild with ./build.sh)
+dist/
+
+# Local environments
+.venv/
+venv/
+
+# Note: a game project's .weaverbird/ directory is project state
+# (pipeline state, ledger, provenance) and should be committed with
+# that project — it is not ignored here on purpose.

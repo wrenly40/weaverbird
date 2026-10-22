@@ -1,0 +1,32 @@
+# Game Factory — global settings (draft)
+# Set once by the user. Applies to every game. Secrets are referenced by name only — values live in the vault, never here.
+
+budgets:
+  tokens_per_run: null        # REQUIRED before first build
+  tokens_per_game: null       # REQUIRED before first build
+  cost_ceiling_per_month: null
+  max_build_iterations: 40
+  playtest_runs_per_iteration: 3   # breaker / competent / first-time
+  warn_at_percent_of_cap: 80
+
+models:                        # the ladder — cheap first, frontier only for judgement
+  cheap:  { connector: null, model: null }   # classification, log digests, formatting
+  mid:    { connector: null, model: null }   # routine code edits
+  frontier: { connector: null, model: null } # design, hard debugging, play-test judgement
+  allow_local_models: true
+
+engine:
+  godot_version: "4.x-pinned"  # games never silently inherit a new engine version
+  default_platforms: [windows, linux, web]
+
+defaults_for_scope_interviews:
+  telemetry: false
+  reply_approval_required: true
+  first_storefront: itch
+
+connectors:                    # enable/disable only — credentials in the vault
+  github:   { enabled: false }
+  itch:     { enabled: false }
+  steam:    { enabled: false }
+  play:     { enabled: false }
+  apple_signing: { enabled: false }
