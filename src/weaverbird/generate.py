@@ -437,48 +437,108 @@ def crate_puzzles(units: int, budget_override: int | None = None,
 
 def _platformer_level(rng: random.Random, index: int) -> dict:
     """One level. Ground segments with spike pits between them and a
-    staircase of floating platforms carrying the stars. Steps are
-    kept within jump reach (height gain <= 80, gaps <= 105 against a
-    ~100px jump), so the level is traversable by construction."""
+    staircase of floating platforms carrying the stars.
+
+    Traversable by construction means more than "each step is within
+    jump reach of the previous one": a player who misses a jump must
+    be able to fall, land, and climb again. So the staircase is a
+    true stair — consecutive steps overlap in x or start within
+    36px of the previous step's end, each step rises or drops by at
+    most 64px (the generated jump clears ~106px; its landing window
+    for a 64px rise spans roughly 40–177px of travel), and the first
+    step is within jump reach of the ground (rise <= 80, landing
+    window roughly 55–163px of travel). A fall
+    therefore lands on a lower step or on the ground next to the
+    staircase base — never in a pocket under a platform that is
+    only reachable via a perfect no-fall chain.
+
+    The ground is built after the staircase for the mirror-image
+    reason: a spike pit must be jumpable from the ground, and a
+    low step (top below ~396px, so its underside is within a
+    ground jump's head arc) hovering over the pit or its takeoff
+    turns that jump into a head-bonk and a death. Pits are only
+    cut where no low step hangs over them."""
     width = min(1500 + index * 90, 2100)
     ground_y = 560
+
+    # The staircase first (see the docstring for its invariants).
+    steps: list[list[int]] = []
+    collectibles = []
+    step_x = rng.randint(190, 240)
+    step_y = rng.randint(480, 492)
+    while step_x < width - 300:
+        w = rng.randint(112, 148)
+        steps.append([step_x, step_y, w])
+        collectibles.append([step_x + w // 2, step_y - 30])
+        step_y = int(max(296, min(492, step_y + rng.choice(
+            [-64, -44, -24, 0, 24, 44, 64]))))
+        step_x = step_x + w + rng.randint(-24, 36)
+    collectibles.append([width - 170, 528])
+    # A ground jump's head peaks ~418px (feet 542 - 106 rise - 18
+    # half-height), so a step is "low" — able to bonk that jump —
+    # when its underside (top + 22) is below 418, i.e. top > 396.
+    low_ranges = [(sx, sx + w) for sx, sy, w in steps if sy > 396]
+
+    def pit_blocked(a: int, b: int) -> bool:
+        """Would a pit spanning [a, b] sit under a low step's arc?
+
+        The jump that crosses a pit takes off up to ~160px before
+        it, so the step must clear that whole approach span."""
+        return any(a - 160 < rx1 and rx0 < b for rx0, rx1 in low_ranges)
+
     segments: list[tuple[int, int]] = []
     x = 0
     while x < width:
         seg_len = rng.randint(300, 430) if not segments else rng.randint(230, 370)
         end = min(x + seg_len, width)
-        segments.append((x, end))
         if end >= width:
+            segments.append((x, width))
             break
-        x = end + rng.randint(60, 105)
+        pit_w = rng.randint(60, 105)
+        if pit_blocked(end, end + pit_w):
+            # No pit here: the ground runs on under the low step.
+            end = min(end + pit_w + rng.randint(60, 120), width)
+            segments.append((x, end))
+            if end >= width:
+                break
+            x = end
+            continue
+        segments.append((x, end))
+        x = end + pit_w
     if segments[-1][1] < width:
         last = segments[-1]
         segments[-1] = (last[0], width)
+    # The exit and the final star stand on the final ground
+    # segment: if that segment rolled short (under 200px, so the
+    # star at width-170 could hang over the preceding pit), merge
+    # it into its predecessor, dropping the last pit.
+    if len(segments) > 1 and width - segments[-1][0] < 200:
+        segments[-2:] = [(segments[-2][0], width)]
     platforms = [[sx, ground_y, ex - sx] for sx, ex in segments]
     spikes = []
     for (sx, ex), (nx, _ne) in zip(segments, segments[1:]):
         if nx > ex:
             spikes.append([ex, 600, nx - ex])
     if not spikes:  # guarantee at least one pit per level
-        sx, ex = segments[len(segments) // 2]
-        mid = (sx + ex) // 2
-        platforms.remove([sx, ground_y, ex - sx])
-        platforms.append([sx, ground_y, mid - sx])
-        platforms.append([mid + 84, ground_y, ex - (mid + 84)])
-        platforms.sort(key=lambda p: p[0])
-        spikes.append([mid, 600, 84])
-        segments = [(p[0], p[0] + p[2]) for p in platforms
-                    if p[1] == ground_y]
-    collectibles = []
-    px = rng.randint(190, 240)
-    py = 472
-    while px < width - 300:
-        w = rng.randint(112, 148)
-        platforms.append([px, py, w])
-        collectibles.append([px + w // 2, py - 30])
-        py = max(258, min(478, py + rng.choice([-72, -44, 0, 44, 72])))
-        px += rng.randint(205, 255)
-    collectibles.append([width - 170, 528])
+        placed = False
+        for sx, ex in segments:
+            a = sx + 40
+            while a + 84 <= ex - 20:
+                if not pit_blocked(a, a + 84):
+                    platforms.remove([sx, ground_y, ex - sx])
+                    platforms.append([sx, ground_y, a - sx])
+                    platforms.append([a + 84, ground_y, ex - (a + 84)])
+                    platforms.sort(key=lambda p: p[0])
+                    spikes.append([a, 600, 84])
+                    placed = True
+                    break
+                a += 20
+            if placed:
+                break
+        if not placed:
+            raise ValueError(
+                "could not place a single spike pit clear of low steps")
+    platforms.extend(steps)
     return {
         "platforms": platforms,
         "collectibles": collectibles,

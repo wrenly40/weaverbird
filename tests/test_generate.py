@@ -38,6 +38,7 @@ def scoped_project(tmp, replacements=None, approve=True):
     return project
 
 
+TITLE = "- REQUIRED Title (working): Filled in for the test"
 GENRE = "- REQUIRED Genre / archetype: Filled in for the test"
 VERB = "- REQUIRED Core verb (what the player does most): Filled in for the test"
 COUNTS = ("- REQUIRED Content counts (levels / waves / rooms / items, "
@@ -148,27 +149,102 @@ class CrateSolverTests(unittest.TestCase):
 
 
 class PlatformerLevelTests(unittest.TestCase):
+    """Generator invariants, checked without Godot across many seeds.
+
+    The physics the generated player ships with (generate.py):
+    speed 280, jump 545, gravity 1400 — a jump clears ~106px, and
+    a rise of R px can be landed between ~40 and ~177px of travel
+    after takeoff. Traversable means a chain of such jumps exists
+    from the ground to every floating step — a missed jump must
+    cost a fall and a re-climb, never the run. (Regression: levels
+    once chained steps up to 232px above the ground with no way
+    back up after a fall, and the competent bot hopped in place
+    under a star until the runner killed it.)
+    """
+
+    def _surfaces(self, level):
+        return [(p[0], p[0] + p[2], p[1]) for p in level["platforms"]]
+
+    def _reachable(self, level):
+        surfaces = self._surfaces(level)
+        reached = {i for i, s in enumerate(surfaces) if s[2] == 560}
+        changed = True
+        while changed:
+            changed = False
+            for j, target in enumerate(surfaces):
+                if j in reached:
+                    continue
+                for i in list(reached):
+                    start = surfaces[i]
+                    rise = start[2] - target[2]
+                    gap = max(target[0] - start[1], start[0] - target[1])
+                    if rise <= 80 and gap <= 150:
+                        reached.add(j)
+                        changed = True
+                        break
+        return reached
+
     def test_levels_are_traversable_by_construction(self):
         import random
-        rng = random.Random(1234)
-        for index in range(4):
-            level = generate._platformer_level(rng, index)
-            self.assertTrue(level["spikes"], "every level needs a pit")
-            self.assertTrue(level["collectibles"])
-            self.assertEqual(level["exit"][0], level["width"] - 70)
-            floats = [p for p in level["platforms"] if p[1] != 560]
-            floats.sort(key=lambda p: p[0])
-            # From the ground to the first platform, and between
-            # consecutive platforms, the upward step stays inside
-            # jump reach (the generated jump clears ~100px).
-            previous_top = 560
-            for platform in floats:
-                step_up = previous_top - platform[1]
-                self.assertLessEqual(step_up, 92,
-                                     "step up beyond jump reach")
-                previous_top = platform[1]
-            for zone in level["spikes"]:
-                self.assertGreater(zone[2], 0)
+        for seed in range(40):
+            rng = random.Random(seed)
+            for index in range(3):
+                level = generate._platformer_level(rng, index)
+                where = f"seed {seed} level {index}"
+                self.assertTrue(level["spikes"], where)
+                self.assertTrue(level["collectibles"], where)
+                self.assertEqual(level["exit"][0], level["width"] - 70,
+                                 where)
+                surfaces = self._surfaces(level)
+                ground = [s for s in surfaces if s[2] == 560]
+                self.assertTrue(
+                    any(s[0] <= level["exit"][0] <= s[1] for s in ground),
+                    f"exit not on the ground: {where}")
+                floats = sorted((s for s in surfaces if s[2] != 560),
+                                key=lambda s: s[0])
+                # The staircase base is within jump reach of the ground.
+                self.assertLessEqual(560 - floats[0][2], 80, where)
+                # Consecutive steps: a true stair — overlapping in x
+                # or a small gap, never a leap, and a bounded rise
+                # or drop.
+                for prev, nxt in zip(floats, floats[1:]):
+                    gap = nxt[0] - prev[1]
+                    self.assertGreaterEqual(gap, -24, where)
+                    self.assertLessEqual(gap, 36, where)
+                    self.assertLessEqual(abs(nxt[2] - prev[2]), 64, where)
+                # Every step is reachable from the ground through the
+                # jump graph — no perfect-run-only chains.
+                reached = self._reachable(level)
+                for i, surface in enumerate(surfaces):
+                    self.assertIn(i, reached,
+                                  f"surface {surface} unreachable: {where}")
+                # Every star but the last sits on a step; the last
+                # sits on the ground by the exit.
+                for star in level["collectibles"][:-1]:
+                    self.assertTrue(
+                        any(s[2] == star[1] + 30 and s[0] <= star[0] <= s[1]
+                            for s in floats),
+                        f"star {star} not on a step: {where}")
+                self.assertEqual(level["collectibles"][-1],
+                                 [level["width"] - 170, 528], where)
+                self.assertTrue(
+                    any(s[0] <= level["width"] - 170 <= s[1]
+                        for s in ground),
+                    f"final star not over the ground: {where}")
+                # Spike pits are jumpable gaps in the ground, and
+                # no low step hangs over a pit or its takeoff: a
+                # ground jump's head peaks at ~418px, so a step
+                # whose top is below 396 (underside within that
+                # arc) over the pit turns the jump into a bonk.
+                for zone in level["spikes"]:
+                    self.assertGreater(zone[2], 0, where)
+                    self.assertLessEqual(zone[2], 105, where)
+                    for s in floats:
+                        if s[2] > 396:
+                            self.assertFalse(
+                                zone[0] - 160 < s[1]
+                                and s[0] < zone[0] + zone[2],
+                                f"low step {s} over pit {zone}: {where}")
 
 
 class ConfigTests(unittest.TestCase):
@@ -344,6 +420,54 @@ class BuildValidationTests(unittest.TestCase):
                 COUNTS: "- REQUIRED Content counts (levels / waves / rooms / items, as applicable): 1 rounds",
             })
             self.assertTrue(generate.build_stage_handler(project))
+
+
+@unittest.skipUnless(VALIDATE, "Godot validation not available")
+class PlatformerSeedSweepTests(unittest.TestCase):
+    """Regression sweep for the competent-bot hang: the platformer
+    layout seed comes from the game title, so sweep titles. For
+    every seed the competent bot must WIN a 2-level game — finish,
+    not be killed — comfortably inside its own 90s cap (the runner
+    allows 110s here; the factory's build gate allows 120s)."""
+
+    TITLES = [
+        "Hopper", "Star Hop", "Pebble Dash", "Cloud Steps",
+        "Fern Gully Run", "Mossy Ascent", "Tin Roof Runner",
+        "Bracken Leap", "Slate Stairs", "Willow Wisp Way",
+        "Copper Canyon Hop", "Dewdrop Climb", "Ember Steps",
+        "Foxglove Flight", "Granite Garden", "Hazel Heights",
+        "Ivy Overpass", "Juniper Jump", "Kestrel Keep", "Lichen Loft",
+    ]
+
+    def test_competent_bot_wins_across_seeds(self):
+        godot_bin, _version = godot_module.find_godot()
+        counts = ("- REQUIRED Content counts (levels / waves / rooms / "
+                  "items, as applicable): 2 levels")
+        failures = []
+        for title in self.TITLES:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = scoped_project(tmp, {
+                    TITLE: f"- REQUIRED Title (working): {title}",
+                    GENRE: ("- REQUIRED Genre / archetype: 2D platformer "
+                            "— run, jump, reach the exit"),
+                    COUNTS: counts,
+                })
+                skeleton.build_skeleton(project, validate=False)
+                generate.build_game(project, validate=False,
+                                    use_brain=False)
+                game_dir = project / "game"
+                imported = skeleton._run_godot(
+                    godot_bin, game_dir, ["--import"], timeout=60)
+                if not imported["ok"]:
+                    failures.append((title, "import", imported["errors"]))
+                    continue
+                run = skeleton._run_godot(
+                    godot_bin, game_dir,
+                    ["--script", "tests/competent_win.gd"], timeout=110)
+                if not (run["ok"] and run["smoke_pass"]):
+                    failures.append((title, "competent bot",
+                                     run["errors"] or run["returncode"]))
+        self.assertEqual(failures, [])
 
 
 class GenerateCliTests(unittest.TestCase):
