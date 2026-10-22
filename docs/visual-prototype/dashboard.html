@@ -1,0 +1,85 @@
+<!doctype html><html><head><meta charset="utf-8"><style>* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Inter',system-ui,-apple-system,'Segoe UI','DejaVu Sans',sans-serif; background:#F7F6FA; color:#232936; }
+.app { display:flex; min-height:100vh; }
+.side { width:248px; background:#FFFFFF; padding:28px 20px; display:flex; flex-direction:column; gap:8px; box-shadow:0 8px 24px rgba(35,41,54,.06); }
+.brand { display:flex; align-items:center; gap:12px; padding:2px 10px 22px; }
+.brand .mark { width:38px;height:38px;border-radius:12px;background:#6C4CF1;display:flex;align-items:center;justify-content:center; }
+.brand b { font-size:19px; letter-spacing:-.3px; }
+.brand small { display:block; color:#68707F; font-size:11.5px; font-weight:400; margin-top:1px;}
+.nav a { display:flex; align-items:center; gap:11px; padding:10px 12px; border-radius:10px; color:#3C4353; text-decoration:none; font-size:14.5px; }
+.nav a.on { background:#ECE8FD; color:#232936; font-weight:600; }
+.nav a .dot { width:7px;height:7px;border-radius:99px;background:#C9C4DE; }
+.nav a.on .dot { background:#6C4CF1; }
+.side .foot { margin-top:auto; background:#F7F6FA; border-radius:14px; padding:14px; font-size:12.5px; color:#68707F; line-height:1.5;}
+.side .foot b{color:#232936;}
+.main { flex:1; padding:36px 44px; }
+.top { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:26px; }
+h1 { font-size:30px; letter-spacing:-.6px; }
+.sub { color:#68707F; font-size:14.5px; margin-top:5px; }
+.btn { background:#6C4CF1; color:#fff; border:none; padding:12px 20px; border-radius:12px; font-size:14.5px; font-weight:600; box-shadow:0 8px 20px rgba(108,76,241,.28); }
+.btn.ghost { background:#fff; color:#232936; box-shadow:0 4px 14px rgba(35,41,54,.07); }
+.grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.card { background:#fff; border-radius:16px; padding:22px; box-shadow:0 8px 24px rgba(35,41,54,.07); }
+.card h3 { font-size:17px; letter-spacing:-.2px; }
+.card .pitch { color:#68707F; font-size:13.5px; margin:6px 0 16px; line-height:1.45; min-height:39px;}
+.stages { display:flex; gap:5px; margin-bottom:14px; }
+.stages i { flex:1; height:6px; border-radius:99px; background:#ECEAF2; }
+.stages i.done { background:#6C4CF1; } .stages i.now { background:#B7A6F7; }
+.meta { display:flex; justify-content:space-between; font-size:12.5px; color:#68707F; }
+.meta b { color:#232936; }
+.chip { display:inline-block; font-size:12px; font-weight:600; padding:5px 11px; border-radius:99px; background:#ECE8FD; color:#5438C9; }
+.chip.green { background:#E2F4EB; color:#20724C; } .chip.grey{ background:#F0EFF5; color:#68707F; }
+.row { display:grid; grid-template-columns:2fr 1fr; gap:20px; margin-top:20px; }
+.bar { height:9px; background:#ECEAF2; border-radius:99px; overflow:hidden; margin:12px 0 8px;}
+.bar i { display:block; height:100%; background:#6C4CF1; border-radius:99px; }
+.act { display:flex; gap:13px; padding:12px 0; border-bottom:1px solid #F0EFF5; font-size:13.5px;}
+.act:last-child{border:none;} .act time{ margin-left:auto; color:#A0A6B4; font-size:12.5px; white-space:nowrap;}
+.act .ic { width:30px;height:30px;border-radius:9px;background:#ECE8FD;display:flex;align-items:center;justify-content:center;font-size:13px;color:#5438C9;flex:none;}
+.stepper { display:flex; align-items:flex-start; background:#fff; border-radius:16px; padding:26px 28px; box-shadow:0 8px 24px rgba(35,41,54,.07); }
+.step { flex:1; text-align:center; position:relative; }
+.step .n { width:34px;height:34px;border-radius:99px;background:#F0EFF5;color:#68707F;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;font-size:13.5px;font-weight:700; position:relative; z-index:1;}
+.step.done .n { background:#6C4CF1; color:#fff; } .step.now .n { background:#fff; border:2.5px solid #6C4CF1; color:#6C4CF1; }
+.step label { font-size:12.5px; color:#68707F; display:block; line-height:1.3;} .step.done label,.step.now label{ color:#232936; font-weight:600;}
+.step::before { content:''; position:absolute; top:17px; left:-50%; width:100%; height:2.5px; background:#ECEAF2; }
+.step.done::before { background:#6C4CF1; } .step:first-child::before{display:none;}
+.check { display:flex; gap:11px; align-items:flex-start; padding:9px 0; font-size:14px; border-bottom:1px solid #F4F3F8;}
+.check:last-child{border:none;} .check .box{ width:21px;height:21px;border-radius:7px;background:#E2F4EB;color:#20724C;display:flex;align-items:center;justify-content:center;font-size:12px;flex:none;margin-top:1px;}
+.check .box.open{ background:#F0EFF5; color:#A0A6B4;}
+.check small{ display:block; color:#68707F; font-size:12.5px; margin-top:2px;}
+.q { background:#fff; border-radius:16px; padding:22px; box-shadow:0 8px 24px rgba(35,41,54,.07); margin-bottom:16px;}
+.q h4 { font-size:13px; text-transform:uppercase; letter-spacing:.7px; color:#68707F; margin-bottom:14px;}
+.q label { display:block; font-size:14px; font-weight:600; margin:13px 0 7px;}
+.q label:first-of-type{margin-top:0;}
+.field { background:#F7F6FA; border:1.5px solid #E5E3EE; border-radius:11px; padding:11px 14px; font-size:14px; color:#232936;}
+.field.empty { color:#A0A6B4; border-style:dashed; }
+.styles { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.style { border:2px solid #ECEAF2; border-radius:14px; padding:14px; }
+.style.sel { border-color:#6C4CF1; background:#FBFAFF;}
+.style .sw { display:flex; gap:6px; margin-bottom:11px;} .style .sw i{ width:30px;height:30px;border-radius:9px; }
+.style b { font-size:13.5px;} .style p{ font-size:12px; color:#68707F; margin-top:3px; line-height:1.4;}
+.prog { display:flex; align-items:center; gap:14px; background:#fff; border-radius:16px; padding:18px 22px; box-shadow:0 8px 24px rgba(35,41,54,.07); margin-bottom:20px;}
+.prog .ring { font-size:21px; font-weight:800; color:#6C4CF1;}
+table { width:100%; border-collapse:collapse; font-size:13.5px;}
+td,th { padding:9px 4px; border-bottom:1px solid #F0EFF5; text-align:left;} th{ color:#68707F; font-weight:600; font-size:12.5px;}
+tr:last-child td{border:none;} td.r, th.r { text-align:right; }
+</style></head><body><div class="app"><div class="side"><div class="brand"><div class="mark"><svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="M4 15c5 1 9-1 11-6l4-4-1 5c3 0 4 2 4 2s-2 1-4 1c-1 4-5 8-10 8-2 0-4-1-4-1l2-3c-1 0-2-1-2-2z" fill="#fff"/><circle cx="16.5" cy="8.5" r="1.3" fill="#6C4CF1"/></svg></div><div><b>Weaverbird</b><small>Game factory</small></div></div><div class="nav"><a href="#" class="on"><span class="dot"></span>Projects</a><a href="#" class=""><span class="dot"></span>New game</a><a href="#" class=""><span class="dot"></span>Connectors</a><a href="#" class=""><span class="dot"></span>Settings</a></div><div class="foot"><b>Global budget</b><br>4,200 of 100,000 tokens this game · factory-wide caps live in Settings.</div></div><div class="main">
+<div class="top"><div><h1>Projects</h1><div class="sub">Every game, where it is, and what it needs next.</div></div><button class="btn">+ New game</button></div>
+<div class="grid">
+ <div class="card"><span class="chip">Skeleton built</span><h3 style="margin-top:12px">Starfall Courier</h3><p class="pitch">A tiny courier runs parcels across a floating island before the storm timer ends.</p><div class="stages"><i class="done"></i><i class="done"></i><i class="now"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="meta"><span>Next: <b>asset generation</b></span><span><b>4,200</b> tokens</span></div></div>
+ <div class="card"><span class="chip grey">In scope interview</span><h3 style="margin-top:12px">Moss &amp; Lantern</h3><p class="pitch">A slow exploration game in a forest that regrows while you sleep.</p><div class="stages"><i class="now"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="meta"><span>Scope: <b>18 of 25</b> answered</span><span><b>300</b> tokens</span></div></div>
+ <div class="card"><span class="chip green">Live on itch.io</span><h3 style="margin-top:12px">Night Bakery</h3><p class="pitch">Serve ghosts their last meals in a bakery that only opens at midnight.</p><div class="stages"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></div><div class="meta"><span><b>3</b> feedback items to triage</span><span><b>61,480</b> tokens</span></div></div>
+</div>
+<div class="row">
+ <div class="card"><h3>Recent activity</h3>
+  <div class="act"><div class="ic">✓</div><div><b>Starfall Courier</b> — skeleton validated in Godot, tagged known-good<time>12:54</time></div></div>
+  <div class="act"><div class="ic">?</div><div><b>Moss &amp; Lantern</b> — scope interview waiting on style lock<time>12:31</time></div></div>
+  <div class="act"><div class="ic">↺</div><div><b>Night Bakery</b> — feedback triage: 2 bugs, 1 balance note<time>09:12</time></div></div>
+  <div class="act"><div class="ic">£</div><div>Factory spend this month is <b>well under</b> the global ceiling<time>Mon</time></div></div>
+ </div>
+ <div class="card"><h3>Factory</h3>
+  <div class="act"><div class="ic">G</div><div>GitHub — <b>wrenly40</b> connected</div></div>
+  <div class="act"><div class="ic">◈</div><div>Godot 4.7.2 found and ready</div></div>
+  <div class="act"><div class="ic">i</div><div>itch.io — not connected yet</div></div>
+  <div style="margin-top:14px"><span style="font-size:13px;color:#68707F">Tokens this month</span><div class="bar"><i style="width:9%"></i></div><div class="meta"><span><b>9,150</b> used</span><span>cap 100,000</span></div></div>
+ </div>
+</div></div></div></body></html>
