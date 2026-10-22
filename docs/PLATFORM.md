@@ -116,9 +116,25 @@ attached.
 - Built in v0.1: the provenance log, its add/list functions, the
   unrecorded-asset check, and the store disclosure draft built from
   the records.
-- Future: the generators themselves (code-drawn first, then model
-  providers through connectors with the user's own keys). They plug
-  into: provenance, connectors (asset providers), ledger.
+- Built in v0.4: the deterministic generator (`assets_gen.py`,
+  `weaverbird assets generate <dir>`, and the pipeline's assets
+  stage handler). Flat vector sprites (SVGs) drawn from the style
+  lock's palette — the first palette hex is the hero/accent, the
+  second the targets, a hue-shifted relative the hazards — covering
+  every archetype: player, target, hazard, platform tile, spikes,
+  exit door, crate, pad, wall, background pattern; a real game icon
+  built from the palette and the archetype's motif, replacing the
+  skeleton placeholder; and audio synthesised with the standard
+  library `wave` module (22050 Hz mono): click, collect, hurt, jump
+  and push effects, a win jingle, a lose tone, and an 8-second
+  looping music track. Every file is provenance-recorded as it is
+  made (source "code", provider "weaverbird-assets") and summarised
+  in `.weaverbird/assets_report.json`; the ledger entry is
+  zero-token. Games load the assets when present and fall back to
+  code-drawn shapes when they are not.
+- Future: model-provided art through connectors with the user's own
+  keys, richer palettes per archetype, 3D assets. It plugs into:
+  provenance, connectors (asset providers), ledger.
 
 ### 4. Build loop
 - Inputs: the skeleton, the assets, generated game code.
@@ -126,9 +142,30 @@ attached.
   per iteration and a tag on every state that passes the tests.
 - Built in v0.1: local git wrap — init, commit everything, tag a
   known-good state, roll back to a tag, list tags.
-- Future: code generation (templates and deterministic generators
-  first, model-written diffs only for what makes the game different)
-  and static checks. They plug into: pipeline state, vcs, ledger.
+- Built in v0.4: archetype game generation (`generate.py`,
+  `weaverbird build game <dir>`, and the pipeline's build stage
+  handler). The scope's genre, core verb and win/lose text choose
+  between three archetypes — arena collector, platformer, crate
+  pusher — with an explicit `archetype:` scope field or
+  `--archetype` flag winning over detection; the choice and its
+  reason are recorded in `.weaverbird/generation_report.json`. The
+  scope's content counts become arena rounds, platformer levels
+  (seeded layouts: ground with spike pits, star staircases within
+  jump reach, exit doors) or crate puzzles (a built-in set verified
+  loop-by-loop with the solver shipped in `generate.py`, cycled
+  with mirroring beyond the set, each puzzle's budget derived from
+  its verified solution length). All tuning is data: the games read
+  `game/game_config.json` at runtime. With a brain configured, the
+  mid tier may propose tuning numbers as strict JSON; every value
+  is validated and clamped to the archetype's bounds, and any brain
+  failure falls back to the deterministic config. The build ships
+  the scripted test players of stages 5–6 inside the game
+  (`game/tests/`, the competent win player doubling as the flow
+  smoke), validates with the skeleton's discipline (import, menu,
+  game, win flow), then commits and tags `known-good/build`.
+- Future: code generation beyond the archetype cores (model-written
+  diffs only for what makes a game different), more archetypes and
+  static checks. It plugs into: pipeline state, vcs, ledger, brain.
 
 ### 5. Headless testing
 - Inputs: the built project.
@@ -137,8 +174,18 @@ attached.
   by running Godot without a display.
 - Built in v0.1: Godot location and version detection; the stage's
   place in the pipeline.
-- Future: the headless runner and scenario suite. They plug into:
-  godot module, pipeline state, ledger.
+- Built in v0.4: the runner (`testing.py`, `weaverbird test run
+  <dir>`, and the pipeline's headless_test handler). Base runs —
+  import, menu scene, game scene — require zero Godot ERROR lines,
+  then the game's own scripted players (stage 6) run; performance
+  (average FPS and scene load time) is sampled during the competent
+  win run against a target that defaults to 30 FPS and can be set
+  under `testing.target_fps` in the global settings. Everything
+  lands in `.weaverbird/test_report.json`, the report the finish
+  check reads with precedence over the skeleton report. The stage
+  fails when any base run or a win/lose proof fails.
+- Future: longer scenario matrices, per-level coverage reports.
+  It plugs into: godot module, pipeline state, ledger.
 
 ### 6. AI playtesting ("real" testing)
 - Inputs: a build that passed headless testing.
@@ -148,9 +195,29 @@ attached.
   game teaches — feeding the iterate loop back to stages 3–5.
 - Built in v0.1: the stage's place in the pipeline and the iteration
   budgets in global settings (playtest runs per iteration).
-- Future: the three playtest agents, with screenshots taken sparingly
-  at decision points to keep token spend down. They plug into:
-  pipeline state, ledger (every run is costed), global budgets.
+- Built in v0.4: the three players as deterministic scripted bots,
+  shipped inside every generated game under `game/tests/` and run
+  by the test stage (`weaverbird test run`). The competent player
+  plays to a win and separately to a loss through the game's real
+  input and physics — steering in the arena and platformer,
+  replaying the factory-verified solutions as real key presses in
+  the crate game — recording time and deaths. The breaker fuzzes
+  inputs from a seed, spams pause, and in the crate game drives a
+  crate into a characterised corner so the game's deadlock
+  detection fires (it reports the corner to the player instead of
+  soft-locking); breaker findings are warnings unless a run
+  crashes or logs engine errors. The first-time player presses the
+  menu's real Play button and follows only the one-line objective
+  hint in the game scene, recording time-to-first-objective and
+  whether it finished — its results are observations, not gates.
+  Honest limit: these are scripted bots, not model agents; they
+  prove the game works end to end, they do not judge whether it is
+  fun.
+- Future: the model-driven playtesters, with screenshots taken
+  sparingly at decision points to keep token spend down, and
+  judgement reports (clarity, difficulty, feel) feeding the
+  iterate loop. They plug into: pipeline state, ledger (every
+  run is costed), global budgets, brain.
 
 ### 7. Finished gate
 - Inputs: the definition-of-done checklist.
@@ -198,6 +265,20 @@ attached.
   decisions left for the human (open items, price, platforms,
   storefronts, store copy, playing the release candidate). The app's
   project view shows the same checklist and evidence.
+- Built in v0.4: the remaining evidence paths. With the test
+  report present, the finish check marks winnable_and_losable from
+  the competent player's win and lose runs, performance from the
+  measured FPS against the target, content_counts_delivered by
+  comparing the generation report's units against the scope's
+  number, and the icon_and_polish gate from the assets report's
+  generated icon plus the test report's clean runs — so a fully
+  built and tested game can mark all seven items, each with its
+  evidence. The finish report's "What was built" section now
+  describes the generated game, its assets and its test verdict,
+  and the app's project view shows the same in the browser: the
+  archetype and delivery lines, Generate assets / Build game /
+  Run tests buttons under the CLI's rules, and a test summary
+  card.
 - Future: the approval view itself (captured playthrough, drafts,
   one place to say yes or send it back), shipped in the app.
 

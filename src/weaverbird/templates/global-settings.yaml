@@ -28,6 +28,9 @@ engine:
   godot_version: "4.x-pinned"  # games never silently inherit a new engine version
   default_platforms: [windows, linux, web]
 
+testing:                       # the headless test stage's targets
+  target_fps: 30               # average FPS the competent win run must reach
+
 defaults_for_scope_interviews:
   telemetry: false
   reply_approval_required: true

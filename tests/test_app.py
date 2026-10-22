@@ -208,3 +208,75 @@ class TestSettingsPage(AppTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGenerationAndTestCards(AppTestCase):
+    """The v0.4 project view: generation/test cards and stage actions."""
+
+    def _add_reports(self):
+        import json as _json
+        wb = self.project / ".weaverbird"
+        (wb / "generation_report.json").write_text(_json.dumps({
+            "archetype": "platformer",
+            "archetype_reason": "the scope's genre mentions platforms",
+            "units_delivered": 3, "units_requested": 3,
+            "brain_used": False, "brain_note": "no model configured",
+            "validation": {"passed": True},
+        }), encoding="utf-8")
+        (wb / "assets_report.json").write_text(_json.dumps({
+            "files": ["game/assets/player.svg"] * 19,
+            "palette": {"accent_hex": "#112233", "target_hex": "#AABBCC"},
+        }), encoding="utf-8")
+        (wb / "test_report.json").write_text(_json.dumps({
+            "ok": True, "win_proven": True, "lose_proven": True,
+            "performance": {"avg_fps": 121.0, "target_fps": 30,
+                            "load_time_s": 0.31},
+            "playtesters": {
+                "competent": {"ok": True,
+                              "win": {"time_s": 21.5, "deaths": 0},
+                              "lose": {"time_s": 4.0}},
+                "breaker": {"ok": True, "time_s": 30.0,
+                            "findings": ["pause overlay opened and closed"]},
+                "first_time": {"ok": True, "time_s": 40.0,
+                               "first_objective_s": 1.2, "finished": True,
+                               "findings": []},
+            },
+            "runs": [],
+        }), encoding="utf-8")
+
+    def test_project_page_shows_generation_and_test_cards(self):
+        self._add_reports()
+        status, page = get(self.base + "/project/bee-game")
+        self.assertEqual(status, 200)
+        self.assertIn("Archetype", page)
+        self.assertIn("platformer", page)
+        self.assertIn("Content delivered", page)
+        self.assertIn("Test summary", page)
+        self.assertIn("Win proven: yes", page)
+        self.assertIn("First-time player", page)
+        self.assertIn("Generate assets", page)
+        self.assertIn("Build game", page)
+        self.assertIn("Run tests", page)
+
+    def test_stage_buttons_disabled_with_reasons_before_skeleton(self):
+        status, page = get(self.base + "/project/bee-game")
+        self.assertEqual(status, 200)
+        self.assertIn("Build the skeleton first", page)
+        self.assertIn("Build the game first", page)
+
+    def test_generate_assets_action_works(self):
+        from weaverbird import skeleton as skeleton_module
+        skeleton_module.build_skeleton(self.project, validate=False)
+        status, page = post(self.base + "/project/bee-game/generate-assets",
+                            {})
+        self.assertEqual(status, 200)
+        self.assertIn("Assets generated", page)
+        self.assertTrue(
+            (self.project / ".weaverbird" / "assets_report.json").exists())
+        self.assertTrue(
+            (self.project / "game" / "assets" / "player.svg").exists())
+
+    def test_run_tests_action_reports_refusal_before_build(self):
+        status, page = post(self.base + "/project/bee-game/run-tests", {})
+        self.assertEqual(status, 200)
+        self.assertIn("Tests not run", page)

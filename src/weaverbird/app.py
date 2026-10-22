@@ -32,8 +32,11 @@ from pathlib import Path
 import yaml
 
 from . import __version__
+from . import assets_gen as assets_module
 from . import brain as brain_module
 from . import finish as finish_module
+from . import generate as generate_module
+from . import testing as testing_module
 from . import godot as godot_module
 from . import ledger as ledger_module
 from . import provenance as provenance_module
@@ -136,6 +139,9 @@ def _project_facts(project: dict) -> dict:
         records = provenance_module.list_records(path)
     except provenance_module.ProvenanceError:
         records = []
+    generation = generate_module.load_report(path)
+    assets_report = assets_module.load_report(path)
+    test_report = finish_module.load_test_report(path)
     return {
         "project": project,
         "scope": parsed,
@@ -147,6 +153,9 @@ def _project_facts(project: dict) -> dict:
         "ledger": ledger_summary,
         "ledger_entries": ledger_entries,
         "provenance": records,
+        "generation": generation,
+        "assets_report": assets_report,
+        "test_report": test_report,
     }
 
 
@@ -365,6 +374,108 @@ def render_project(server, name: str, notice: str = "",
     if skeleton_reason:
         skeleton_button += f'<span class="hint">{_esc(skeleton_reason)}</span>'
 
+    game_dir_exists = (path / skeleton_module.GAME_DIR_NAME
+                       / "project.godot").exists()
+    if not game_dir_exists:
+        assets_reason = "Build the skeleton first — assets live inside its game."
+        build_reason = "Build the skeleton first — the real game is generated on top of it."
+    elif skeleton_reason:
+        assets_reason = ""
+        build_reason = skeleton_reason
+    else:
+        assets_reason = ""
+        build_reason = ""
+    stage_buttons = ""
+    for action, label, reason in (
+        ("generate-assets", "Generate assets", assets_reason),
+        ("build-game", "Build game", build_reason),
+    ):
+        dis = " disabled" if reason else ""
+        stage_buttons += (
+            f'<form class="action" method="post" action="/project/{quoted}/{action}">'
+            f'<button class="btn ghost" type="submit"{dis}>{label}</button></form>')
+        if reason:
+            stage_buttons += f'<span class="hint">{_esc(reason)}</span>'
+    generation = facts["generation"]
+    if generation:
+        test_reason = ""
+    else:
+        test_reason = "Build the game first — the test suite runs the generated game and its scripted players."
+    dis = " disabled" if test_reason else ""
+    stage_buttons += (
+        f'<form class="action" method="post" action="/project/{quoted}/run-tests">'
+        f'<button class="btn ghost" type="submit"{dis}>Run tests</button></form>')
+    if test_reason:
+        stage_buttons += f'<span class="hint">{_esc(test_reason)}</span>'
+
+    generation_card = ""
+    if generation:
+        assets_report = facts["assets_report"]
+        assets_line = ""
+        if assets_report:
+            assets_line = (
+                f"<p class='hint' style='margin-top:8px'>Assets: "
+                f"{len(assets_report.get('files', []))} files generated "
+                f"(palette {_esc(assets_report.get('palette', {}).get('accent_hex', ''))} / "
+                f"{_esc(assets_report.get('palette', {}).get('target_hex', ''))}), "
+                f"icon at game/icon.svg.</p>")
+        generation_card = f"""
+<div class="card" style="margin-top:20px"><h3>The game</h3>
+<p style="margin-top:8px">Archetype: <b>{_esc(generation.get('archetype', ''))}</b>
+<span class="hint">— {_esc(generation.get('archetype_reason', ''))}</span></p>
+<p class="hint" style="margin-top:6px">Content delivered: <b>{_esc(generation.get('units_delivered', '?'))}</b> units (scope asked for {_esc(generation.get('units_requested', '?'))}) ·
+Tuning: {'proposed by the mid-tier model, validated and clamped' if generation.get('brain_used') else 'deterministic — ' + _esc(generation.get('brain_note', 'no model used'))} ·
+Validation: {'passed in Godot' if generation.get('validation', {}).get('passed') else 'not passed'}</p>{assets_line}</div>"""
+
+    test_card = ""
+    test_report = facts["test_report"]
+    if test_report:
+        players = test_report.get("playtesters", {})
+        perf = test_report.get("performance", {})
+
+        def player_line(label, data):
+            if not isinstance(data, dict) or not data:
+                return ""
+            bits = []
+            if data.get("time_s") is not None:
+                bits.append(f"{data['time_s']}s")
+            if data.get("deaths"):
+                bits.append(f"{data['deaths']} deaths")
+            if data.get("first_objective_s") is not None \
+                    and isinstance(data.get("first_objective_s"), (int, float)) \
+                    and data["first_objective_s"] >= 0:
+                bits.append(f"first objective at {data['first_objective_s']}s")
+            if data.get("finished") is not None:
+                bits.append("finished" if data["finished"] else "did not finish")
+            findings = data.get("findings") or []
+            for finding in findings[:2]:
+                bits.append(str(finding))
+            ok = data.get("ok")
+            box = "✓" if ok else "–"
+            cls = "" if ok else " open"
+            return (f'<div class="check"><div class="box{cls}">{box}</div>'
+                    f'<div>{label}<small>{_esc(", ".join(bits))}</small></div></div>')
+
+        competent = players.get("competent", {}) if isinstance(players, dict) else {}
+        comp_line = ""
+        if isinstance(competent, dict) and competent:
+            win = competent.get("win", {})
+            lose = competent.get("lose", {})
+            bits = []
+            if win.get("time_s") is not None:
+                bits.append(f"won in {win['time_s']}s")
+            if competent.get("ok"):
+                bits.append("win and lose proven")
+            comp_line = (f'<div class="check"><div class="box">✓</div>'
+                         f'<div>Competent player<small>{_esc(", ".join(bits))}</small></div></div>')
+        test_card = f"""
+<div class="card" style="margin-top:20px"><h3>Test summary</h3>
+<p class="hint" style="margin:6px 0 10px">Verdict: <b>{'PASS' if test_report.get('ok') else 'FAIL'}</b> ·
+Win proven: {'yes' if test_report.get('win_proven') else 'no'} · Lose proven: {'yes' if test_report.get('lose_proven') else 'no'} ·
+Performance: {_esc(perf.get('avg_fps', '?'))} avg FPS (target {_esc(perf.get('target_fps', '?'))}), scene load {_esc(perf.get('load_time_s', '?'))}s ·
+Scripted players (deterministic bots — model playtesting is future work)</p>
+{comp_line}{player_line("Breaker", players.get("breaker", {}))}{player_line("First-time player", players.get("first_time", {}))}</div>"""
+
     reasons = state_module.gate_reasons(path, state) if state else []
     gate_html = ""
     if reasons:
@@ -378,11 +489,14 @@ def render_project(server, name: str, notice: str = "",
 {_stepper(facts['stage'])}
 <div class="actions">
   {skeleton_button}
+  {stage_buttons}
   <form class="action" method="post" action="/project/{quoted}/finish-check"><button class="btn ghost" type="submit">Run finish check</button></form>
   <form class="action" method="post" action="/project/{quoted}/advance"><button class="btn ghost" type="submit">Advance pipeline</button></form>
   <form method="post" action="/project/{quoted}/finish-report"><button class="btn ghost" type="submit">Write finish report</button></form>
 </div>
 {gate_html}
+{generation_card}
+{test_card}
 <div class="row">
   <div class="card"><h3>Definition of done</h3>{dod_html}</div>
   <div class="card"><h3>Cost so far</h3>
@@ -647,6 +761,12 @@ class _Handler(BaseHTTPRequestHandler):
                 action = parts[2]
                 if action == "build-skeleton":
                     return self._post_build_skeleton(name)
+                if action == "generate-assets":
+                    return self._post_generate_assets(name)
+                if action == "build-game":
+                    return self._post_build_game(name)
+                if action == "run-tests":
+                    return self._post_run_tests(name)
                 if action == "finish-check":
                     return self._post_finish_check(name)
                 if action == "finish-report":
@@ -681,6 +801,53 @@ class _Handler(BaseHTTPRequestHandler):
                    f"Known-good tag: {_esc(report.get('known_good_tag'))}.")
         return self._send_html(render_project(
             self.app, name, notice=message, notice_kind="ok"))
+
+    def _post_generate_assets(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        try:
+            report = assets_module.generate_assets(project["path"])
+        except assets_module.AssetsError as exc:
+            return self._send_html(render_project(
+                self.app, name, notice=_esc(f"Assets not generated. {exc}"),
+                notice_kind="bad"))
+        return self._send_html(render_project(
+            self.app, name,
+            notice=f"Assets generated: {len(report['files'])} files for the "
+                   f"{_esc(report['archetype'])} game, every one recorded "
+                   "in the provenance log. Cost: 0 tokens.",
+            notice_kind="ok"))
+
+    def _post_build_game(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        settings_path, _ = workspace_settings(self.app.workspace)
+        try:
+            report = generate_module.build_game(
+                project["path"], settings_path=settings_path)
+        except generate_module.GenerationError as exc:
+            return self._send_html(render_project(
+                self.app, name, notice=_esc(f"Game not built. {exc}"),
+                notice_kind="bad"))
+        return self._send_html(render_project(
+            self.app, name,
+            notice=f"Game built: archetype {_esc(report['archetype'])}, "
+                   f"{report['units_delivered']} content units, Godot "
+                   "validation passed, tagged known-good/build.",
+            notice_kind="ok"))
+
+    def _post_run_tests(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        try:
+            report = testing_module.run_tests(project["path"])
+        except testing_module.TestingError as exc:
+            return self._send_html(render_project(
+                self.app, name, notice=_esc(f"Tests not run. {exc}"),
+                notice_kind="bad"))
+        digest = " ".join(testing_module.digest_lines(report)[-3:])
+        kind = "ok" if report.get("ok") else "bad"
+        return self._send_html(render_project(
+            self.app, name,
+            notice=f"Test suite finished. {_esc(digest)}",
+            notice_kind=kind))
 
     def _post_finish_check(self, name: str) -> None:
         project = self.app.project_by_name(name)
@@ -722,6 +889,9 @@ class _Handler(BaseHTTPRequestHandler):
     def _post_advance(self, name: str) -> None:
         project = self.app.project_by_name(name)
         skeleton_module.register_stage_handlers()
+        assets_module.register_stage_handlers()
+        generate_module.register_stage_handlers()
+        testing_module.register_stage_handlers()
         try:
             state = state_module.advance(project["path"])
         except state_module.PipelineError as exc:

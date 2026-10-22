@@ -22,7 +22,10 @@ from pathlib import Path
 
 from . import __version__, template_text
 from . import app as app_module
+from . import assets_gen as assets_module
 from . import brain as brain_module
+from . import generate as generate_module
+from . import testing as testing_module
 from . import update as update_module
 from . import connectors as connectors_module
 from . import finish as finish_module
@@ -565,11 +568,74 @@ def cmd_skeleton_build(args) -> int:
     return 0
 
 
+def cmd_assets_generate(args) -> int:
+    try:
+        report = assets_module.generate_assets(args.dir)
+    except assets_module.AssetsError as exc:
+        return _fail(str(exc))
+    print(f"Generated {len(report['files'])} asset files for the "
+          f"{report['archetype']} game (palette "
+          f"{report['palette']['accent_hex']} / "
+          f"{report['palette']['target_hex']} from the style lock):")
+    for rel in report["files"]:
+        print(f"- {rel}")
+    print("Every file is recorded in the provenance log (source: code, "
+          "provider: weaverbird-assets). Cost: 0 tokens — deterministic.")
+    return 0
+
+
+def cmd_build_game(args) -> int:
+    try:
+        report = generate_module.build_game(
+            args.dir, archetype=args.archetype, settings_path=args.settings)
+    except generate_module.GenerationError as exc:
+        return _fail(str(exc))
+    print(f"Generated the real game: archetype {report['archetype']} "
+          f"({report['archetype_reason']}).")
+    print(f"Content: {report['units_delivered']} units delivered "
+          f"(scope asked for {report['units_requested']}).")
+    print(f"Brain: {'used — ' if report['brain_used'] else 'not used — '}"
+          f"{report['brain_note']}")
+    validation = report.get("validation", {})
+    if validation.get("passed"):
+        runs = ", ".join(run["name"] for run in validation.get("runs", []))
+        print(f"Godot validation passed ({validation.get('godot_version')}): "
+              f"{runs} — all clean.")
+        print(f"Known-good tag: {report.get('known_good_tag')}")
+    print("The game reads its tuning from game/game_config.json.")
+    return 0
+
+
+def cmd_test_run(args) -> int:
+    try:
+        report = testing_module.run_tests(args.dir)
+    except testing_module.TestingError as exc:
+        return _fail(str(exc))
+    print("Headless test suite — base runs plus the scripted players "
+          "(competent, breaker, first-time):")
+    for line in testing_module.digest_lines(report):
+        print(line)
+    return 0 if report.get("ok") else 1
+
+
+def register_all_stage_handlers() -> None:
+    """Register every built stage handler with the pipeline.
+
+    Used by `pipeline advance` and the app, so advancing a stage
+    runs the real stage work (skeleton, assets, build, tests)
+    through the normal gate machinery.
+    """
+    skeleton_module.register_stage_handlers()
+    assets_module.register_stage_handlers()
+    generate_module.register_stage_handlers()
+    testing_module.register_stage_handlers()
+
+
 def cmd_pipeline_advance(args) -> int:
     # Stage handlers live in the library; registering them here means
-    # advancing out of the scope stage runs the skeleton builder
-    # through the normal gate machinery.
-    skeleton_module.register_stage_handlers()
+    # advancing out of a stage runs that stage's work through the
+    # normal gate machinery.
+    register_all_stage_handlers()
     try:
         state = state_module.advance(args.dir)
     except state_module.PipelineError as exc:
@@ -724,6 +790,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sbuild.add_argument("dir")
 
+    assets_cmd = sub.add_parser(
+        "assets", help="Generate the game's assets (sprites, icon, audio)."
+    )
+    assets_sub = assets_cmd.add_subparsers(dest="assets_command")
+    agen = assets_sub.add_parser(
+        "generate", help="Draw sprites and the icon from the style-lock "
+                         "palette and synthesise the audio, deterministically."
+    )
+    agen.add_argument("dir")
+
+    build_cmd = sub.add_parser(
+        "build", help="Generate the real game from the approved scope."
+    )
+    build_sub = build_cmd.add_subparsers(dest="build_command")
+    bgame = build_sub.add_parser(
+        "game", help="Pick the archetype from the scope, generate the "
+                     "game, validate it in Godot, tag it known-good."
+    )
+    bgame.add_argument("dir")
+    bgame.add_argument("--archetype", default=None,
+                       choices=list(generate_module.ARCHETYPES),
+                       help="Override archetype detection.")
+    bgame.add_argument("--settings", default=None,
+                       help="Global settings file for the optional "
+                            "mid-tier tuning proposal.")
+
+    test_cmd = sub.add_parser(
+        "test", help="Run the headless test suite with scripted players."
+    )
+    test_sub = test_cmd.add_subparsers(dest="test_command")
+    trun = test_sub.add_parser(
+        "run", help="Base runs + competent (win and lose), breaker and "
+                    "first-time scripted players; writes the test report."
+    )
+    trun.add_argument("dir")
+
     return parser
 
 
@@ -752,6 +854,9 @@ _HANDLERS = {
     ("pipeline", "status"): cmd_pipeline_status,
     ("pipeline", "advance"): cmd_pipeline_advance,
     ("skeleton", "build"): cmd_skeleton_build,
+    ("assets", "generate"): cmd_assets_generate,
+    ("build", "game"): cmd_build_game,
+    ("test", "run"): cmd_test_run,
 }
 
 _SUBCOMMAND_ATTRS = {
@@ -764,6 +869,9 @@ _SUBCOMMAND_ATTRS = {
     "provenance": "provenance_command",
     "pipeline": "pipeline_command",
     "skeleton": "skeleton_command",
+    "assets": "assets_command",
+    "build": "build_command",
+    "test": "test_command",
 }
 
 
@@ -793,6 +901,9 @@ commands, for scripts and terminals:
   weaverbird scope ...                  the scope file and the interview
   weaverbird brain check                the bring-your-own-key ladder
   weaverbird skeleton build <dir>       build the grey-box skeleton
+  weaverbird assets generate <dir>      sprites, icon and audio
+  weaverbird build game <dir>           generate the real game
+  weaverbird test run <dir>             headless tests + scripted players
   weaverbird pipeline ...               stage, gates, advance
   weaverbird finish check|report <dir>  the evidence-based finish
   weaverbird ledger ...                 what a game has cost

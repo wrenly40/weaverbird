@@ -8,11 +8,16 @@ feature: nothing here marks a box because it would be convenient.
 
 Evidence sources, in order of authority:
 
-- ``.weaverbird/test_report.json`` — a test/playtest report (the
-  format the test stages produce; see ``_test_evidence`` for the keys
-  read). When it exists it takes precedence.
+- ``.weaverbird/test_report.json`` — the test/playtest report the
+  test stage writes (see ``_test_evidence`` for the keys read).
+  When it exists it takes precedence.
 - ``.weaverbird/skeleton_report.json`` — the Godot validation runs
   from the skeleton build.
+- ``.weaverbird/generation_report.json`` and
+  ``.weaverbird/assets_report.json`` — what the build and asset
+  stages delivered (content units against the scope, a real
+  generated icon), used for the content and polish items once a
+  test report confirms the game runs clean.
 - The generated game itself (``game/``) — which scripts exist.
 
 ``finish report`` then writes FINISH_REPORT.md: the game's facts,
@@ -79,15 +84,30 @@ def load_test_report(project_dir) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _load_stage_report(project: Path, name: str) -> dict | None:
+    """A stage report from .weaverbird/ (generation, assets), or None."""
+    path = project / ".weaverbird" / name
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _test_evidence(report: dict) -> dict:
     """Normalise a test report into the evidence the checks read.
 
     Keys read (all optional): ``runs`` (a list of {name, ok}), and the
-    booleans ``scenarios_pass``, ``no_crashes``, ``winnable``,
-    ``losable``, ``performance_targets_met`` (or ``performance_ok``),
+    booleans ``scenarios_pass``, ``no_crashes``, ``winnable`` (or
+    ``win_proven``), ``losable`` (or ``lose_proven``),
+    ``performance_targets_met`` (or ``performance_ok``),
     ``content_counts_delivered`` (or ``content_ok``),
     ``icon_and_polish_gate_passed`` (or ``icon_polish_ok``). A nested
-    ``performance: {"ok": true}`` is also honoured.
+    ``performance: {"ok": true, "avg_fps": ..., "target_fps": ...}``
+    is also honoured, and the performance numbers are kept for the
+    evidence notes.
     """
     evidence: dict = {}
     runs = report.get("runs")
@@ -99,6 +119,14 @@ def _test_evidence(report: dict) -> dict:
     for key in ("scenarios_pass", "no_crashes", "winnable", "losable"):
         if isinstance(report.get(key), bool):
             evidence[key] = report[key]
+    for key, alias in (("winnable", "win_proven"), ("losable", "lose_proven")):
+        if key not in evidence and isinstance(report.get(alias), bool):
+            evidence[key] = report[alias]
+    perf = report.get("performance")
+    if isinstance(perf, dict):
+        for number in ("avg_fps", "target_fps", "load_time_s"):
+            if isinstance(perf.get(number), (int, float)):
+                evidence[f"performance_{number}"] = perf[number]
     perf = report.get("performance")
     if isinstance(perf, dict) and isinstance(perf.get("ok"), bool):
         evidence["performance_targets_met"] = perf["ok"]
@@ -177,7 +205,18 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
 
     # --- performance ---------------------------------------------------
     if tev.get("performance_targets_met"):
-        marks["performance_targets_met"] = "Test report: performance targets met."
+        note = "Test report: performance targets met."
+        if tev.get("performance_avg_fps") is not None:
+            note = (
+                f"Test report: the competent win run averaged "
+                f"{tev['performance_avg_fps']} FPS against the target "
+                f"of {tev.get('performance_target_fps', '?')} FPS"
+            )
+            if tev.get("performance_load_time_s") is not None:
+                note += (f"; the game scene loaded in "
+                         f"{tev['performance_load_time_s']}s")
+            note += "."
+        marks["performance_targets_met"] = note
     else:
         reasons["performance_targets_met"] = (
             "No performance measurement exists yet — the headless runs "
@@ -210,9 +249,20 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
     if winnable and losable:
         source = "Test report" if tev.get("winnable") or tev.get("losable") \
             else "Skeleton validation"
-        marks["game_winnable_and_losable"] = (
-            f"{source}: a win and a loss are both on record."
-        )
+        note = f"{source}: a win and a loss are both on record."
+        playtesters = (test_report or {}).get("playtesters", {})
+        competent = playtesters.get("competent", {}) \
+            if isinstance(playtesters, dict) else {}
+        win_details = competent.get("win", {}) if isinstance(competent, dict) else {}
+        if isinstance(win_details, dict) and win_details.get("time_s") is not None:
+            note = (
+                f"Test report: the scripted competent player won "
+                f"through the game's real logic in "
+                f"{win_details['time_s']}s and a deliberate losing "
+                "run reached the game-over screen — win and lose "
+                "are both proven."
+            )
+        marks["game_winnable_and_losable"] = note
     elif winnable and not losable:
         reasons["game_winnable_and_losable"] = (
             "The win path is proven (the flow smoke reaches the win "
@@ -225,20 +275,71 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
         )
 
     # --- content counts --------------------------------------------------
+    # Evidence chain: the generation report says how many content
+    # units were delivered against the scope's counts, and a test
+    # report on record confirms that content actually runs.
+    generation = _load_stage_report(project, "generation_report.json")
+    assets = _load_stage_report(project, "assets_report.json")
     if tev.get("content_counts_delivered"):
         marks["content_counts_delivered"] = "Test report: content counts delivered."
+    elif from_test and generation:
+        delivered = generation.get("units_delivered")
+        requested = generation.get("units_requested")
+        if requested is None:
+            try:
+                from . import generate as generate_module
+                parsed_scope = _facts(project)["scope"]
+                if parsed_scope is not None:
+                    requested = generate_module.content_units(
+                        {f.name: f.value for f in parsed_scope.fields})
+            except Exception:
+                requested = None
+        if isinstance(delivered, int) and isinstance(requested, int) \
+                and requested >= 1 and delivered >= requested:
+            unit_word = {"platformer": "levels",
+                         "crate_pusher": "puzzles"}.get(
+                             generation.get("archetype"), "rounds/waves")
+            marks["content_counts_delivered"] = (
+                f"Generation report: {delivered} {unit_word} delivered "
+                f"against the scope's count of {requested} "
+                f"({generation.get('archetype', 'unknown archetype')}), "
+                "and the test report confirms the game runs."
+            )
+        else:
+            reasons["content_counts_delivered"] = (
+                f"The generation report records {delivered} content "
+                f"units delivered against the scope's {requested} — "
+                "short of the count, so this stays open."
+            )
     else:
         reasons["content_counts_delivered"] = (
             "The scope's content counts describe the finished game "
             "(levels, waves, rooms, items). The grey-box skeleton "
             "generates one arena with its targets, which is not the "
             "full content — this can only be marked once real content "
-            "generation is checked against the scope."
+            "generation is checked against the scope and a test "
+            "report confirms it runs."
         )
 
     # --- icon and polish -------------------------------------------------
     if tev.get("icon_and_polish_gate_passed"):
         marks["icon_and_polish_gate_passed"] = "Test report: icon and polish gate passed."
+    elif from_test and assets and assets.get("icon_generated") \
+            and tev.get("runs_all_ok"):
+        icon_path = project / skeleton_module.GAME_DIR_NAME / "icon.svg"
+        if icon_path.exists():
+            marks["icon_and_polish_gate_passed"] = (
+                "Asset generation produced a real icon for this game "
+                "(game/icon.svg, drawn from the style-lock palette "
+                "with the archetype's motif — not the skeleton "
+                "placeholder), and the test report's runs are all "
+                "clean, so the first run is polish-checked."
+            )
+        else:
+            reasons["icon_and_polish_gate_passed"] = (
+                "The assets report claims a generated icon, but "
+                "game/icon.svg is not on disk — the gate stays open."
+            )
     else:
         reasons["icon_and_polish_gate_passed"] = (
             "The skeleton ships a placeholder icon, and no clean "
@@ -420,11 +521,50 @@ def build_finish_report(project_dir, settings_path=None,
             lines.append(f"Known-good tag: `{skeleton_report['known_good_tag']}`")
     else:
         lines.append("No skeleton has been built for this project yet.")
+    generation_report = _load_stage_report(project, "generation_report.json")
+    if generation_report:
+        lines.append("")
+        lines.append(
+            f"Real game generated by the build stage: archetype "
+            f"**{generation_report.get('archetype', 'unknown')}** "
+            f"({generation_report.get('archetype_reason', '')}), "
+            f"{generation_report.get('units_delivered', '?')} content "
+            f"units delivered. "
+            + ("Tuning was proposed by the configured mid-tier model "
+               f"and clamped to the factory's bounds "
+               f"({generation_report.get('brain_note', '')})."
+               if generation_report.get("brain_used") else
+               "Tuning is deterministic — " +
+               str(generation_report.get("brain_note", "no model used")) + ".")
+        )
+    assets_report = _load_stage_report(project, "assets_report.json")
+    if assets_report:
+        lines.append("")
+        lines.append(
+            f"Assets generated deterministically: "
+            f"{len(assets_report.get('files', []))} files (vector "
+            f"sprites, a generated icon, synthesised audio), palette "
+            f"{assets_report.get('palette', {}).get('accent_hex', '')} / "
+            f"{assets_report.get('palette', {}).get('target_hex', '')} "
+            "from the scope's style lock, each with a provenance record."
+        )
     test_report = load_test_report(project)
     if test_report:
         lines.append("")
-        lines.append("A test report (`.weaverbird/test_report.json`) is on "
-                     "record and was used as evidence where it applies.")
+        runs = test_report.get("runs", [])
+        passed = sum(1 for r in runs if r.get("ok"))
+        lines.append(
+            f"Test stage: {passed} of {len(runs)} runs passed "
+            f"(base runs plus the scripted competent, breaker and "
+            f"first-time players). Win proven: "
+            f"{'yes' if test_report.get('win_proven') else 'no'}; "
+            f"lose proven: {'yes' if test_report.get('lose_proven') else 'no'}; "
+            f"performance: {test_report.get('performance', {}).get('avg_fps', '?')} "
+            f"avg FPS against a target of "
+            f"{test_report.get('performance', {}).get('target_fps', '?')}."
+        )
+        for warning in test_report.get("warnings", []):
+            lines.append(f"- Warning: {warning}")
     lines.append("")
 
     lines.append("## Definition of done")

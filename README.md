@@ -10,12 +10,17 @@ It is a full end-to-end platform, being built in stages. The v0.1
 release was the infrastructure — the backbone the rest of the platform
 plugs into. v0.2 added the skeleton builder, which turns an approved
 scope into a playable grey-box Godot game and proves it runs by
-running Godot against it. This release (v0.3) adds the brain, the
-app, and the finish check: a bring-your-own-key model layer that runs
-the scope interview, a local web app over the same core, and a finish
-check where the factory marks its own definition-of-done items — only
+running Godot against it. v0.3 added the brain, the app, and the
+finish check: a bring-your-own-key model layer that runs the scope
+interview, a local web app over the same core, and a finish check
+where the factory marks its own definition-of-done items — only
 where it holds real evidence — and writes the report the approval
-stage reads.
+stage reads. This release (v0.4) makes the factory actually build
+games: three archetype generators chosen from the scope, asset
+generation (vector sprites, a real icon, synthesised audio), and a
+headless test stage where scripted players — competent, breaker,
+first-time — play the game for real, so the finish check can now
+mark its whole checklist from evidence.
 
 ## Quickstart
 
@@ -70,6 +75,9 @@ Then start a project:
 ./dist/weaverbird scope check my-game
 ./dist/weaverbird scope approve my-game --by <your name>
 ./dist/weaverbird skeleton build my-game
+./dist/weaverbird assets generate my-game
+./dist/weaverbird build game my-game
+./dist/weaverbird test run my-game
 ./dist/weaverbird finish check my-game
 ```
 
@@ -144,7 +152,70 @@ takes in, what it produces, and what is built now versus later — and
 
 ## What works today
 
-New in v0.3:
+New in v0.4:
+
+- Real game generation (`weaverbird build game <dir>`, and the
+  pipeline's build stage). The scope's genre, core verb and win/lose
+  text pick the archetype — or say `archetype: platformer` in a scope
+  field, or pass `--archetype`: **arena collector** (rounds of
+  targets against the clock, hazards that grow per round),
+  **platformer** (gravity, run and jump with a coyote window,
+  procedurally varied levels with star staircases, spike pits,
+  lives), and **crate pusher** (grid puzzles with move budgets and
+  undo — every shipped puzzle verified solvable by the solver in
+  this codebase, its verified solution recorded in the config). The
+  scope's content counts become levels, rounds or puzzles; all
+  tuning lives in `game/game_config.json`, which the games read at
+  runtime. When a brain is configured, the mid tier may propose
+  tuning numbers — every one validated and clamped to the same
+  bounds as the deterministic defaults, and any failure falls back
+  to them silently. The build validates in Godot (import, menu,
+  game, and a flow smoke that plays the game to a win), then
+  commits and tags `known-good/build`.
+- Asset generation (`weaverbird assets generate <dir>`, and the
+  pipeline's assets stage). Deterministic, no model: flat vector
+  sprites drawn from the scope's style-lock palette (player, target,
+  hazard, platform tile, spikes, exit door, crate, pad, wall,
+  background), a real game icon with the archetype's motif — not
+  the skeleton placeholder — and audio synthesised with the standard
+  library: click, collect, hurt, jump, push, a win jingle, a lose
+  tone, and a looping music track. The games use the assets when
+  present and fall back to code-drawn shapes when not. Every file
+  gets a provenance record as it is made.
+- The headless test stage (`weaverbird test run <dir>`, and the
+  pipeline's headless_test and playtest stages). Base runs (import,
+  menu scene, game scene — any Godot error fails them) plus three
+  scripted players shipped inside the generated game: a **competent**
+  player who plays to a win and then to a loss through the game's
+  real input and logic (steering, or replaying the verified crate
+  solutions as real key presses); a **breaker** who fuzzes inputs,
+  spams the pause menu, and — in the crate game — shoves a crate
+  into a corner to check the game notices (it does, and tells the
+  player); and a **first-time** player who presses the menu's real
+  Play button and follows only the on-screen hint. Performance is
+  measured on the win run (average FPS against a target that
+  defaults to 30 and can be set under `testing:` in the global
+  settings, plus scene load time). The verdict lands in
+  `.weaverbird/test_report.json`. These players are deterministic
+  scripted bots — model-driven, vision-using playtesters remain
+  future work.
+- The finish check now closes its checklist. With a test report on
+  record, the lose half of "winnable and losable" is marked from
+  the competent player's two runs, performance from the measured
+  numbers, content counts from the generation report checked
+  against the scope, and the icon/polish gate from the assets
+  report plus the test report's clean runs — each still with its
+  evidence written next to the mark, and anything short stays open
+  with the numbers in the reason. The finish report describes the
+  generated game, its assets and its test verdict alongside
+  everything from before.
+- The app grew with the stages: the project view shows the chosen
+  archetype and what was delivered, a test summary card (verdict,
+  win/lose proven, performance, the three players' results), and
+  working Generate assets / Build game / Run tests buttons, enabled
+  exactly when the CLI would allow them.
+
+From v0.3:
 
 - The brain (`weaverbird brain check`, `weaverbird scope interview
   <dir> --prompt "..."`). A bring-your-own-key model layer over the
@@ -182,10 +253,11 @@ New in v0.3:
   the skeleton's Godot validation runs, the generated game's menu,
   settings and save scripts, the flow smoke's win — and stores the
   evidence next to each mark. What it cannot evidence stays open with
-  a plain reason: the lose path, performance, the scope's content
-  counts and the polish gate are honestly unproven today. A test
+  a plain reason — in v0.3 that honestly included the lose path,
+  performance, the scope's content counts and the polish gate,
+  which the v0.4 stages above now evidence for real. A test
   report at `.weaverbird/test_report.json`, when one exists, takes
-  precedence — that is the file the future test stages will write.
+  precedence.
   The report is the approval stage's input document: what was built,
   the checklist with its evidence, what everything cost, the
   provenance summary with the store disclosure draft, and the
@@ -256,12 +328,11 @@ pipeline runs — not things left out of scope:
 - The multi-turn scope interview conversation (today the prompt is
   extracted once and the remaining questions are printed; a
   conversational interview with style samples comes next).
-- More archetype templates for the skeleton (today there is one
-  generic grey-box loop), asset generation, generated game code, and
-  the build loop around them.
-- The headless test runner and the three AI playtesters (breaker,
-  competent player, first-time player) — they will write the test
-  report the finish check already reads.
+- More archetypes beyond the first three, generated game code
+  beyond the archetype cores (model-written diffs for what makes a
+  game different), and the iterate loop around them.
+- Model-driven playtesters — vision at decision points, judgement
+  about fun and clarity — beyond the scripted players shipped now.
 - The background job runner, so long stages run, checkpoint and
   resume instead of blocking a terminal or a page.
 - Store connectors that upload and publish (itch first), signing and
