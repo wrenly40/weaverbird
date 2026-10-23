@@ -577,6 +577,49 @@ def _run_finish(project, ctx):
                   issues=issues)
 
 
+def _run_export(project, ctx):
+    from . import exports as exports_module
+    from . import state as state_module
+    try:
+        stage = state_module.load_state(project).get("stage")
+    except Exception:
+        stage = None
+    if stage != "finished":
+        return result(
+            False,
+            "Exports run on a finished project — this one is at "
+            f"stage {stage or 'unknown'}, not finished.",
+            issues=[issue("not_finished",
+                          "the project's stage is "
+                          f"{stage or 'unknown'}, not finished",
+                          "finish")])
+    targets = ctx.params.get("targets") or None
+    try:
+        report = exports_module.run_exports(
+            project, targets=targets, reporter=ctx.reporter)
+    except exports_module.ExportsError as exc:
+        return result(False, str(exc),
+                      issues=[issue("export_failed", str(exc), "export")])
+    exported = [r for r in report["targets"] if r["status"] == "exported"]
+    blocked = [r for r in report["targets"] if r["status"] == "blocked"]
+    bits = []
+    if exported:
+        bits.append("exported " + ", ".join(
+            f"{r['target']} ({r['size']} bytes)" for r in exported))
+    if blocked:
+        bits.append("blocked " + ", ".join(
+            f"{r['target']} — {r['reason']}" for r in blocked))
+    return result(
+        True,
+        "Exports: " + ("; ".join(bits) if bits else "nothing requested")
+        + ". Report at EXPORT_REPORT.md.",
+        artifacts=["EXPORT_REPORT.md", "exports/EXPORTS.json"]
+                  + [r["artifact"] for r in exported],
+        metrics={"exported": len(exported), "blocked": len(blocked),
+                 **{f"target_{r['target']}": r["status"]
+                    for r in report["targets"]}})
+
+
 # ---------------------------------------------------------------------------
 # The registry
 
@@ -680,6 +723,11 @@ _register(WorkerSpec(
             ".weaverbird/assets_report.json"),
     outputs=("FINISH_REPORT.md",),
     depends_on=("testing",), run=_run_finish))
+_register(WorkerSpec(
+    name="export", title="Export worker",
+    inputs=("game/", "FINISH_REPORT.md"),
+    outputs=("exports/", "EXPORT_REPORT.md"),
+    depends_on=("finish",), run=_run_export, can_skip=False))
 
 
 def worker_names() -> list[str]:
