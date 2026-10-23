@@ -39,14 +39,29 @@ var _music: AudioStreamPlayer = null
 func _ready() -> void:
 	InputSetup.ensure_actions()
 	randomize()
-	_build_environment()
 	config = _load_json("res://game_config.json")
 	world = _load_json("res://world/world.json")
 	if config.is_empty():
 		config = {"rounds": 1, "targets_per_round": 5,
 			"round_seconds": 60, "player_speed": 11.0,
 			"hazard_speed": 1.4, "palette": {}}
-	palette = config.get("palette", {})
+	# The palette's hexes live at the TOP of game_config.json
+	# (accent_hex, target_hex, … — the shape every Weaverbird
+	# config is written in), not in a nested "palette" object;
+	# a nested object, if one is ever present, wins per key.
+	# Reading only the nested object silently emptied the
+	# palette for every 3D game (D9): materials fell back to
+	# hard-coded colours and the sky ignored the style lock.
+	palette = {}
+	for key in ["accent_hex", "target_hex", "hazard_hex",
+			"platform_hex", "crate_hex"]:
+		if config.has(key):
+			palette[key] = config[key]
+	var nested_palette = config.get("palette", {})
+	if typeof(nested_palette) == TYPE_DICTIONARY:
+		for key in nested_palette:
+			palette[key] = nested_palette[key]
+	_build_environment()
 	for unit in world.get("units", []):
 		targets_total += (unit.get("collectibles", []) as Array).size()
 	_setup_audio()
@@ -98,11 +113,23 @@ func _build_environment() -> void:
 	# A world environment with ambient light, so the scene
 	# renders lit everywhere — including headless and under
 	# Xvfb, where there is no real GPU sky to lean on.
+	#
+	# The sky follows the style lock (D9). Rule: the background
+	# is the palette's accent colour darkened by 55% — a night
+	# tone in the palette's own family (a soft-pastel lock gets
+	# a deep violet sky; a warm-storybook lock a deep ember
+	# one) — and the ambient light is that same tone lifted
+	# back up, so the scene's whole light belongs to the
+	# palette. With no accent on record, a deep slate stands
+	# in. (Before this, the background was a hard-coded
+	# light blue for every game, whatever the scope's mood.)
+	var accent := Color(String(palette.get("accent_hex", "#5A5480")))
+	var background := accent.darkened(0.55)
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color("#BFE3F2")
+	env.background_color = background
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.85, 0.88, 0.95)
+	env.ambient_light_color = background.lightened(0.55)
 	env.ambient_light_energy = 0.9
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env

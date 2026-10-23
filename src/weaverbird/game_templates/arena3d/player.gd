@@ -7,19 +7,24 @@ var speed := 11.0
 
 
 func _ready() -> void:
-	var palette: Dictionary = {}
+	# The accent lives at the top of game_config.json (D9); a
+	# nested "palette" object, if present, overrides it.
+	var accent_hex := "#FF7A1A"
 	if FileAccess.file_exists("res://game_config.json"):
 		var parsed = JSON.parse_string(
 			FileAccess.get_file_as_string("res://game_config.json"))
 		if typeof(parsed) == TYPE_DICTIONARY:
-			palette = parsed.get("palette", {})
+			accent_hex = String(parsed.get("accent_hex", accent_hex))
+			var nested = parsed.get("palette", {})
+			if typeof(nested) == TYPE_DICTIONARY \
+					and nested.has("accent_hex"):
+				accent_hex = String(nested["accent_hex"])
 	var mesh := MeshInstance3D.new()
 	var capsule := CapsuleMesh.new()
 	capsule.radius = 0.42
 	capsule.height = 1.5
 	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(
-		String(palette.get("accent_hex", "#FF7A1A")))
+	material.albedo_color = Color(accent_hex)
 	material.roughness = 0.6
 	capsule.material = material
 	mesh.mesh = capsule

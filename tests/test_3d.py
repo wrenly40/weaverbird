@@ -142,6 +142,23 @@ class World3DTests(unittest.TestCase):
         self.assertTrue(unit["obstacles"])
         self.assertEqual(world.validate_world(data), [])
 
+    def test_units_record_their_layout(self):
+        # D5: the 3D path writes the same provenance the 2D
+        # path does — placer name, per-round seed, gate outcome.
+        values = {"Title (working)": "Orb Fields",
+                  "Palette": "accent #FF7A1A"}
+        config, _ = generate.deterministic_config(
+            "arena_3d", values, generate._palette(values), 3)
+        data = world.world_from_config(
+            "arena_3d", config,
+            generate.composition_for_preset("arena_3d"))
+        for index, unit in enumerate(data["units"]):
+            layout = unit["layout"]
+            self.assertEqual(layout["pattern"], "scatter3d")
+            self.assertEqual(layout["seed"],
+                             config["world_seed"] + index * 101)
+            self.assertEqual(layout["gate"], "passed")
+
     def test_gate_catches_collectible_inside_obstacle(self):
         data = self._world()
         obstacle = data["units"][0]["obstacles"][0]
@@ -225,6 +242,39 @@ class Full3DBuildTests(unittest.TestCase):
                      if u.get("source") == "competent"]
             self.assertEqual(len(units), 3, report.get("units"))
             self.assertTrue(all(u["completed"] for u in units))
+
+
+class PaletteSkyTests(unittest.TestCase):
+    """Dogfood finding D9: the 3D game's sky and materials come
+    from the style-lock palette. The palette hexes live at the
+    top of game_config.json; the 3D templates used to read a
+    nested "palette" object that never exists, so every 3D
+    game silently rendered with fallback colours under a
+    hard-coded light-blue sky."""
+
+    def _template(self, name):
+        path = (Path(generate.__file__).parent / "game_templates"
+                / "arena3d" / name)
+        return path.read_text(encoding="utf-8")
+
+    def test_no_hardcoded_default_sky(self):
+        self.assertNotIn("#BFE3F2", self._template("game.gd"))
+
+    def test_background_derives_from_the_palette_accent(self):
+        text = self._template("game.gd")
+        env_body = text.split("func _build_environment()")[1]
+        self.assertIn("accent", env_body)
+        self.assertIn("darkened", env_body)
+        self.assertIn("background_color", env_body)
+
+    def test_palette_is_read_from_the_config_top_level(self):
+        text = self._template("game.gd")
+        # The old line, as a statement of its own, is gone.
+        self.assertNotIn('\n\tpalette = config.get("palette", {})',
+                         text)
+        self.assertIn('"accent_hex"', text)
+        player = self._template("player.gd")
+        self.assertIn('parsed.get("accent_hex"', player)
 
 
 if __name__ == "__main__":
