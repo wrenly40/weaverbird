@@ -529,6 +529,136 @@ def generate_assets(project_dir, archetype: str | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Style samples — the style-lock decision, shown not described
+#
+# When the scope interview reaches the style lock, the maker does
+# not pick from adjectives: the factory GENERATES a small sample
+# card per candidate style direction — a tiny scene (sky, sun,
+# hills, a tree, the player, a target, a crate) drawn by this
+# module's own sprite code from the candidate's palette. Picking a
+# card writes its palette and rules into the scope (see
+# interview.py); nothing here is a static image shipped in the
+# package — the SVGs are produced from these definitions at the
+# moment they are shown, and cached under the project.
+
+STYLE_SAMPLES: list[dict] = [
+    {
+        "id": "bright-chunky",
+        "name": "Bright & chunky",
+        "blurb": "Saturated colour, big rounded shapes, soft "
+                 "shadows — playful and loud.",
+        "palette": {"accent_hex": "#FF7A1A", "target_hex": "#2FBF71",
+                    "hazard_hex": "#E63B3B", "platform_hex": "#7A4E21",
+                    "crate_hex": "#C98A3D"},
+        "rules": "Chunky proportions (shapes about 1.4x natural "
+                 "scale), no outlines, soft drop shadows, every "
+                 "corner rounded.",
+        "sky": "#FFE9B8", "ground": "#8FD14F", "sun": "#FFC93D",
+    },
+    {
+        "id": "soft-pastel",
+        "name": "Soft pastel",
+        "blurb": "Gentle tints, thin warm-grey outlines, calm flat "
+                 "shading — quiet and friendly.",
+        "palette": {"accent_hex": "#9B8CF2", "target_hex": "#7FD6A4",
+                    "hazard_hex": "#F28B8B", "platform_hex": "#B8A99A",
+                    "crate_hex": "#D9B98A"},
+        "rules": "Soft natural proportions, thin 2px outlines in "
+                 "warm grey, flat shading with one lighter tint "
+                 "per shape.",
+        "sky": "#FDF3F7", "ground": "#CDE7C0", "sun": "#FFE29A",
+    },
+    {
+        "id": "bold-neon-night",
+        "name": "Bold neon night",
+        "blurb": "Dark world, glowing edges, electric colour — "
+                 "arcade after dark.",
+        "palette": {"accent_hex": "#22D3EE", "target_hex": "#A3E635",
+                    "hazard_hex": "#F43F5E", "platform_hex": "#334155",
+                    "crate_hex": "#7C3AED"},
+        "rules": "Slim proportions, dark backgrounds, flat fills "
+                 "with a bright glowing rim on every shape (a "
+                 "light halo, never an outline).",
+        "sky": "#0B1026", "ground": "#16213B", "sun": "#E2E8F0",
+    },
+    {
+        "id": "warm-storybook",
+        "name": "Warm storybook",
+        "blurb": "Hand-drawn warmth, dark-brown outlines, two-tone "
+                 "cel shading — a picture book come loose.",
+        "palette": {"accent_hex": "#D9622B", "target_hex": "#5B8C3E",
+                    "hazard_hex": "#B3392E", "platform_hex": "#6B4A2F",
+                    "crate_hex": "#A9713B"},
+        "rules": "Slightly irregular hand-drawn proportions, 3px "
+                 "dark-brown outlines, two-tone cel shading.",
+        "sky": "#FBEED3", "ground": "#7FA653", "sun": "#F6B352",
+    },
+]
+
+# Palette roles in scope order — the scope's Palette field pins
+# roles by position (see generate._palette), so a style's palette
+# text lists its hexes exactly in this order.
+_SAMPLE_ROLE_ORDER = ("accent_hex", "target_hex", "hazard_hex",
+                      "platform_hex", "crate_hex")
+_SAMPLE_ROLE_NAMES = ("accent", "target", "hazard", "platform", "crate")
+
+
+def style_samples() -> list[dict]:
+    """The candidate style directions for the style lock."""
+    return [dict(sample, palette=dict(sample["palette"]))
+            for sample in STYLE_SAMPLES]
+
+
+def style_sample_by_id(sample_id: str) -> dict | None:
+    for sample in STYLE_SAMPLES:
+        if sample["id"] == sample_id:
+            return dict(sample, palette=dict(sample["palette"]))
+    return None
+
+
+def sample_palette_text(sample: dict) -> str:
+    """The Palette field value a style pick writes: the five role
+    hexes in role order, with their names."""
+    palette = sample["palette"]
+    return ", ".join(
+        f"{name} {palette[key]}"
+        for name, key in zip(_SAMPLE_ROLE_NAMES, _SAMPLE_ROLE_ORDER))
+
+
+def _embed_svg(svg_text: str, x: int, y: int, size: int) -> str:
+    """Nest one generated sprite SVG inside a scene at (x, y)."""
+    match = re.match(r'<svg[^>]*viewBox="([^"]+)"[^>]*>(.*)</svg>\s*$',
+                     svg_text.strip(), re.DOTALL)
+    if not match:
+        return ""
+    return (f'<svg x="{x}" y="{y}" width="{size}" height="{size}" '
+            f'viewBox="{match.group(1)}">{match.group(2)}</svg>')
+
+
+def style_sample_svg(sample: dict) -> str:
+    """One sample card: a tiny scene drawn from the candidate
+    palette by the sprite generators above — sky, sun, hills, a
+    tree, and the player / target / crate sprites themselves."""
+    palette = dict(sample["palette"])
+    player = _embed_svg(_sprite_player(palette), 28, 116, 58)
+    target = _embed_svg(_sprite_target(palette), 238, 52, 46)
+    crate = _embed_svg(_sprite_crate(palette), 138, 128, 50)
+    body = (
+        f'<rect x="0" y="0" width="320" height="200" fill="{sample["sky"]}"/>'
+        f'<circle cx="272" cy="38" r="20" fill="{sample["sun"]}"/>'
+        f'<ellipse cx="70" cy="176" rx="130" ry="42" fill="{sample["ground"]}" opacity="0.65"/>'
+        f'<ellipse cx="262" cy="184" rx="140" ry="46" fill="{sample["ground"]}" opacity="0.8"/>'
+        f'<rect x="0" y="158" width="320" height="42" fill="{sample["ground"]}"/>'
+        f'<rect x="102" y="104" width="9" height="34" fill="{palette["crate_hex"]}"/>'
+        f'<circle cx="106" cy="92" r="24" fill="{palette["target_hex"]}"/>'
+        f'<circle cx="88" cy="104" r="16" fill="{palette["target_hex"]}" opacity="0.8"/>'
+        f"{player}{target}{crate}"
+    )
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="320" '
+            f'height="200" viewBox="0 0 320 200">{body}</svg>\n')
+
+
+# ---------------------------------------------------------------------------
 # The asset studio: list, regenerate one, edit the palette
 
 def asset_names(project_dir) -> list[str]:

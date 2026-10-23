@@ -76,3 +76,29 @@ code { background:#F0EFF5; border-radius:6px; padding:1px 6px; font-size:12.5px;
 .bar i.indeterminate { animation:jobslide 1.4s ease-in-out infinite alternate; }
 @keyframes jobslide { from { margin-left:0; width:35%; } to { margin-left:65%; width:35%; } }
 audio { width:100%; max-width:300px; }
+/* Scope interview chat: thread left, live scope panel right. */
+.chatwrap { display:grid; grid-template-columns:minmax(0,1fr) 350px; gap:20px; align-items:start; }
+@media (max-width: 900px) { .chatwrap { grid-template-columns:1fr; } }
+.thread { display:flex; flex-direction:column; gap:12px; margin-bottom:18px; }
+.msg { display:flex; }
+.msg.user { justify-content:flex-end; }
+.msg .bubble { max-width:88%; background:#F4F3F8; border-radius:14px; padding:12px 15px; }
+.msg.user .bubble { background:#ECE8FD; }
+.msgtext { white-space:pre-line; font-size:14px; line-height:1.5; }
+.samples { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px; }
+@media (max-width: 560px) { .samples { grid-template-columns:1fr; } }
+.samplecard { background:#fff; border:1px solid #E5E3EE; border-radius:12px; overflow:hidden; }
+.samplecard img { display:block; width:100%; height:auto; }
+.samplemeta { padding:10px 12px 12px; display:flex; flex-direction:column; gap:6px; }
+.samplemeta .hint { line-height:1.4; }
+.swatches { display:flex; gap:5px; }
+.swatch { width:18px; height:18px; border-radius:6px; border:1px solid rgba(35,41,54,.15); display:inline-block; }
+.btn.small { padding:7px 13px; font-size:13px; }
+.scopepanel h3 { margin-bottom:4px; }
+.panelsection { font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:#68707F; margin:16px 0 6px; }
+.fieldrow { display:flex; gap:9px; padding:6px 0; border-bottom:1px solid #F4F3F8; font-size:13.5px; }
+.fieldrow:last-child { border-bottom:none; }
+.fieldrow .dotok { color:#2F9E6E; font-weight:700; }
+.fieldrow .dotmiss { color:#C9C4D6; font-weight:700; }
+.fieldval { color:#68707F; font-size:12.5px; line-height:1.4; word-break:break-word; }
+.fieldrow.done .fieldval { color:#232936; }

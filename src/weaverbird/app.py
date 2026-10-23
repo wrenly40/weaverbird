@@ -11,8 +11,9 @@ logic of its own, so the CLI and the app can never drift apart.
 Screens: a dashboard of the workspace's projects (with a Jobs
 strip), a project view (pipeline stepper, definition of done
 with its evidence, ledger, provenance, job history, and the
-stage actions), the scope interview as a form (with prompt
-extraction when a brain is configured), a settings view
+stage actions), the scope interview as a chat (the interview
+engine's thread + a live scope panel, with the old form kept as
+"Edit as form"), a settings view
 (budgets editable, the rest — including which key environment
 variables are set, never their values — read-only), a Feedback
 view, the balance lab, and the asset studio.
@@ -44,6 +45,7 @@ from . import brain as brain_module
 from . import feedback as feedback_module
 from . import finish as finish_module
 from . import generate as generate_module
+from . import interview as interview_module
 from . import jobs as jobs_module
 from . import testing as testing_module
 from . import godot as godot_module
@@ -677,8 +679,10 @@ def render_feedback(server, name: str, notice: str = "",
     return _layout("Feedback", "projects", body)
 
 
-def render_scope(server, name: str, notice: str = "",
-                 notice_kind: str = "ok") -> str:
+def render_scope_form(server, name: str, notice: str = "",
+                      notice_kind: str = "ok") -> str:
+    """The scope as a form — the accessible fallback for the
+    interview chat ('Edit as form'). Same file, same writers."""
     project = server.project_by_name(name)
     path = project["path"]
     parsed = scope_module.load_scope(scope_module.scope_path_for(path))
@@ -740,8 +744,8 @@ def render_scope(server, name: str, notice: str = "",
                      if parsed.is_approved else "")
 
     body = f"""
-<div class="top"><div><h1>Scope interview</h1><div class="sub">{_esc(name)} — the scope file fills in as answers land. The build stays locked until every REQUIRED field is filled and the scope is approved.</div></div>
-<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+<div class="top"><div><h1>Scope form</h1><div class="sub">{_esc(name)} — every field of the scope file, editable directly. The interview chat fills this same file; use whichever suits you.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}/scope">Interview chat</a> <a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
 {notice_html}
 <div class="prog card" style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
   <div style="font-size:21px;font-weight:800;color:#6C4CF1">{len(parsed.filled_fields)} / {len(parsed.fields)}</div>
@@ -766,6 +770,144 @@ def render_scope(server, name: str, notice: str = "",
     <div class="actions"><button class="btn" type="submit"{approve_disabled}>Approve scope</button>{approve_hint}</div>
     {approval_line}
   </form>
+</div>"""
+    return _layout("Scope form", "projects", body)
+
+
+def _sample_cards_html(server, name: str, quoted: str,
+                       samples_by_id: dict, turn: dict) -> str:
+    """The style sample cards inside a chat turn: the generated
+    scene, the palette swatches, and a Pick button per card."""
+    cards = ""
+    for sample_id in turn.get("samples", []):
+        sample = samples_by_id.get(sample_id)
+        if sample is None:
+            continue
+        swatches = "".join(
+            f'<span class="swatch" title="{_esc(role)} {_esc(hexv)}" '
+            f'style="background:{_esc(hexv)}"></span>'
+            for role, hexv in (
+                ("accent", sample["palette"].get("accent_hex", "")),
+                ("target", sample["palette"].get("target_hex", "")),
+                ("hazard", sample["palette"].get("hazard_hex", "")),
+                ("platform", sample["palette"].get("platform_hex", "")),
+                ("crate", sample["palette"].get("crate_hex", ""))))
+        cards += f"""
+<div class="samplecard">
+  <img src="/project/{quoted}/style-sample/{_esc(sample_id)}" alt="{_esc(sample['name'])} style sample">
+  <div class="samplemeta"><b>{_esc(sample['name'])}</b><span class="hint">{_esc(sample['blurb'])}</span>
+  <div class="swatches">{swatches}</div>
+  <p class="hint">{_esc(sample['palette_text'])}</p>
+  <form class="action" method="post" action="/project/{quoted}/scope/chat">
+    <input type="hidden" name="message" value="{_esc(sample_id)}">
+    <button class="btn small" type="submit">Pick {_esc(sample['name'])}</button>
+  </form></div>
+</div>"""
+    if not cards:
+        return ""
+    return f'<div class="samples">{cards}</div>'
+
+
+def render_scope(server, name: str, notice: str = "",
+                 notice_kind: str = "ok",
+                 job_id: str | None = None) -> str:
+    """The scope interview as a chat: the conversation on the
+    left (the interview engine's thread, style samples included),
+    the live scope panel on the right — fields filling as the
+    conversation proceeds, the approve button enabling exactly
+    when every REQUIRED field is filled."""
+    project = server.project_by_name(name)
+    path = project["path"]
+    quoted = urllib.parse.quote(name)
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
+    job_html = _job_card_for(server, job_id)
+    state = interview_module.public_state(path)
+    samples_by_id = {s["id"]: s for s in (state.get("samples") or [])}
+
+    thread = ""
+    for turn in state["turns"]:
+        role = turn.get("role", "assistant")
+        text = _esc(turn.get("text", ""))
+        cards = ""
+        if turn.get("kind") == "samples":
+            cards = _sample_cards_html(server, name, quoted,
+                                       samples_by_id, turn)
+        thread += (f'<div class="msg {role}"><div class="bubble">'
+                   f'<p class="msgtext">{text}</p>{cards}</div></div>')
+    if not state["started"]:
+        thread = ('<div class="msg assistant"><div class="bubble">'
+                  '<p class="msgtext">No interview yet. Begin below '
+                  'and I will ask the questions that scope this '
+                  'game — your stored prompt, if you gave one, is '
+                  'read first so nothing is asked twice.</p>'
+                  '</div></div>')
+
+    sections: dict[str, list] = {}
+    order: list[str] = []
+    for fld in state["fields"]:
+        if fld["section"] not in sections:
+            sections[fld["section"]] = []
+            order.append(fld["section"])
+        sections[fld["section"]].append(fld)
+    panel_groups = ""
+    for section in order:
+        rows = ""
+        for fld in sections[section]:
+            if fld["filled"]:
+                rows += (f'<div class="fieldrow done"><span class="dotok">✓</span>'
+                         f'<div><b>{_esc(fld["name"])}</b>'
+                         f'<div class="fieldval">{_esc(fld["value"])}</div></div></div>')
+            else:
+                rows += (f'<div class="fieldrow missing"><span class="dotmiss">·</span>'
+                         f'<div><b>{_esc(fld["name"])}</b>'
+                         f'<div class="fieldval hint">still missing</div></div></div>')
+        panel_groups += (f'<h4 class="panelsection">{_esc(section)}</h4>'
+                         f'{rows}')
+    total = len(state["fields"])
+    filled = total - state["missing_count"]
+    approve_disabled = "" if state["complete"] else " disabled"
+    approve_hint = ("" if state["complete"] else
+                    '<span class="hint">Approve unlocks when every REQUIRED field is filled.</span>')
+    approval_line = (f'<p class="hint" style="margin-top:8px">{_esc(state["approval"])}</p>'
+                     if state["approved"] else "")
+    if state["started"]:
+        composer = f"""
+  <form class="stack action" method="post" action="/project/{quoted}/scope/chat">
+    <label for="message">Your answer</label>
+    <textarea id="message" name="message" rows="3" placeholder="Answer in your own words — one answer per line, or 'Field: value'…"></textarea>
+    <div class="actions"><button class="btn" type="submit">Send</button></div>
+  </form>"""
+    else:
+        composer = f"""
+  <form class="stack action" method="post" action="/project/{quoted}/scope/chat">
+    <input type="hidden" name="message" value="">
+    <div class="actions"><button class="btn" type="submit">Begin the interview</button></div>
+  </form>"""
+
+    body = f"""
+<div class="top"><div><h1>Scope interview</h1><div class="sub">{_esc(name)} — a conversation that fills the scope file live. The build stays locked until every REQUIRED field is filled and the scope is approved.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}/scope/form">Edit as form</a> <a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}
+{job_html}
+<div class="chatwrap">
+  <div class="card chatthread">
+    <div class="thread">{thread}</div>
+    {composer}
+  </div>
+  <div class="card scopepanel">
+    <h3>The scope so far</h3>
+    <p class="hint" style="margin:6px 0 4px">{filled} of {total} required fields filled · {state['missing_count']} to go</p>
+    <div class="bar"><i style="width:{(100 * filled // max(1, total))}%"></i></div>
+    {panel_groups}
+    <h4 class="panelsection">Approve</h4>
+    <form class="stack" method="post" action="/project/{quoted}/scope/approve">
+      <label for="by">Approved by (your name)</label>
+      <input type="text" id="by" name="by" value="">
+      <div class="actions"><button class="btn" type="submit"{approve_disabled}>Approve scope</button>{approve_hint}</div>
+      {approval_line}
+    </form>
+  </div>
 </div>"""
     return _layout("Scope interview", "projects", body)
 
@@ -1307,7 +1449,20 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._send_html(render_project(
                         self.app, name, job_id=job_id))
                 if len(parts) == 3 and parts[2] == "scope":
-                    return self._send_html(render_scope(self.app, name))
+                    return self._send_html(render_scope(
+                        self.app, name, job_id=job_id))
+                if len(parts) == 4 and parts[2] == "scope" \
+                        and parts[3] == "form":
+                    return self._send_html(render_scope_form(
+                        self.app, name))
+                if len(parts) == 4 and parts[2] == "scope" \
+                        and parts[3] == "state":
+                    project = self.app.project_by_name(name)
+                    return self._send_json(interview_module.public_state(
+                        project["path"]))
+                if len(parts) == 4 and parts[2] == "style-sample":
+                    return self._get_style_sample(
+                        name, urllib.parse.unquote(parts[3]))
                 if len(parts) == 3 and parts[2] == "feedback":
                     return self._send_html(render_feedback(
                         self.app, name, job_id=job_id))
@@ -1342,6 +1497,21 @@ class _Handler(BaseHTTPRequestHandler):
         content_type = content_types.get(candidate.suffix.lower(),
                                          "application/octet-stream")
         return self._send_bytes(candidate.read_bytes(), content_type)
+
+    def _get_style_sample(self, name: str, sample_id: str) -> None:
+        """Serve one generated style sample card, confined to the
+        project's .weaverbird/style_samples/ folder and to the
+        known sample ids."""
+        project = self.app.project_by_name(name)
+        known = {s["id"] for s in assets_module.style_samples()}
+        if sample_id not in known:
+            return self._fail_page("That style sample does not exist.", 404)
+        candidate = (project["path"] / interview_module.SAMPLES_DIR_REL
+                     / f"{sample_id}.svg").resolve()
+        root = (project["path"] / interview_module.SAMPLES_DIR_REL).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            return self._fail_page("That style sample does not exist.", 404)
+        return self._send_bytes(candidate.read_bytes(), "image/svg+xml")
 
     def do_POST(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -1404,6 +1574,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._post_advance(name)
                 if action == "scope" and len(parts) == 3:
                     return self._post_scope_save(name)
+                if action == "scope" and len(parts) == 4 and parts[3] == "chat":
+                    return self._post_scope_chat(name)
                 if action == "scope" and len(parts) == 4 and parts[3] == "extract":
                     return self._post_scope_extract(name)
                 if action == "scope" and len(parts) == 4 and parts[3] == "approve":
@@ -1551,16 +1723,29 @@ class _Handler(BaseHTTPRequestHandler):
                                              form[fld.name])
                 changed.append(fld.name)
         note = ("Saved: " + ", ".join(changed)) if changed else "No changes."
-        return self._send_html(render_scope(
+        return self._send_html(render_scope_form(
             self.app, name, notice=_esc(note + " The scope file has been updated."),
             notice_kind="ok"))
+
+    def _post_scope_chat(self, name: str) -> None:
+        """One interview turn, as a job (worker: scope): the
+        engine may call the maker's brain, and the chat page's
+        live job card shows the turn landing."""
+        form = self._form()
+        message = form.get("message", "")
+        project = self.app.project_by_name(name)
+        job = self.app.jobs.submit(project["name"], project["path"],
+                                   "interview-turn",
+                                   params={"message": message})
+        return self._send_html(render_scope(
+            self.app, name, job_id=job["id"]))
 
     def _post_scope_extract(self, name: str) -> None:
         project = self.app.project_by_name(name)
         form = self._form()
         prompt = form.get("prompt", "")
         if not prompt.strip():
-            return self._send_html(render_scope(
+            return self._send_html(render_scope_form(
                 self.app, name, notice="Write a prompt first — the box was empty.",
                 notice_kind="warn"))
         settings_path, _ = workspace_settings(self.app.workspace)
@@ -1573,7 +1758,7 @@ class _Handler(BaseHTTPRequestHandler):
         if outcome.get("note"):
             bits.append(str(outcome["note"]))
         bits.append(f"{outcome['missing_count']} required field(s) still missing.")
-        return self._send_html(render_scope(
+        return self._send_html(render_scope_form(
             self.app, name, notice=_esc(" ".join(bits)),
             notice_kind="ok" if outcome["brain_used"] else "warn"))
 

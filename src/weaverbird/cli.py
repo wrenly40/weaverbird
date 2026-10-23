@@ -34,6 +34,7 @@ from . import feedback as feedback_module
 from . import finish as finish_module
 from . import godot as godot_module
 from . import identity as identity_module
+from . import interview as interview_module
 from . import ledger as ledger_module
 from . import modelplayer as modelplayer_module
 from . import patch as patch_module
@@ -242,6 +243,60 @@ def cmd_scope_interview(args) -> int:
                 print(f"- {question}")
         return 0
     return _ok("The scope is now complete — ready to approve.")
+
+
+def _print_interview_turn(turn) -> None:
+    text = turn.get("text", "")
+    if text:
+        print(text)
+
+
+def cmd_interview(args) -> int:
+    """`weaverbird interview <dir>` — the scope interview as a
+    conversation, line by line. The same engine the app chat
+    uses: answers are read from stdin (one message per line;
+    piped input works, which is how the tests drive it), each
+    captured field is read back, and the interview ends when the
+    scope is complete or the input does."""
+    try:
+        state = interview_module.start(args.dir,
+                                       settings_path=args.settings)
+    except interview_module.InterviewError as exc:
+        return _fail(str(exc))
+    printed = 0
+    for turn in state["turns"]:
+        if turn.get("role") == "assistant":
+            _print_interview_turn(turn)
+            printed += 1
+    while not state["complete"]:
+        try:
+            line = input()
+        except EOFError:
+            print(f"\nInterview paused — {state['missing_count']} "
+                  "required field(s) still missing. Run the command "
+                  "again (or open the app) to continue; nothing "
+                  "already answered is asked twice.")
+            return 0
+        except KeyboardInterrupt:
+            print()
+            return 0
+        try:
+            state = interview_module.respond(
+                args.dir, line, settings_path=args.settings)
+        except interview_module.InterviewError as exc:
+            return _fail(str(exc))
+        turns = state["turns"]
+        seen = 0
+        for turn in turns:
+            if turn.get("role") != "assistant":
+                continue
+            seen += 1
+            if seen > printed:
+                _print_interview_turn(turn)
+        printed = seen
+    print("\nThe scope is complete — approve it with "
+          f"'weaverbird scope approve {args.dir} --by <your name>'.")
+    return 0
 
 
 def cmd_brain_check(args) -> int:
@@ -1124,6 +1179,15 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Global settings file (default: search the "
                                 "usual places).")
 
+    chat = sub.add_parser(
+        "interview",
+        help="The scope interview as a conversation (line mode; "
+             "piped stdin works). The same engine as the app chat.")
+    chat.add_argument("dir")
+    chat.add_argument("--settings", default=None,
+                      help="Global settings file (default: search the "
+                           "usual places).")
+
     brain_cmd = sub.add_parser(
         "brain", help="Check the bring-your-own-key model ladder.")
     brain_sub = brain_cmd.add_subparsers(dest="brain_command")
@@ -1383,6 +1447,7 @@ _HANDLERS = {
     ("scope", "questions"): cmd_scope_questions,
     ("scope", "approve"): cmd_scope_approve,
     ("scope", "interview"): cmd_scope_interview,
+    ("interview", None): cmd_interview,
     ("brain", "check"): cmd_brain_check,
     ("finish", "check"): cmd_finish_check,
     ("finish", "report"): cmd_finish_report,

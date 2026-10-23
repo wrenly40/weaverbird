@@ -636,6 +636,14 @@ def _run_worker(ctx: JobContext) -> str:
     return f"Worker {name}: {outcome['summary']}"
 
 
+def _run_interview_turn(ctx: JobContext) -> str:
+    from . import interview as interview_module
+    state = interview_module.respond(
+        ctx.project_dir, str(ctx.params.get("message", "")),
+        settings_path=ctx.settings_path, reporter=ctx.reporter)
+    return "Interview turn. " + interview_module.summary_text(state)
+
+
 def _run_assets_regenerate(ctx: JobContext) -> str:
     from . import assets_gen as assets_module
     name = str(ctx.params.get("asset", ""))
@@ -667,6 +675,7 @@ ACTION_WORKERS = {
     "model-playtest": "model-playtest",
     "balance-apply": "balance",
     "balance-compare": "balance",
+    "interview-turn": "scope",
 }
 
 ACTIONS = {
@@ -686,4 +695,5 @@ ACTIONS = {
     "assets-regenerate": ("Regenerate asset", _run_assets_regenerate),
     "orchestrate": ("Run plan (orchestrator)", _run_orchestrate),
     "run-worker": ("Run one worker", _run_worker),
+    "interview-turn": ("Interview turn", _run_interview_turn),
 }

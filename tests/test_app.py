@@ -160,12 +160,20 @@ class TestScopeForm(AppTestCase):
 
     def test_scope_page_shows_fields_and_missing_count(self):
         self.make_unapproved_project()
+        # The scope page is the interview chat now: its live panel
+        # shows every field, the missing count, and the approve
+        # button (locked while incomplete). The form lives at
+        # /scope/form with the same information.
         status, page = get(self.base + "/project/soup-game/scope")
         self.assertEqual(status, 200)
         self.assertIn("Title (working)", page)
-        self.assertIn("answers to go", page)
+        self.assertIn("to go", page)
         self.assertIn("Approve scope", page)
         self.assertIn("disabled", page)  # approve locked while incomplete
+        status, form_page = get(self.base + "/project/soup-game/scope/form")
+        self.assertEqual(status, 200)
+        self.assertIn("answers to go", form_page)
+        self.assertIn('name="Title (working)"', form_page)
 
     def test_scope_save_round_trips_into_the_file(self):
         other = self.make_unapproved_project()
