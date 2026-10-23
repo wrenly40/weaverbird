@@ -8,9 +8,11 @@ an honest plan. The rules:
   the objective hint), and **bug** when the failure matches a known
   class with a known remedy (missing assets → regenerate them; a
   parse error in a generated script → regenerate the game).
-  Anything else — requests, price, scope — is the maker's decision,
-  never the factory's. A bug with no known remedy produces
-  PATCH_PLAN.md and stops: plan-only is a valid outcome.
+  Anything else — requests, praise, unclassified items, price,
+  scope — is the maker's decision, never the factory's, and it
+  produces PATCH_PLAN.md and stops: plan-only is a valid outcome,
+  not a failure (dogfood finding D8: shipping a patch on an
+  unknown item used to fail the job with a raw PatchError).
 - Every applied patch must pass two gates before it ships: the
   full headless test stage, and a save-compatibility check — a
   save captured from the CURRENT build (through the game's own
@@ -383,7 +385,37 @@ def match_bug_remedy(project) -> tuple[str | None, str]:
     return None, "no known failure class in the test report matches this bug"
 
 
-def write_patch_plan(project, item: dict, reason: str) -> Path:
+# Kinds with no automatic remedy (D8): shipping a patch on one
+# of these writes the plan and completes — the item is the
+# maker's call, and the plan says what it asks, why, and the
+# suggested next step, in plain language.
+_PLAN_ONLY_KINDS = {
+    "unknown": (
+        "This item's kind is unknown — triage could not tell "
+        "what kind of feedback it is, so there is no automatic "
+        "change the patch loop can safely make from it.",
+        "Read it yourself and decide: dismiss it; or edit its "
+        "text and re-triage so it lands as a bug, balance or "
+        "confusion item the patch loop can act on; or, if it "
+        "asks for something new, treat it as a request (below)."),
+    "request": (
+        "Requests — new features, content, scope or price — are "
+        "the maker's decision, never an automatic patch.",
+        "If you want this: fold it into the scope as a dated "
+        "amendment and rebuild, so the game that ships is the "
+        "game the scope describes. If you don't, dismiss the "
+        "item — the game stays as scoped."),
+    "praise": (
+        "This item is praise — there is nothing to fix or "
+        "change in the game.",
+        "No action needed. Dismiss the item to clear the queue "
+        "(and thank the player, where the source allows a "
+        "reply)."),
+}
+
+
+def write_patch_plan(project, item: dict, reason: str,
+                     next_step: str = "") -> Path:
     scope_values = {}
     scope_file = scope_module.scope_path_for(Path(project))
     if scope_file.exists():
@@ -418,6 +450,16 @@ def write_patch_plan(project, item: dict, reason: str) -> Path:
     if failing:
         lines += ["", "Failing runs in the latest test report:", ""] + failing
     lines += [
+        "",
+        "## Suggested next step",
+        "",
+        next_step or (
+            "Reproduce the feedback against the current build, "
+            "locate the cause in the generated game under game/, "
+            "make the smallest change that addresses it, then "
+            "re-run `weaverbird test run` and the "
+            "save-compatibility check before shipping it as a "
+            "patch."),
         "",
         "## Proposed change (for a human or a later factory stage)",
         "",
@@ -556,10 +598,12 @@ def start_patch(project_dir, item_id: str, settings_path=None,
     """Run one approved feedback item through the patch loop.
 
     Returns an outcome dict: outcome is "patched" (with version),
-    "planned" (PATCH_PLAN.md written), or "rejected" (gates failed,
-    tree restored). Refusals (item not approved, category the maker
-    must decide) raise PatchError. ``reporter`` (optional) narrates
-    the patch gates for the job runner.
+    "planned" (PATCH_PLAN.md written — including for the kinds
+    that are the maker's call: request, praise, unknown), or
+    "rejected" (gates failed, tree restored). Refusals (the item
+    does not exist or is not approved) raise PatchError.
+    ``reporter`` (optional) narrates the patch gates for the job
+    runner.
     """
     project = Path(project_dir)
     item = feedback_module.get_item(project, item_id)
@@ -570,12 +614,24 @@ def start_patch(project_dir, item_id: str, settings_path=None,
             f"Item {item_id} is {item.get('status')!r}, not 'approved' — "
             "only approved items enter the patch loop.")
     category = item.get("category", "unknown")
-    if category in ("request", "praise", "unknown"):
-        raise PatchError(
-            f"Item {item_id} is a {category} item — "
-            + ("requests, scope and price are the maker's decision, "
-               "never an automatic patch." if category == "request"
-               else "there is nothing here for the patch loop to change."))
+    if category in _PLAN_ONLY_KINDS:
+        # No automatic remedy exists for this kind — that is a
+        # plan outcome, not an error (D8). The job completes with
+        # the plan written and the item marked planned; nothing
+        # else in the tree changes and no version is bumped.
+        reason, next_step = _PLAN_ONLY_KINDS[category]
+        if reporter is not None:
+            reporter(f"[{item_id}] is a {category} item — the "
+                     "maker's call, so this writes a patch plan "
+                     "instead of changing code.", done=0, total=1)
+        path = write_patch_plan(project, item, reason,
+                                next_step=next_step)
+        feedback_module.update_item(
+            project, item_id, status="planned",
+            note="patch plan written — this kind is the maker's call")
+        _commit_quietly(project, f"Weaverbird patch plan: {item_id}")
+        return {"outcome": "planned", "item": item_id,
+                "plan": str(path), "reason": reason}
     config = load_config(project)
     archetype = config.get("archetype", "")
     if archetype not in generate_module.PRESET_NAMES:

@@ -823,6 +823,15 @@ def render_feedback(server, name: str, notice: str = "",
                 '<button class="btn" type="submit">Ship as patch</button></form>'
                 f'<form class="action" method="post" action="/project/{quoted}/feedback/{item_id}/dismiss">'
                 '<button class="btn ghost" type="submit">Dismiss</button></form>')
+            if item.get("category", "unknown") in (
+                    "unknown", "request", "praise"):
+                # Kinds with no automatic remedy (D8): say so on
+                # the item, before the maker clicks.
+                actions += (
+                    '<div class="hint" style="margin-top:6px">'
+                    'Shipping writes a plan for this one, not a '
+                    "code change — this kind is the maker's "
+                    'call.</div>')
         elif status == "patched":
             actions = f'<span class="chip green">patched in {_esc(item.get("patch_version", ""))}</span>'
         version = (f' · v{_esc(item["patch_version"])}'

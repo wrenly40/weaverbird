@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text  # noqa: E402,F401  (sets sys.path)
 
 from weaverbird import app as app_module  # noqa: E402
+from weaverbird import feedback as feedback_module  # noqa: E402
 from weaverbird import jobs  # noqa: E402
 from weaverbird import state  # noqa: E402
 from weaverbird import godot as godot_module  # noqa: E402
@@ -83,6 +84,31 @@ class JobManagerTests(unittest.TestCase):
         self.assertEqual(failed["status"], "failed")
         self.assertIn("RuntimeError: boom", failed["error"])
         self.assertIsNone(failed["result"])
+
+    def test_patch_on_an_unknown_item_completes_with_a_plan(self):
+        # Dogfood finding D8: Ship patch on an unclassified item
+        # used to FAIL the job with a raw PatchError string. It
+        # now completes: PATCH_PLAN.md written, item planned, no
+        # exception text anywhere in the job record.
+        project = self.workspace / "proj-plan"
+        project.mkdir(parents=True)
+        (project / "SCOPE.md").write_text(filled_scope_text(),
+                                          encoding="utf-8")
+        state.init_state(project)
+        item, _ = feedback_module.add_item(
+            project, source="manual",
+            text="The frobnicate wobbles at dawn")
+        feedback_module.update_item(
+            project, item["id"], category="unknown",
+            status="approved", severity=2, cluster="x")
+        job = self.manager.submit("proj-plan", project, "patch-start",
+                                  params={"item": item["id"]})
+        done = wait_job(self.manager, job["id"])
+        self.assertEqual(done["status"], "done", done)
+        self.assertIn("PATCH_PLAN.md", done["result"])
+        self.assertTrue((project / "PATCH_PLAN.md").exists())
+        stored = feedback_module.get_item(project, item["id"])
+        self.assertEqual(stored["status"], "planned")
 
     def test_cancel_lands_between_steps(self):
         # Deterministic (0.10.0 — this test used to race real

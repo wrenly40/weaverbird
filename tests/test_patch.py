@@ -111,10 +111,48 @@ class RefusalAndPlanTests(unittest.TestCase):
                              status="approved", severity=2, cluster="x")
         return item
 
-    def test_request_is_refused(self):
+    def test_request_plans_instead_of_refusing(self):
+        # D8: requests are the maker's call — a plan outcome, not
+        # an error (this used to raise PatchError and fail the
+        # job with the raw exception as its message).
         item = self._approved("Please add multiplayer", "request")
-        with self.assertRaises(patch.PatchError):
-            patch.start_patch(self.project, item["id"])
+        result = patch.start_patch(self.project, item["id"])
+        self.assertEqual(result["outcome"], "planned")
+        plan = Path(result["plan"])
+        self.assertTrue(plan.exists())
+        text = plan.read_text(encoding="utf-8")
+        self.assertIn("Please add multiplayer", text)
+        self.assertIn("maker's decision", text)
+        self.assertIn("Suggested next step", text)
+        stored = feedback.get_item(self.project, item["id"])
+        self.assertEqual(stored["status"], "planned")
+
+    def test_unknown_item_plans_and_changes_nothing_else(self):
+        # The exact dogfood case (D8): an unclassified item.
+        config_before = patch.config_path_for(
+            self.project).read_bytes()
+        item = self._approved("The frobnicate wobbles at dawn",
+                              "unknown")
+        result = patch.start_patch(self.project, item["id"])
+        self.assertEqual(result["outcome"], "planned")
+        plan = Path(result["plan"])
+        self.assertTrue(plan.exists())
+        self.assertIn("The frobnicate wobbles at dawn",
+                      plan.read_text(encoding="utf-8"))
+        # No version bump, no config change, item planned.
+        self.assertFalse(patch.version_path_for(self.project).exists())
+        self.assertEqual(patch.game_version(self.project), "0.1.0")
+        self.assertEqual(
+            patch.config_path_for(self.project).read_bytes(),
+            config_before)
+        stored = feedback.get_item(self.project, item["id"])
+        self.assertEqual(stored["status"], "planned")
+
+    def test_praise_plans(self):
+        item = self._approved("Love it, great fun!", "praise")
+        result = patch.start_patch(self.project, item["id"])
+        self.assertEqual(result["outcome"], "planned")
+        self.assertTrue(Path(result["plan"]).exists())
 
     def test_unapproved_is_refused(self):
         item, _ = feedback.add_item(
