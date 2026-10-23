@@ -1538,7 +1538,11 @@ class _Handler(BaseHTTPRequestHandler):
                 job_id = urllib.parse.unquote(parts[1])
                 if self.app.jobs.cancel(job_id) is None:
                     return self._fail_page("No such job.", 404)
-                return self._send_html(render_job_page(self.app, job_id))
+                # Redirect-after-POST, like every job action: the
+                # job page lives at /jobs/<id>; rendering it here
+                # would strand a refresh on this POST-only URL.
+                return self._redirect(
+                    f"/jobs/{urllib.parse.quote(job_id)}")
             if parts[0] == "project" and len(parts) >= 3:
                 name = urllib.parse.unquote(parts[1])
                 action = parts[2]
@@ -1594,25 +1598,33 @@ class _Handler(BaseHTTPRequestHandler):
             return self._fail_page(f"{type(exc).__name__}: {exc}", 500)
 
     # -- job-backed actions ------------------------------------------------
+    def _redirect(self, location: str) -> None:
+        """A 303 redirect with an empty body (redirect-after-POST)."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _post_job_action(self, name: str, action: str,
                          params: dict | None = None,
                          view: str = "project") -> None:
-        """Every long project action is a job now: submit it,
-        answer at once with the page carrying the live job card."""
+        """Every long project action is a job now: submit it, then
+        answer with a 303 redirect to the GET page the button lives
+        on, carrying ?job=<id>. The browser must end up at a GET
+        URL: the job card's reload re-GETs the current URL when the
+        job lands, so rendering the page here instead would strand
+        that reload on this POST-only URL, which answers GET with
+        a 404."""
         project = self.app.project_by_name(name)
         job = self.app.jobs.submit(project["name"], project["path"],
                                    action, params=params)
-        if view == "feedback":
-            return self._send_html(render_feedback(
-                self.app, name, job_id=job["id"]))
-        if view == "balance":
-            return self._send_html(render_balance(
-                self.app, name, job_id=job["id"]))
-        if view == "assets":
-            return self._send_html(render_assets(
-                self.app, name, job_id=job["id"]))
-        return self._send_html(render_project(
-            self.app, name, job_id=job["id"]))
+        quoted = urllib.parse.quote(name)
+        page = {
+            "feedback": f"/project/{quoted}/feedback",
+            "balance": f"/project/{quoted}/balance",
+            "assets": f"/project/{quoted}/assets",
+        }.get(view, f"/project/{quoted}")
+        return self._redirect(f"{page}?job={job['id']}")
 
     def _post_balance(self, name: str, sub: str) -> None:
         form = self._form()
@@ -1750,11 +1762,7 @@ class _Handler(BaseHTTPRequestHandler):
                                    "interview-turn",
                                    params={"message": message})
         quoted = urllib.parse.quote(name)
-        self.send_response(303)
-        self.send_header("Location",
-                         f"/project/{quoted}/scope?job={job['id']}")
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        return self._redirect(f"/project/{quoted}/scope?job={job['id']}")
 
     def _post_scope_extract(self, name: str) -> None:
         project = self.app.project_by_name(name)

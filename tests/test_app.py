@@ -237,6 +237,78 @@ class TestSettingsPage(AppTestCase):
         self.assertEqual(saved["models"]["cheap"]["provider"], "openai")
 
 
+class TestJobActionRedirects(AppTestCase):
+    """Redirect-after-POST for every job action: a POST that starts
+    a job must answer 303 to the GET page the button lives on,
+    carrying ?job=<id> — never render the page at the POST URL,
+    whose GET is a 404 the job card's reload would land on."""
+
+    def _raw(self, method, path, fields=None):
+        import http.client
+        host, port = self.server.server_address[:2]
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        body = urllib.parse.urlencode(fields or {})
+        headers = ({"Content-Type": "application/x-www-form-urlencoded"}
+                   if method == "POST" else {})
+        conn.request(method, path, body=body if method == "POST" else None,
+                     headers=headers)
+        response = conn.getresponse()
+        response.read()
+        result = (response.status, response.getheader("Location"))
+        conn.close()
+        return result
+
+    def assert_redirects_to_job_page(self, path, fields, page_path):
+        status, location = self._raw("POST", path, fields)
+        self.assertEqual(status, 303, path)
+        self.assertIsNotNone(location, path)
+        parsed = urllib.parse.urlparse(location)
+        self.assertEqual(parsed.path, page_path, path)
+        job_id = urllib.parse.parse_qs(parsed.query)["job"][0]
+        status, page = get(self.base + location)
+        self.assertEqual(status, 200, location)
+        self.assertIn(f'data-job-id="{job_id}"', page)
+        return job_id
+
+    def test_run_tests_redirects_to_project_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/run-tests", {}, "/project/bee-game")
+
+    def test_build_skeleton_redirects_to_project_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/build-skeleton", {}, "/project/bee-game")
+
+    def test_finish_check_redirects_to_project_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/finish-check", {}, "/project/bee-game")
+
+    def test_balance_compare_redirects_to_balance_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/balance/compare", {"suggestion": "0"},
+            "/project/bee-game/balance")
+
+    def test_assets_regenerate_redirects_to_assets_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/assets/regenerate", {"asset": "player"},
+            "/project/bee-game/assets")
+
+    def test_feedback_triage_redirects_to_feedback_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/feedback/triage", {},
+            "/project/bee-game/feedback")
+
+    def test_patch_start_redirects_to_feedback_page(self):
+        self.assert_redirects_to_job_page(
+            "/project/bee-game/patch/some-item", {},
+            "/project/bee-game/feedback")
+
+    def test_post_url_itself_is_not_a_page(self):
+        # Nothing links to the bare POST URL any more; its GET is a
+        # 404, which is exactly why the browser must never land there.
+        status, _location = self._raw("GET", "/project/bee-game/run-tests")
+        self.assertEqual(status, 404)
+
+
 if __name__ == "__main__":
     unittest.main()
 
