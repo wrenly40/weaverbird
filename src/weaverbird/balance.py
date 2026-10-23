@@ -227,10 +227,10 @@ def analyse(units: list[dict]) -> list[dict]:
 
 def _archetype_for(project: Path, config: dict) -> str:
     archetype = config.get("archetype", "")
-    if archetype not in generate_module.ARCHETYPES:
+    if archetype not in generate_module.PRESET_NAMES:
         report = generate_module.load_report(project)
         archetype = (report or {}).get("archetype", archetype)
-    if archetype not in generate_module.ARCHETYPES:
+    if archetype not in generate_module.PRESET_NAMES:
         raise BalanceError("The game's archetype is unknown, so no "
                            "safe suggestion can be computed.")
     return archetype

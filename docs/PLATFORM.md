@@ -84,10 +84,31 @@ attached.
   is extracted, and the questions carry the interview. The app's
   scope view is the same flow as a form over the same library, with
   the prompt box and the approve button.
-- Future: the multi-turn interview conversation (follow-up rounds
-  driven by the model, style samples shown and picked during the
-  interview). It plugs into: scope parser, pipeline state, ledger
-  (its model calls are logged).
+- Built in v0.8: the interview is a multi-turn conversation
+  (`interview.py`). One session engine — state persisted per
+  project at `.weaverbird/interview.json` — drives the app's chat
+  page (message thread + live scope panel + approve gating) and
+  `weaverbird interview <dir>` in the terminal; the v0.3 form
+  remains as the "Edit as form" fallback. The stored prompt is
+  run through the existing extraction first, so the conversation
+  never re-asks a filled field. Deterministic mode asks each
+  pending group in plain language, captures free-text or
+  `Field: value` answers conservatively (validation against the
+  scope schema is the same gate the form uses), and reflects
+  each captured field before moving on. Brain mode sends the
+  cheap tier the transcript plus the still-empty fields' schema
+  each turn and accepts only strict-JSON fields that validate —
+  unknown fields and invalid values are dropped and re-asked —
+  and any brain failure falls back to the deterministic question
+  for that turn. Token use goes through the brain's ledger and
+  caps as usual. At the style-lock decision the factory
+  generates sample cards (small SVG scenes drawn by the assets
+  code from candidate palettes, cached under the project), and
+  picking one writes the style lock and palette into the scope.
+  Interview turns run as jobs owned by the scope worker.
+- Future: follow-up questions that react to earlier answers
+  beyond the fixed groups. It plugs into: scope parser, pipeline
+  state, ledger (its model calls are logged).
 
 ### 2. Design and skeleton
 - Inputs: the approved scope file, the archetype templates.
@@ -216,6 +237,32 @@ attached.
   detective-style core loop) and no primitive signal at all — so
   ordinary scopes keep composing. `weaverbird build game`
   remains, running the three workers in order.
+- Built in v0.8: the composition gains a **dimension** —
+  `2d` (the default; every existing behaviour unchanged) or
+  `3d`. The scope's Dimension field decides, with a "3D"
+  mention in the genre/title/pitch text as the fallback signal.
+  One 3D preset exists today: **arena_3d**, the arena
+  composition lifted onto a 3D ground plane — top-down-follow
+  camera, a `CharacterBody3D` player, spinning `Area3D`
+  collectible orbs, hazards patrolling waypoint paths, and
+  `StaticBody3D` obstacle blocks, all built from primitive
+  meshes with `StandardMaterial3D` colours taken from the
+  style-lock palette (no external assets; a world environment
+  with ambient light keeps the scene lit headless and under
+  Xvfb). The world worker emits the 3D form of `world.json`
+  (ground size, collectible (x, z) positions, hazard waypoints,
+  obstacle blocks, spawn) and its gate checks bounds plus
+  collectible reachability on the XZ plane (no collectible
+  inside an obstacle). The assets worker requests no sprites
+  for a 3D game — it emits the material palette spec the
+  mechanics consume, recorded as `materials` in the assets
+  report; the icon and audio are generated as usual. The shell
+  is the same 2D Control UI as every other game, and the
+  scripted testers steer from the same `bridge_state()` facts
+  with 3D positions, ignoring y. A 3D request for any other
+  composition is recorded honestly in the derivation reason
+  and the game is built in 2D: **3D today means one flat-ground
+  preset — 3D platforming and 3D puzzles are not claimed.**
 - Future: more composition primitives, richer bespoke modules,
   static checks beyond the gates. It plugs into: pipeline
   state, vcs, ledger, brain.

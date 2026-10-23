@@ -156,7 +156,7 @@ def _ease_config(project, config: dict, archetype: str) -> str:
 
 
 def _harden_config(project, config: dict, archetype: str) -> str:
-    if archetype == "arena_collector":
+    if archetype in ("arena_collector", "arena_3d"):
         new_config, lines = patch_module._apply_numeric_changes(
             config, archetype, {
                 "hazard_speed": float(config.get("hazard_speed", 1.4)) * 1.2,
@@ -182,7 +182,7 @@ def _harden_config(project, config: dict, archetype: str) -> str:
 
 def _reduce_load(project, config: dict, archetype: str) -> str:
     proposals: dict = {}
-    if archetype == "arena_collector":
+    if archetype in ("arena_collector", "arena_3d"):
         current = int(config.get("targets_per_round", 5))
         floor = patch_module.patch_bounds(archetype)["targets_per_round"][0]
         if current <= floor:

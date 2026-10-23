@@ -610,7 +610,7 @@ _register(WorkerSpec(
     inputs=("game/project.godot",),
     outputs=("game/world/world.json",),
     depends_on=("skeleton",), run=_run_world,
-    scope_fields=("Title (working)", "Genre / archetype",
+    scope_fields=("Title (working)", "Dimension", "Genre / archetype",
                   "Core verb (what the player does most)",
                   "Win condition", "Lose / fail condition",
                   "Session length (one sitting)",
@@ -622,7 +622,7 @@ _register(WorkerSpec(
     inputs=("game/world/world.json",),
     outputs=("game/scripts/game.gd",),
     depends_on=("world",), run=_run_mechanics,
-    scope_fields=("Genre / archetype",
+    scope_fields=("Dimension", "Genre / archetype",
                   "Core verb (what the player does most)",
                   "Win condition", "Lose / fail condition")))
 _register(WorkerSpec(

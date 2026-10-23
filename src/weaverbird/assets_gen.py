@@ -361,6 +361,8 @@ def asset_requests(project: Path, values: dict) -> dict:
     derived = generate_module.derive_composition(
         values, override=None)
     bespoke = bool(derived["bespoke"])
+    composition = derived["composition"] or {}
+    dimension = composition.get("dimension", "2d")
     world_data = world_module.load_world(project)
     kinds: list[str] = []
     based_on = "composition"
@@ -376,12 +378,32 @@ def asset_requests(project: Path, values: dict) -> dict:
     if bespoke:
         sprites.update(["player", "target"])
     audio = {"click", "collect", "win", "lose", "music"}
-    composition = derived["composition"] or {}
     audio.update(_MOVEMENT_AUDIO.get(composition.get("movement"), []))
     for fail in composition.get("fail") or []:
         audio.update(_FAIL_AUDIO.get(fail, []))
     if bespoke:
         audio.update(["hurt"])
+    materials: list[dict] = []
+    if dimension == "3d":
+        # A 3D game has no sprites to draw: its look is materials
+        # defined in code from the palette. The assets worker's
+        # product is the material palette spec the mechanics
+        # worker consumes (via game_config.json's palette), and
+        # the report records it — honestly, as data, not files.
+        sprites = set()
+        palette = generate_module._palette(values)
+        materials = [
+            {"name": "player", "hex": palette["accent_hex"],
+             "used_for": "the player's capsule"},
+            {"name": "collectible", "hex": palette["target_hex"],
+             "used_for": "the collectible orbs"},
+            {"name": "hazard", "hex": palette["hazard_hex"],
+             "used_for": "the patrolling hazards"},
+            {"name": "ground", "hex": palette["platform_hex"],
+             "used_for": "the ground plane"},
+            {"name": "obstacle", "hex": palette["crate_hex"],
+             "used_for": "the obstacle blocks"},
+        ]
     return {
         "sprites": sorted(sprites),
         "audio": sorted(audio),
@@ -389,6 +411,8 @@ def asset_requests(project: Path, values: dict) -> dict:
         "bespoke": bespoke,
         "composition": derived["composition"],
         "preset": derived["preset"],
+        "dimension": dimension,
+        "materials": materials,
     }
 
 
@@ -435,9 +459,15 @@ def _producers(palette: dict, archetype: str,
     layer registers its own producers the same way.)
     """
     bespoke = bool(requests and requests.get("bespoke"))
+    is_3d = bool(requests and requests.get("dimension") == "3d")
     producers: dict[str, tuple[str, object, str, str]] = {}
     for name, maker in _SPRITES.items():
         if bespoke and name not in requests["sprites"]:
+            continue
+        if is_3d:
+            # A 3D game's look is materials defined in code from
+            # the palette (see asset_requests' material spec) —
+            # no sprites are produced for it.
             continue
         producers[name] = (
             f"{GAME_DIR_NAME}/assets/{name}.svg",
@@ -514,9 +544,11 @@ def generate_assets(project_dir, archetype: str | None = None,
         "archetype": chosen,
         "composition": requests["composition"],
         "preset": requests["preset"],
+        "dimension": requests.get("dimension", "2d"),
         "requests": {"sprites": requests["sprites"],
                      "audio": requests["audio"],
-                     "based_on": requests["based_on"]},
+                     "based_on": requests["based_on"],
+                     "materials": requests.get("materials", [])},
         "palette": palette,
         "files": written,
         "icon": f"{GAME_DIR_NAME}/icon.svg",

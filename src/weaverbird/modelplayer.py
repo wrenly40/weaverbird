@@ -56,6 +56,8 @@ STATE_WAIT_TIMEOUT = 180  # seconds to wait for the game's next state
 ACTION_SETS = {
     "arena_collector": ["move_left", "move_right", "move_up",
                         "move_down", "pause", "wait", "start"],
+    "arena_3d": ["move_left", "move_right", "move_up",
+                 "move_down", "pause", "wait", "start"],
     "platformer": ["move_left", "move_right", "jump", "pause",
                    "wait", "start"],
     "crate_pusher": ["move_left", "move_right", "move_up", "move_down",

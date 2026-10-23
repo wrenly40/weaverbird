@@ -215,7 +215,7 @@ def deterministic_balance(archetype: str, config: dict,
     ease = any(word in lowered for word in _EASE_WORDS)
     harden = any(word in lowered for word in _HARDEN_WORDS)
     if "too slow" in lowered or "sluggish" in lowered:
-        if archetype in ("arena_collector", "platformer"):
+        if archetype in ("arena_collector", "arena_3d", "platformer"):
             new, lines = _apply_numeric_changes(
                 config, archetype,
                 {"player_speed": float(config.get("player_speed", 300)) * 1.15})
@@ -223,7 +223,7 @@ def deterministic_balance(archetype: str, config: dict,
         new, lines = _scale_budgets(config, 1.15)
         return new, lines, "gave more moves per puzzle (feedback: too slow)"
     if "too fast" in lowered:
-        if archetype == "arena_collector":
+        if archetype in ("arena_collector", "arena_3d"):
             new, lines = _apply_numeric_changes(
                 config, archetype,
                 {"hazard_speed": float(config.get("hazard_speed", 1.4)) * 0.85})
@@ -236,7 +236,7 @@ def deterministic_balance(archetype: str, config: dict,
             {"gravity": float(config.get("gravity", 1400)) * 0.95})
         return new, lines, "softened gravity (feedback: too fast)"
     if ease and not harden:
-        if archetype == "arena_collector":
+        if archetype in ("arena_collector", "arena_3d"):
             new, lines = _apply_numeric_changes(config, archetype, {
                 "hazard_speed": float(config.get("hazard_speed", 1.4)) * 0.85,
                 "round_seconds": float(config.get("round_seconds", 60)) * 1.15})
@@ -250,7 +250,7 @@ def deterministic_balance(archetype: str, config: dict,
         new, lines = _scale_budgets(config, 1.2)
         return new, lines, "eased the game — more moves per puzzle (feedback: too hard)"
     if harden and not ease:
-        if archetype == "arena_collector":
+        if archetype in ("arena_collector", "arena_3d"):
             new, lines = _apply_numeric_changes(config, archetype, {
                 "hazard_speed": float(config.get("hazard_speed", 1.4)) * 1.15,
                 "round_seconds": float(config.get("round_seconds", 60)) * 0.9})
@@ -578,10 +578,10 @@ def start_patch(project_dir, item_id: str, settings_path=None,
                else "there is nothing here for the patch loop to change."))
     config = load_config(project)
     archetype = config.get("archetype", "")
-    if archetype not in generate_module.ARCHETYPES:
+    if archetype not in generate_module.PRESET_NAMES:
         gen_report = generate_module.load_report(project)
         archetype = (gen_report or {}).get("archetype", archetype)
-    if archetype not in generate_module.ARCHETYPES:
+    if archetype not in generate_module.PRESET_NAMES:
         raise PatchError("The game's archetype is unknown, so no safe "
                          "patch can be computed.")
     if reporter is not None:

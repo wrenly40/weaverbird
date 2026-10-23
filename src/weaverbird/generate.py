@@ -50,10 +50,13 @@ REPORT_NAME = "generation_report.json"
 KNOWN_GOOD_TAG = "known-good/build"
 PROVENANCE_PROVIDER = "weaverbird-build"
 ARCHETYPES = ("arena_collector", "platformer", "crate_pusher")
+# Every named preset, including the 3D one (0.8.0). ARCHETYPES
+# remains the historical 2D trio where a caller truly means it.
+PRESET_NAMES = ARCHETYPES + ("arena_3d",)
 
 _INT_RE = re.compile(r"\d+")
 _ARCHETYPE_RE = re.compile(
-    r"archetype\s*[:=]\s*(arena_collector|platformer|crate_pusher|arena|crate)",
+    r"archetype\s*[:=]\s*(arena_3d|arena_collector|platformer|crate_pusher|arena|crate)",
     re.IGNORECASE,
 )
 
@@ -73,6 +76,11 @@ BOUNDS = {
     "crate_pusher": {
         "move_budget_multiplier": (1.5, 4.0),
     },
+    "arena_3d": {
+        "player_speed": (7.0, 16.0),
+        "hazard_speed": (0.6, 2.4),
+        "targets_per_round": (3, 10),
+    },
 }
 
 _HINTS = {
@@ -82,6 +90,8 @@ _HINTS = {
         "Gather the stars and reach the glowing door. Mind the spikes!",
     "crate_pusher":
         "Push every crate onto a glowing pad. E undoes a step.",
+    "arena_3d":
+        "Collect every glowing orb before the time runs out. Avoid the patrolling hazards!",
     "bespoke":
         "Follow the on-screen objective.",
 }
@@ -102,6 +112,7 @@ _HINTS = {
 
 PRESETS: dict[str, dict] = {
     "arena_collector": {
+        "dimension": "2d",
         "movement": "top_down",
         "objectives": ["collect"],
         "fail": ["timer", "hazard_contact"],
@@ -109,6 +120,7 @@ PRESETS: dict[str, dict] = {
         "interactions": ["avoid", "collect"],
     },
     "platformer": {
+        "dimension": "2d",
         "movement": "platform",
         "objectives": ["collect", "reach_exit"],
         "fail": ["hazard_contact", "lives"],
@@ -116,16 +128,29 @@ PRESETS: dict[str, dict] = {
         "interactions": ["avoid", "collect"],
     },
     "crate_pusher": {
+        "dimension": "2d",
         "movement": "grid",
         "objectives": ["push_to_targets"],
         "fail": ["move_budget"],
         "structure": "levels",
         "interactions": ["push"],
     },
+    # The 3D composition (0.8.0): the arena's primitives lifted
+    # into a dimension — top-down movement and collecting on a 3D
+    # ground plane, patrolling hazards, obstacle blocks. Flat
+    # ground only: 3D platforming is not claimed anywhere.
+    "arena_3d": {
+        "dimension": "3d",
+        "movement": "top_down",
+        "objectives": ["collect"],
+        "fail": ["timer", "hazard_contact"],
+        "structure": "rounds",
+        "interactions": ["avoid", "collect"],
+    },
 }
 
 _PRESET_RE = re.compile(
-    r"preset\s*[:=]\s*(arena_collector|platformer|crate_pusher|arena|crate)",
+    r"preset\s*[:=]\s*(arena_3d|arena_collector|platformer|crate_pusher|arena|crate)",
     re.IGNORECASE,
 )
 _COMPOSITION_RE = re.compile(r"composition\s*[:=]\s*([a-z_]+)", re.IGNORECASE)
@@ -154,6 +179,7 @@ def composition_for_preset(name: str) -> dict:
     preset = _normalise_archetype(name)
     comp = PRESETS[preset]
     return {
+        "dimension": comp.get("dimension", "2d"),
         "movement": comp["movement"],
         "objectives": list(comp["objectives"]),
         "fail": list(comp["fail"]),
@@ -166,13 +192,36 @@ def preset_for_composition(composition: dict | None) -> str | None:
     """The preset a composition matches exactly, or None."""
     if not isinstance(composition, dict):
         return None
-    for name in ARCHETYPES:
+    for name in PRESET_NAMES:
         comp = PRESETS[name]
-        if (composition.get("movement") == comp["movement"]
+        if (composition.get("dimension", "2d") == comp.get("dimension", "2d")
+                and composition.get("movement") == comp["movement"]
                 and list(composition.get("objectives") or []) == comp["objectives"]
                 and composition.get("structure") == comp["structure"]):
             return name
     return None
+
+
+_DIMENSION_3D_RE = re.compile(r"\b3\s*d\b")
+
+
+def scope_dimension(values: dict) -> str:
+    """The dimension the scope asks for: the Dimension field
+    first, then a '3D' mention in the descriptive text. Default
+    '2d' — the historical behaviour."""
+    field = str(values.get("Dimension", "") or "").lower()
+    if _DIMENSION_3D_RE.search(field):
+        return "3d"
+    if re.search(r"\b2\s*d\b", field):
+        return "2d"
+    text = " ".join(
+        str(values.get(name, ""))
+        for name in ("Genre / archetype", "Title (working)",
+                     "One-line pitch",
+                     "Core verb (what the player does most)")).lower()
+    if _DIMENSION_3D_RE.search(text):
+        return "3d"
+    return "2d"
 
 
 def _scope_text(values: dict) -> str:
@@ -202,6 +251,39 @@ def bespoke_reason(values: dict) -> str | None:
             "from the movement/objective/fail primitives")
 
 
+def _apply_dimension(derived: dict, values: dict) -> dict:
+    """Lift a derived composition into its dimension.
+
+    The dimension is part of the composition (0.8.0): when the
+    scope asks for 3D and the derived preset is the arena, the
+    build becomes the arena's 3D composition. For any other
+    preset a 3D request is recorded honestly in the reason and
+    the game is built in 2D — 3D platforming and 3D puzzles are
+    not claimed. A scope already naming the 3D preset (or an
+    override) passes through untouched."""
+    if derived.get("bespoke") or not derived.get("preset"):
+        return derived
+    if derived["preset"] == "arena_3d":
+        return derived
+    if scope_dimension(values) != "3d":
+        return derived
+    if derived["preset"] == "arena_collector":
+        return {
+            "composition": composition_for_preset("arena_3d"),
+            "preset": "arena_3d", "bespoke": False,
+            "reason": derived["reason"]
+                      + "; the scope's dimension is 3D, so the "
+                        "arena composition is built as its 3D "
+                        "preset (arena_3d)",
+        }
+    return {
+        **derived,
+        "reason": derived["reason"]
+                  + "; the scope asks for 3D, but only the arena "
+                    "composition supports 3D today — built in 2D",
+    }
+
+
 def derive_composition(values: dict, override: str | None = None) -> dict:
     """The build's decision record: {composition, preset, bespoke,
     reason}.
@@ -210,8 +292,10 @@ def derive_composition(values: dict, override: str | None = None) -> dict:
     ``composition: <preset-name>`` note in the scope wins; bespoke
     detection comes next; otherwise the historical archetype
     detection picks the preset whose composition the scope
-    describes. The derivation is recorded in the generation
-    report and in game_config.json.
+    describes — and the scope's dimension then lifts an arena
+    composition into its 3D preset when 3D is asked for. The
+    derivation is recorded in the generation report and in
+    game_config.json.
     """
     if override:
         preset = _normalise_archetype(override)
@@ -223,25 +307,28 @@ def derive_composition(values: dict, override: str | None = None) -> dict:
             _ARCHETYPE_RE.search(value or "")
         if match:
             preset = _normalise_archetype(match.group(1))
-            return {"composition": composition_for_preset(preset),
-                    "preset": preset, "bespoke": False,
-                    "reason": f"the scope names the preset "
-                              f"({match.group(1)!r})"}
+            return _apply_dimension(
+                {"composition": composition_for_preset(preset),
+                 "preset": preset, "bespoke": False,
+                 "reason": f"the scope names the preset "
+                           f"({match.group(1)!r})"}, values)
         match = _COMPOSITION_RE.search(value or "")
         if match and match.group(1).lower() in PRESETS:
             preset = match.group(1).lower()
-            return {"composition": composition_for_preset(preset),
-                    "preset": preset, "bespoke": False,
-                    "reason": f"the scope names the composition "
-                              f"({preset!r})"}
+            return _apply_dimension(
+                {"composition": composition_for_preset(preset),
+                 "preset": preset, "bespoke": False,
+                 "reason": f"the scope names the composition "
+                           f"({preset!r})"}, values)
     why_bespoke = bespoke_reason(values)
     if why_bespoke:
         return {"composition": None, "preset": None, "bespoke": True,
                 "reason": why_bespoke}
     preset, why = detect_archetype(values)
-    return {"composition": composition_for_preset(preset),
-            "preset": preset, "bespoke": False,
-            "reason": f"derived from the scope — {why}"}
+    return _apply_dimension(
+        {"composition": composition_for_preset(preset),
+         "preset": preset, "bespoke": False,
+         "reason": f"derived from the scope — {why}"}, values)
 
 
 class GenerationError(Exception):
@@ -289,11 +376,12 @@ def detect_archetype(values: dict, override: str | None = None) -> tuple[str, st
 def _normalise_archetype(name: str) -> str:
     name = str(name).strip().lower()
     aliases = {"arena": "arena_collector", "crate": "crate_pusher",
-               "sokoban": "crate_pusher"}
+               "sokoban": "crate_pusher", "arena-3d": "arena_3d",
+               "arena3d": "arena_3d"}
     name = aliases.get(name, name)
-    if name not in ARCHETYPES:
+    if name not in PRESET_NAMES:
         raise GenerationError(
-            f"Unknown archetype {name!r}. Known: {', '.join(ARCHETYPES)}."
+            f"Unknown archetype {name!r}. Known: {', '.join(PRESET_NAMES)}."
         )
     return name
 
@@ -747,6 +835,21 @@ def deterministic_config(archetype: str, values: dict, palette: dict,
             "player_speed": 330.0,
             "hazard_speed": 1.4,
         })
+    elif archetype == "arena_3d":
+        # The same arena tuning, in 3D units (metres, metres per
+        # second), plus the seed the world worker lays the ground
+        # plane out from.
+        import zlib
+        seed = zlib.crc32(
+            values.get("Title (working)", "").encode("utf-8")) + units
+        config.update({
+            "rounds": units,
+            "targets_per_round": 5,
+            "round_seconds": round_seconds,
+            "player_speed": 11.0,
+            "hazard_speed": 1.4,
+            "world_seed": seed,
+        })
     elif archetype == "platformer":
         lives = _scope_int(
             values,
@@ -785,6 +888,11 @@ def units_delivered(archetype: str, config: dict) -> int:
     if archetype == "crate_pusher":
         return len(config.get("puzzles", []))
     return int(config.get("rounds", 0))
+
+
+def config_dimension(archetype: str) -> str:
+    """The dimension a preset's game is built in."""
+    return PRESETS.get(archetype, {}).get("dimension", "2d")
 
 
 _BRAIN_SYSTEM = (
@@ -874,6 +982,7 @@ TEMPLATE_DIRS = {
     "arena_collector": "arena",
     "platformer": "platformer",
     "crate_pusher": "crate",
+    "arena_3d": "arena3d",
 }
 
 
@@ -893,6 +1002,12 @@ def _archetype_files(archetype: str) -> dict:
     }
     if archetype in ("arena_collector", "platformer"):
         files["scripts/player.gd"] = (tdir, "player.gd")
+    if archetype == "arena_3d":
+        # The 3D player, and the game scene itself: the skeleton's
+        # scene has a Node2D root, so the mechanics worker writes
+        # the Node3D scene the 3D game needs.
+        files["scripts/player.gd"] = (tdir, "player.gd")
+        files["scenes/game.tscn"] = (tdir, "game.tscn")
     if archetype == "arena_collector":
         files["scripts/marker.gd"] = (tdir, "marker.gd")
     if archetype == "platformer":
@@ -1068,6 +1183,8 @@ def run_assembly_step(project_dir, ctx: dict, world_data: dict,
     config = dict(ctx["config"])
     config["composition"] = ctx.get("composition")
     config["preset"] = ctx.get("preset")
+    config["dimension"] = (ctx.get("composition") or {}).get(
+        "dimension", "2d")
     written = list(written)
     config_rel = f"{GAME_DIR_NAME}/game_config.json"
     (game_dir / "game_config.json").write_text(

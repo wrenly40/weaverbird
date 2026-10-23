@@ -72,6 +72,22 @@ RULES: dict[str, dict[str, str]] = {
         "pad": "scripts/game.gd — a puzzle is solved when every "
                "pad holds a crate, inside the move budget",
     },
+    "arena_3d": {
+        "player": "scripts/player.gd — a CharacterBody3D steered "
+                  "by the standard input actions on the ground "
+                  "plane, speed from game_config.json; the camera "
+                  "rig in scripts/game.gd follows it",
+        "collectible": "scripts/game.gd — spinning Area3D orbs at "
+                       "the world data's positions; body contact "
+                       "collects, and the last orb of a round "
+                       "clears it",
+        "hazard": "scripts/game.gd — Area3D hazards patrolling "
+                  "the world data's waypoint paths; contact ends "
+                  "the run",
+        "obstacle": "scripts/game.gd — StaticBody3D boxes built "
+                    "from the world data's blocks (position, "
+                    "size, height), materials from the palette",
+    },
     "bespoke": {
         "bespoke": "scripts/bespoke_mechanics.gd — the "
                    "brain-written module behind the module "
