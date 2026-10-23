@@ -83,6 +83,12 @@ EXPORT_TIMEOUT = 600
 # A desktop artifact smaller than this is not plausible — the
 # Godot runtime alone is tens of megabytes.
 MIN_DESKTOP_BYTES = 1_000_000
+# The macOS .app's main binary is the universal Godot template
+# itself (~170 MB for Godot 4.7) — never smaller than this in a
+# complete export. (Godot can exit 0 with a truncated binary
+# when its temp staging runs out of space; this check is what
+# catches that.)
+MIN_MACOS_BINARY_BYTES = 50_000_000
 
 
 class ExportsError(Exception):
@@ -334,13 +340,26 @@ def ensure_etc2_astc(game_dir) -> bool:
 # Running one export
 
 def _error_line(output: str) -> str:
-    """Godot's own error line from its output, for the report."""
-    for line in reversed(output.splitlines()):
-        stripped = line.strip()
-        if stripped.startswith("ERROR:"):
-            return stripped
-    tail = [ln.strip() for ln in output.splitlines() if ln.strip()]
-    return tail[-1] if tail else "Godot produced no output."
+    """Godot's own error line from its output, for the report.
+
+    Godot ends a failed export with a generic "Project export
+    for preset ... failed" line — the informative line comes
+    BEFORE it (a configuration-errors header plus its detail, or
+    the specific ERROR), so prefer those over the generic tail.
+    """
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        if "due to configuration errors" in line:
+            detail = lines[i + 1] if i + 1 < len(lines) else ""
+            return f"{line} {detail}".strip()
+    for line in lines:
+        if line.startswith("ERROR:") and \
+                "Project export for preset" not in line:
+            return line
+    errors = [ln for ln in lines if ln.startswith("ERROR:")]
+    if errors:
+        return errors[-1]
+    return lines[-1] if lines else "Godot produced no output."
 
 
 def _sha256(path: Path) -> str:
@@ -349,6 +368,21 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _macos_binary_size(zip_path: Path) -> int | None:
+    """The size of the .app main binary inside Godot's macOS
+    zip (the entry under Contents/MacOS/), or None when the zip
+    is unreadable or has none."""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            for info in zf.infolist():
+                if "/Contents/MacOS/" in info.filename \
+                        and not info.is_dir():
+                    return info.file_size
+    except (zipfile.BadZipFile, OSError):
+        return None
+    return None
 
 
 def _zip_files(zip_path: Path, files: list[tuple[Path, str]]) -> None:
@@ -388,14 +422,24 @@ def _export_desktop(game_dir: Path, target: str, preset: dict,
         return {"target": target, "status": "blocked",
                 "reason": "Godot export failed: "
                           + _error_line(output)}
-    raw_size = out_path.stat().st_size
     if target == "macos":
         # Godot already zipped the .app (export path ends .zip).
-        if raw_size < MIN_DESKTOP_BYTES:
+        # Verify the .app's main binary is really inside and
+        # non-trivial: a truncated export can exit 0 with an
+        # empty binary, and a zip-size check alone would wave a
+        # partial one through.
+        binary_size = _macos_binary_size(out_path)
+        if binary_size is None:
             return {"target": target, "status": "blocked",
-                    "reason": f"the exported macOS zip is only "
-                              f"{raw_size} bytes — not plausible "
-                              "for a real build"}
+                    "reason": "the exported macOS zip contains no "
+                              ".app main binary — the export is "
+                              "incomplete"}
+        if binary_size < MIN_MACOS_BINARY_BYTES:
+            return {"target": target, "status": "blocked",
+                    "reason": f"the exported .app's main binary "
+                              f"is only {binary_size} bytes — the "
+                              "export is incomplete (a real Godot "
+                              "binary is tens of megabytes)"}
         artifact = exports_dir / artifact_name(slug, version, target)
         shutil.copyfile(out_path, artifact)
         members = [out_path]

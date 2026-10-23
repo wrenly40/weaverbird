@@ -700,8 +700,12 @@ never a silent skip, never a fake success.
   exist with a plausible size, packaged as
   `<slug>-<version>-<target>.zip` (version from `game/VERSION`,
   else 0.1.0) and recorded with size and sha256. The macOS zip
-  is the `.app` as Godot exports it; the source zip excludes
-  `exports/`, `.godot/`, `build/` and `.git`.
+  is the `.app` as Godot exports it; its main binary is checked
+  separately, because Godot can exit 0 with a truncated binary
+  when its temp staging runs out of space — the worker blocks
+  that as an incomplete export rather than shipping it. The
+  source zip excludes `exports/`, `.godot/`, `build/` and
+  `.git`.
 - **Prerequisite honesty:** with no Godot binary or no matching
   export templates, `source` still succeeds and each desktop
   target reports blocked, naming the exact missing piece and

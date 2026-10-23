@@ -38,13 +38,16 @@ if "--export-release" in args:
         raise SystemExit(1)
     out = args[-1]
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    payload = os.urandom(1_100_000)
     if out.endswith(".zip"):
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:
+        if os.environ.get("FAKE_GODOT_MACOS_TINY"):
+            payload = b"x" * 64
+        else:
+            payload = bytes(51_000_000)
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("Game.app/Contents/MacOS/Game", payload)
     else:
         with open(out, "wb") as fh:
-            fh.write(payload)
+            fh.write(os.urandom(1_100_000))
     raise SystemExit(0)
 raise SystemExit(2)
 '''
@@ -200,6 +203,28 @@ class ExportsTest(unittest.TestCase):
             self.assertEqual(record["status"], "blocked", record)
             self.assertIn('ERROR: Project export for preset "X" '
                           "failed.", record["reason"])
+
+    def test_macos_zip_with_a_trivial_binary_is_blocked(self):
+        os.environ["FAKE_GODOT_MACOS_TINY"] = "1"
+        project = _finished_project(self.root)
+        home = _fake_home(self.root, with_templates=True)
+        report = self._run(project, home, targets=["macos"])
+        record = report["targets"][0]
+        self.assertEqual(record["status"], "blocked", record)
+        self.assertIn("main binary is only 64 bytes",
+                      record["reason"])
+
+    def test_error_line_prefers_the_informative_error(self):
+        output = (
+            'ERROR: Cannot export project with preset "macOS" '
+            "due to configuration errors:\n"
+            "Invalid bundle identifier: Identifier is missing.\n"
+            'ERROR: Project export for preset "macOS" failed.\n')
+        line = exports._error_line(output)
+        self.assertIn("Invalid bundle identifier", line)
+        generic_only = 'ERROR: Project export for preset "X" failed.\n'
+        self.assertEqual(exports._error_line(generic_only),
+                         'ERROR: Project export for preset "X" failed.')
 
     def test_version_comes_from_game_version_file(self):
         project = _finished_project(self.root)
