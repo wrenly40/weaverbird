@@ -167,7 +167,8 @@ class TestScopeForm(AppTestCase):
         status, page = get(self.base + "/project/soup-game/scope")
         self.assertEqual(status, 200)
         self.assertIn("Title (working)", page)
-        self.assertIn("to go", page)
+        self.assertIn("Specified 0 of", page)
+        self.assertIn("missing", page)
         self.assertIn("Approve scope", page)
         self.assertIn("disabled", page)  # approve locked while incomplete
         status, form_page = get(self.base + "/project/soup-game/scope/form")

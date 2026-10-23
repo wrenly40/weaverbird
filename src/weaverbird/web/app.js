@@ -117,4 +117,9 @@ function followJobCard(card) {
 
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("[data-job-id]").forEach(followJobCard);
+  // Scope interview: the thread is its own scroll box — land on
+  // the latest message on every load (the flow reloads the page
+  // after each posted answer, so this also re-pins after a turn).
+  var thread = document.getElementById("chat-thread");
+  if (thread) thread.scrollTop = thread.scrollHeight;
 });

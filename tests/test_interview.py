@@ -306,6 +306,100 @@ class CliInterviewTests(unittest.TestCase):
         self.assertTrue(parsed.is_complete)
 
 
+class PromptFirstTests(unittest.TestCase):
+    """The interview consumes the starting prompt BEFORE asking
+    anything: deterministic 'Field: value' statements are applied
+    without a brain, the opening is a recap, question groups
+    cover only the gaps, a fully-covering prompt asks nothing,
+    and consumption happens exactly once."""
+
+    SPECIAL = {
+        "Dimension": "2D",
+        "Scope class": "Micro",
+        "Telemetry": "no",
+        interview.STYLE_FIELD: "bright-chunky",
+        interview.PALETTE_FIELD: "#FF7A1A",
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = Path(self.tmp) / "prompt-game"
+        self.project.mkdir(parents=True)
+        (self.project / "SCOPE.md").write_text(template_scope_text(),
+                                               encoding="utf-8")
+
+    def set_prompt(self, text):
+        scope.set_original_prompt(self.project / "SCOPE.md", text)
+
+    def prompt_for(self, names):
+        parsed = scope.load_scope(self.project / "SCOPE.md")
+        values = {f.name: self.SPECIAL.get(f.name,
+                                           "Given in the prompt.")
+                  for f in parsed.missing_fields if f.name in names}
+        return "\n".join(f"{name}: {value}"
+                         for name, value in values.items())
+
+    def test_partial_prompt_recaps_and_asks_only_gaps(self):
+        filled = {"Title (working)", "One-line pitch", "Dimension"}
+        self.set_prompt(self.prompt_for(filled))
+        state = interview.start(self.project)
+        turns = state["turns"]
+        recap = turns[0]
+        self.assertEqual(recap["kind"], "info")
+        self.assertTrue(
+            recap["text"].startswith("From your prompt I filled in:"),
+            recap["text"])
+        self.assertIn("Title (working): Given in the prompt.",
+                      recap["text"])
+        self.assertIn("Dimension: 2D", recap["text"])
+        asked = [name for turn in turns
+                 if turn.get("kind") in ("question", "samples")
+                 for name in turn.get("fields", [])]
+        self.assertTrue(asked, "gaps should still be asked about")
+        for name in filled:
+            self.assertNotIn(name, asked)
+        by_name = {f["name"]: f for f in state["fields"]}
+        for name in filled:
+            self.assertTrue(by_name[name]["filled"], name)
+        session = json.loads(
+            (self.project / interview.SESSION_REL).read_text())
+        self.assertTrue(session["prompt_extracted"])
+
+    def test_full_prompt_asks_nothing(self):
+        parsed = scope.load_scope(self.project / "SCOPE.md")
+        self.set_prompt(self.prompt_for(
+            {f.name for f in parsed.missing_fields}))
+        state = interview.start(self.project)
+        self.assertTrue(state["complete"])
+        self.assertEqual(state["missing_count"], 0)
+        kinds = [turn.get("kind") for turn in state["turns"]]
+        self.assertNotIn("question", kinds)
+        self.assertNotIn("samples", kinds)
+        recap = state["turns"][0]
+        self.assertIn("covers everything", recap["text"])
+
+    def test_prompt_is_consumed_exactly_once(self):
+        self.set_prompt(self.prompt_for({"Title (working)"}))
+        interview.start(self.project)
+        session = json.loads(
+            (self.project / interview.SESSION_REL).read_text())
+        turn_count = len(session["turns"])
+        interview.start(self.project)
+        interview.respond(self.project, "")
+        session = json.loads(
+            (self.project / interview.SESSION_REL).read_text())
+        recaps = [t for t in session["turns"]
+                  if t.get("text", "").startswith("From your prompt")]
+        self.assertEqual(len(recaps), 1)
+        self.assertEqual(len(session["turns"]), turn_count)
+
+    def test_no_prompt_behaves_as_before(self):
+        state = interview.start(self.project)
+        self.assertEqual(state["turns"][0]["text"], interview._OPENING)
+        self.assertIn("question",
+                      [t.get("kind") for t in state["turns"]])
+
+
 class AppChatTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -398,6 +492,91 @@ class AppChatTests(unittest.TestCase):
                       values["Style sample chosen "
                              "(id / link to approved sample)"])
         self.assertIn("#9B8CF2", values["Palette"])
+
+    def test_scope_panel_specified_missing_chips(self):
+        """Every field row carries an unambiguous status chip:
+        '✓ Specified' (green) when filled, 'Missing' (warn) when
+        not — in the interview panel and in the form view — and
+        the panel summary uses the Specified X of Y framing."""
+        self.chat("")  # Begin
+        self.chat("Chip Game")  # fills Title (working)
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn("Specified 1 of", page)
+        self.assertIn("missing</p>", page)
+        self.assertIn(
+            '<span class="chip green specchip">✓ Specified</span>',
+            page)
+        self.assertIn('<span class="chip warn specchip">Missing</span>',
+                      page)
+        _s, form_page = self.get(
+            f"{self.base}/project/chat-game/scope/form")
+        self.assertIn(
+            '<span class="chip green specchip">✓ Specified</span>',
+            form_page)
+        self.assertIn('<span class="chip warn specchip">Missing</span>',
+                      form_page)
+
+    def test_long_transcript_page_is_height_bounded(self):
+        """The chat layout contract: however long the transcript
+        gets, the interview page must fit the viewport — thread in
+        its own scroll box, composer pinned in the chat column,
+        scope panel scrolling independently. Structural: seeds a
+        ~40-turn session and asserts on the served HTML + CSS."""
+        import re
+        turns = []
+        for i in range(20):
+            turns.append({"role": "assistant",
+                          "text": f"Question turn {i + 1} of twenty."})
+            turns.append({"role": "user",
+                          "text": f"Answer turn {i + 1} of twenty."})
+        session = {"version": 1, "turns": turns, "pending_fields": [],
+                   "prompt_extracted": False, "samples": None}
+        session_file = self.project / interview.SESSION_REL
+        session_file.parent.mkdir(parents=True, exist_ok=True)
+        session_file.write_text(json.dumps(session), encoding="utf-8")
+
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        # All 40 turns render, oldest and latest alike.
+        self.assertIn("Question turn 1 of twenty.", page)
+        self.assertIn("Answer turn 20 of twenty.", page)
+        # The page opts into the fixed-viewport shell, the thread
+        # is the named scroll container, the composer sits inside
+        # the chat column after the thread, the panel is separate.
+        self.assertIn('class="app fitview"', page)
+        self.assertIn('<div class="thread" id="chat-thread">', page)
+        self.assertIn('class="stack action composer"', page)
+        self.assertLess(page.index('id="chat-thread"'),
+                        page.index('class="stack action composer"'))
+        self.assertLess(page.index('class="stack action composer"'),
+                        page.index('class="card scopepanel"'))
+        # The CSS contract behind those classes.
+        _s, css = self.get(f"{self.base}/style.css")
+
+        def rule(selector):
+            match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}",
+                              css)
+            self.assertIsNotNone(match, f"no CSS rule for {selector}")
+            return match.group(1)
+
+        self.assertIn("height:100vh", rule(".app.fitview"))
+        main_rule = rule(".app.fitview .main")
+        self.assertIn("flex-direction:column", main_rule)
+        self.assertIn("overflow:hidden", main_rule)
+        wrap_rule = rule(".app.fitview .main > .chatwrap")
+        self.assertIn("min-height:0", wrap_rule)
+        thread_rule = rule(".chatthread .thread")
+        self.assertIn("overflow-y:auto", thread_rule)
+        self.assertIn("min-height:0", thread_rule)
+        self.assertIn("flex:none", rule(".chatthread form.composer"))
+        panel_rule = rule(".app.fitview .scopepanel")
+        self.assertIn("overflow-y:auto", panel_rule)
+        # Other pages do NOT opt in (the project page is unscoped).
+        _s, project_page = self.get(f"{self.base}/project/chat-game")
+        self.assertNotIn("fitview", project_page)
+        # app.js pins the thread to its latest message on load.
+        _s, js = self.get(f"{self.base}/app.js")
+        self.assertIn('getElementById("chat-thread")', js)
+        self.assertIn("scrollTop", js)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ a { color:#5438C9; }
 .meta b { color:#232936; }
 .chip { display:inline-block; font-size:12px; font-weight:600; padding:5px 11px; border-radius:99px; background:#ECE8FD; color:#5438C9; }
 .chip.green { background:#E2F4EB; color:#20724C; } .chip.grey { background:#F0EFF5; color:#68707F; } .chip.red { background:#FBE7E7; color:#B03A3A; }
+.chip.warn { background:#FBEED3; color:#8A5E14; }
+/* Specified/Missing status chip on scope fields (panel + form). */
+.specchip { flex:none; align-self:flex-start; margin-left:8px; white-space:nowrap; }
+.fieldrow .specchip { margin-left:auto; }
 .row { display:grid; grid-template-columns:2fr 1fr; gap:20px; margin-top:20px; }
 .bar { height:9px; background:#ECEAF2; border-radius:99px; overflow:hidden; margin:12px 0 8px; }
 .bar i { display:block; height:100%; background:#6C4CF1; border-radius:99px; }
@@ -94,6 +98,26 @@ audio { width:100%; max-width:300px; }
 .swatches { display:flex; gap:5px; }
 .swatch { width:18px; height:18px; border-radius:6px; border:1px solid rgba(35,41,54,.15); display:inline-block; }
 .btn.small { padding:7px 13px; font-size:13px; }
+/* Scope interview, fixed viewport: the page never grows with the
+   conversation. The app shell is exactly one viewport tall, the
+   main column is a flex column (header/notice/job card keep their
+   natural height), and the chat grid takes whatever room is left.
+   The thread and the scope panel each scroll inside their own
+   box (min-height: 0 is what lets a flex/grid child actually
+   shrink and scroll); the composer is pinned under the thread. */
+.app.fitview { height:100vh; }
+.app.fitview .side { overflow:hidden; }
+.app.fitview .main { display:flex; flex-direction:column; overflow:hidden; min-height:0; }
+.app.fitview .main > * { flex:none; }
+.app.fitview .main > .chatwrap { flex:1 1 auto; min-height:0; }
+.app.fitview .chatwrap { grid-template-rows:minmax(0,1fr); align-items:stretch; }
+.chatthread { display:flex; flex-direction:column; min-height:0; }
+.chatthread .thread { flex:1 1 auto; min-height:0; overflow-y:auto; margin-bottom:0; }
+.chatthread form.composer { flex:none; margin-top:14px; padding-top:14px; border-top:1px solid #F0EFF5; }
+.app.fitview .scopepanel { overflow-y:auto; min-height:0; }
+@media (max-width: 900px) {
+  .app.fitview .chatwrap { grid-template-rows:minmax(0,3fr) minmax(0,2fr); }
+}
 .scopepanel h3 { margin-bottom:4px; }
 .panelsection { font-size:12px; text-transform:uppercase; letter-spacing:.7px; color:#68707F; margin:16px 0 6px; }
 .fieldrow { display:flex; gap:9px; padding:6px 0; border-bottom:1px solid #F4F3F8; font-size:13.5px; }

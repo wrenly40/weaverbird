@@ -180,7 +180,8 @@ _BIRD_PATHS = (
 )
 
 
-def _layout(title: str, active: str, body: str, foot: str = "") -> str:
+def _layout(title: str, active: str, body: str, foot: str = "",
+            app_class: str = "") -> str:
     nav = ""
     for href, key, label in (("/", "projects", "Projects"),
                              ("/settings", "settings", "Settings")):
@@ -194,7 +195,7 @@ def _layout(title: str, active: str, body: str, foot: str = "") -> str:
 <title>{_esc(title)} — Weaverbird</title>
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
-</head><body><div class="app">
+</head><body><div class="app{app_class}">
 <div class="side">
   <div class="brand"><div class="mark"><svg width="21" height="21" viewBox="0 0 24 24">{_BIRD_PATHS}</svg></div>
   <div><b>Weaverbird</b><small>Game factory</small></div></div>
@@ -702,8 +703,11 @@ def render_scope_form(server, name: str, notice: str = "",
     for section in order:
         fields_html = ""
         for fld in groups[section]:
+            chip = ('<span class="chip green specchip">✓ Specified</span>'
+                    if fld.filled else
+                    '<span class="chip warn specchip">Missing</span>')
             fields_html += (f'<label for="f_{_esc(fld.name)}">{_esc(fld.name)}'
-                            f'{" — still missing" if not fld.filled else ""}</label>'
+                            f'{chip}</label>'
                             f'<input type="text" id="f_{_esc(fld.name)}" '
                             f'name="{_esc(fld.name)}" value="{_esc(fld.value)}">')
         form_groups += (f'<div class="q"><h4>{_esc(section)}</h4>'
@@ -857,11 +861,13 @@ def render_scope(server, name: str, notice: str = "",
             if fld["filled"]:
                 rows += (f'<div class="fieldrow done"><span class="dotok">✓</span>'
                          f'<div><b>{_esc(fld["name"])}</b>'
-                         f'<div class="fieldval">{_esc(fld["value"])}</div></div></div>')
+                         f'<div class="fieldval">{_esc(fld["value"])}</div></div>'
+                         f'<span class="chip green specchip">✓ Specified</span></div>')
             else:
                 rows += (f'<div class="fieldrow missing"><span class="dotmiss">·</span>'
                          f'<div><b>{_esc(fld["name"])}</b>'
-                         f'<div class="fieldval hint">still missing</div></div></div>')
+                         f'<div class="fieldval hint">still missing</div></div>'
+                         f'<span class="chip warn specchip">Missing</span></div>')
         panel_groups += (f'<h4 class="panelsection">{_esc(section)}</h4>'
                          f'{rows}')
     total = len(state["fields"])
@@ -873,14 +879,14 @@ def render_scope(server, name: str, notice: str = "",
                      if state["approved"] else "")
     if state["started"]:
         composer = f"""
-  <form class="stack action" method="post" action="/project/{quoted}/scope/chat">
+  <form class="stack action composer" method="post" action="/project/{quoted}/scope/chat">
     <label for="message">Your answer</label>
     <textarea id="message" name="message" rows="3" placeholder="Answer in your own words — one answer per line, or 'Field: value'…"></textarea>
     <div class="actions"><button class="btn" type="submit">Send</button></div>
   </form>"""
     else:
         composer = f"""
-  <form class="stack action" method="post" action="/project/{quoted}/scope/chat">
+  <form class="stack action composer" method="post" action="/project/{quoted}/scope/chat">
     <input type="hidden" name="message" value="">
     <div class="actions"><button class="btn" type="submit">Begin the interview</button></div>
   </form>"""
@@ -892,12 +898,12 @@ def render_scope(server, name: str, notice: str = "",
 {job_html}
 <div class="chatwrap">
   <div class="card chatthread">
-    <div class="thread">{thread}</div>
+    <div class="thread" id="chat-thread">{thread}</div>
     {composer}
   </div>
   <div class="card scopepanel">
     <h3>The scope so far</h3>
-    <p class="hint" style="margin:6px 0 4px">{filled} of {total} required fields filled · {state['missing_count']} to go</p>
+    <p class="hint" style="margin:6px 0 4px">Specified {filled} of {total} — {state['missing_count']} missing</p>
     <div class="bar"><i style="width:{(100 * filled // max(1, total))}%"></i></div>
     {panel_groups}
     <h4 class="panelsection">Approve</h4>
@@ -909,7 +915,8 @@ def render_scope(server, name: str, notice: str = "",
     </form>
   </div>
 </div>"""
-    return _layout("Scope interview", "projects", body)
+    return _layout("Scope interview", "projects", body,
+                   app_class=" fitview")
 
 
 def render_settings(server, notice: str = "", notice_kind: str = "ok") -> str:
@@ -1730,15 +1737,24 @@ class _Handler(BaseHTTPRequestHandler):
     def _post_scope_chat(self, name: str) -> None:
         """One interview turn, as a job (worker: scope): the
         engine may call the maker's brain, and the chat page's
-        live job card shows the turn landing."""
+        live job card shows the turn landing. Answered with a
+        redirect to the chat page itself (carrying ?job=): the
+        browser must sit at the page's own URL, because the job
+        card's reload re-GETs the current URL — rendering here
+        instead would strand that reload on this POST-only URL,
+        which answers GET with a 404."""
         form = self._form()
         message = form.get("message", "")
         project = self.app.project_by_name(name)
         job = self.app.jobs.submit(project["name"], project["path"],
                                    "interview-turn",
                                    params={"message": message})
-        return self._send_html(render_scope(
-            self.app, name, job_id=job["id"]))
+        quoted = urllib.parse.quote(name)
+        self.send_response(303)
+        self.send_header("Location",
+                         f"/project/{quoted}/scope?job={job['id']}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _post_scope_extract(self, name: str) -> None:
         project = self.app.project_by_name(name)

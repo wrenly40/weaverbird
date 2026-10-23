@@ -27,10 +27,15 @@ app chat and the CLI line mode share:
   to the deterministic handling for that turn and the conversation
   continues. Token use goes through brain.py as usual (ledger +
   global caps).
-- The project's Original prompt, when one is stored, is fed
-  through the existing prompt extraction FIRST (brain.py's
-  interview_from_prompt), so the conversation never re-asks what
-  the prompt already stated. Filled fields are never overwritten
+- The project's Original prompt, when one is stored, is
+  consumed ONCE, before any question is asked: brain extraction
+  first (brain.py's interview_from_prompt), then — for fields
+  still empty — explicit 'Field: value' lines parsed
+  deterministically (no other guessing without a brain). The
+  interview opens with a recap of what the prompt filled; the
+  first question group covers only the gaps, and when the
+  prompt covered everything no questions are asked at all.
+  Filled fields are never overwritten
   by parsing or extraction — the one exception is an explicit
   style pick, which is a decision: it writes the chosen sample's
   style lock, palette and shading rules.
@@ -505,11 +510,46 @@ def _brain_turn(project_dir, session: dict, parsed, text: str,
 # ---------------------------------------------------------------------------
 # The public engine
 
+def _prompt_field_lines(parsed, prompt_text: str) -> dict:
+    """Deterministic prompt consumption: explicit 'Field: value'
+    statements in the starting prompt. The stored prompt is one
+    whitespace-collapsed line, so this scans for exact known
+    field names followed by ':' — each value runs to the next
+    field marker or the end of the prompt — and validates every
+    value. Nothing else is taken from the prompt without a
+    brain: prose is never guessed into fields."""
+    text = str(prompt_text)
+    lowered = text.lower()
+    empty = {f.name.lower(): f.name for f in parsed.missing_fields}
+    markers: list[tuple[int, int, str]] = []
+    for lowered_name, name in empty.items():
+        needle = lowered_name + ":"
+        index = lowered.find(needle)
+        while index != -1:
+            markers.append((index, index + len(needle), name))
+            index = lowered.find(needle, index + 1)
+    markers.sort()
+    answers: dict = {}
+    for i, (_start, end, name) in enumerate(markers):
+        if name in answers:
+            continue
+        stop = markers[i + 1][0] if i + 1 < len(markers) else len(text)
+        raw = text[end:stop].strip().rstrip(";").strip()
+        canonical = validate_value(name, raw)
+        if canonical is not None:
+            answers[name] = canonical
+    return answers
+
+
 def start(project_dir, settings_path=None) -> dict:
     """Open the interview for a project: create the session if
-    needed, feed the stored Original prompt through extraction
-    once, and make sure the current question group is on the
-    thread. Returns the public session state."""
+    needed, consume the stored Original prompt ONCE before any
+    question is asked (brain extraction first, then explicit
+    'Field: value' lines for fields still empty), open with a
+    recap of what the prompt filled, and present the first
+    question group — which covers only the gaps, or nothing at
+    all when the prompt covered everything. Returns the public
+    session state."""
     project = Path(project_dir)
     session = load_session(project) or _new_session()
     parsed = _load_scope(project)
@@ -517,18 +557,32 @@ def start(project_dir, settings_path=None) -> dict:
         outcome = brain_module.interview_from_prompt(
             project, parsed.original_prompt,
             settings_path=settings_path)
+        applied = dict(outcome.get("applied") or {})
+        parsed = _load_scope(project)
+        explicit = _prompt_field_lines(parsed, parsed.original_prompt)
+        if explicit:
+            more, _dropped = _apply_fields(project, explicit)
+            applied.update(more)
         session["prompt_extracted"] = True
-        applied = outcome.get("applied") or {}
+        parsed = _load_scope(project)
         if applied:
+            recap = ("From your prompt I filled in: "
+                     + "; ".join(f"{name}: {value}"
+                                 for name, value in applied.items())
+                     + ".")
+            if parsed.is_complete:
+                recap += (" That covers everything the scope "
+                          "needs, so there are no questions to "
+                          "ask — check the scope panel and approve "
+                          "it when you are ready.")
+            else:
+                recap += (" I will not ask about those again — "
+                          "only about what is still missing.")
             _append_turn(session, {
                 "role": "assistant", "kind": "info", "at": _now(),
-                "text": "From your prompt I filled in: "
-                        + "; ".join(f"{name}: {value}"
-                                    for name, value in applied.items())
-                        + ". I will not ask about those again.",
-                "fields": [],
+                "text": recap,
+                "fields": sorted(applied),
             })
-        parsed = _load_scope(project)
     if not session.get("turns"):
         _append_turn(session, {
             "role": "assistant", "kind": "info", "at": _now(),
