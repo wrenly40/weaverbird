@@ -288,7 +288,8 @@ _RULES: list[tuple[str, tuple[str, ...], int]] = [
              "not working", "fails"), 3),
     ("balance", ("too hard", "too easy", "too slow", "too fast",
                  "unfair", "impossible", "frustrating", "grind",
-                 "overpowered", "weak", "difficult", "difficulty"), 2),
+                 "overpowered", "weak", "difficult", "difficulty",
+                 "brutal"), 2),
     ("confusion", ("how do", "how to", "confusing", "confused",
                    "where do", "where is", "don't understand",
                    "not clear", "what do i", "stuck", "lost"), 2),
@@ -298,6 +299,48 @@ _RULES: list[tuple[str, tuple[str, ...], int]] = [
     ("praise", ("love", "great", "fun", "awesome", "amazing",
                 "brilliant", "enjoyed", "nice", "well done"), 1),
 ]
+
+# Natural balance language (dogfood finding D7): players rarely
+# write "too hard" — they write that a round "is a wall", that it
+# "feels much harder", that the "timer ran out". These signals
+# are checked at the balance position in the rule order (after
+# bug, so a crash report mentioning a spike trap stays a bug),
+# and the comparative signal needs complaint context around the
+# word — an intensifier before it or a "than" after — so praise
+# ("the harder levels were great fun") and requests ("add an
+# easier mode") are not swallowed.
+_COMPARATIVE_RE = re.compile(r"\b(harder|easier|tougher)\b")
+_COMPARATIVE_CONTEXT = {
+    "much", "way", "so", "far", "too", "feels", "feel", "felt",
+    "gets", "get", "got", "became", "becomes", "is", "was",
+    "seems", "seem", "really", "keeps", "keep",
+}
+_RAN_OUT_RE = re.compile(r"\b(ran out|runs out|run out|running out)\b")
+_TIME_WORD_RE = re.compile(r"\b(timer|time|clock)\b")
+_WALL_RE = re.compile(
+    r"\b(difficulty spike|spike in difficulty|hit a wall|"
+    r"brick wall|is a wall|a real wall)\b")
+
+
+def _balance_signals(lowered: str) -> bool:
+    """True when the text carries a natural balance signal (D7)."""
+    if _WALL_RE.search(lowered):
+        return True
+    ran = _RAN_OUT_RE.search(lowered)
+    if ran:
+        for match in _TIME_WORD_RE.finditer(lowered):
+            if abs(match.start() - ran.start()) <= 80:
+                return True
+    for match in _COMPARATIVE_RE.finditer(lowered):
+        before = [w.strip(".,!—-")
+                  for w in lowered[:match.start()].split()[-3:]]
+        after = [w.strip(".,!—-")
+                 for w in lowered[match.end():].split()[:3]]
+        if any(w in _COMPARATIVE_CONTEXT for w in before):
+            return True
+        if "than" in after:
+            return True
+    return False
 
 _CLUSTER_WORDS = (
     "hazard", "timer", "level", "crate", "jump", "speed",
@@ -311,6 +354,8 @@ def classify_text(text: str) -> tuple[str, int]:
     lowered = f" {text.lower()} "
     for category, keywords, severity in _RULES:
         if any(keyword in lowered for keyword in keywords):
+            return category, severity
+        if category == "balance" and _balance_signals(lowered):
             return category, severity
     return "unknown", 2
 

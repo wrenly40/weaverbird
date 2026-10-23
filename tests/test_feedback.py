@@ -79,6 +79,42 @@ class TriageTests(unittest.TestCase):
             self.assertEqual(item["status"], "triaged")
             self.assertTrue(item["cluster"])
 
+    def test_natural_balance_language(self):
+        # Dogfood finding D7: the parent's real words. Players
+        # write "wall", "ran out", "much harder" — not "too hard".
+        fixture = ("Round 2 is a wall. I finished round 1 in "
+                   "seconds, then in round 2 I could not find the "
+                   "last pups and the timer ran out. Feels much "
+                   "harder than round 1.")
+        category, _severity = feedback.classify_text(fixture)
+        self.assertEqual(category, "balance")
+
+    def test_balance_corpus_and_negative_controls(self):
+        balance_texts = [
+            "Honestly the difficulty spike in level 4 feels unfair.",
+            "I keep running out of time on the clock in round 3.",
+            "The second boss got way tougher than the first one.",
+        ]
+        for text in balance_texts:
+            self.assertEqual(feedback.classify_text(text)[0],
+                             "balance", text)
+        controls = {
+            # A crash at a spike trap is a bug, not a "spike".
+            "The game crashes on the spike trap in round 2 and "
+            "freezes.": "bug",
+            # A comparative inside praise stays praise.
+            "The harder levels were great fun — loved every "
+            "minute of it.": "praise",
+            # A comparative inside a request stays a request.
+            "Could you add an easier mode for kids?": "request",
+            # A plain where-is question stays confusion.
+            "Where do I find the last pup? The map is not "
+            "clear.": "confusion",
+        }
+        for text, expected in controls.items():
+            self.assertEqual(feedback.classify_text(text)[0],
+                             expected, text)
+
     def test_ranking_mentions_times_severity(self):
         self._add("The timer is too fast")
         self._add("Timer too fast, please slow it")
