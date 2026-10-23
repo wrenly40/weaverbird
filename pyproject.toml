@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "weaverbird"
-version = "0.7.0"
+version = "0.8.0"
 description = "An open-source game factory on top of Godot: scope, budgets, connectors, provenance, pipeline state, a grey-box skeleton builder, a bring-your-own-key brain, a local app, an evidence-based finish check, composition-based game generation (archetypes as presets, plus a bespoke brain-written mechanics path), asset generation, a headless test stage with scripted playtesters, a feedback + patch loop with save-compatibility gating, bounded self-repair, a model-driven playtester, and — since 0.7.0 — every step as an independent worker coordinated by an orchestrator."
 readme = "README.md"
 requires-python = ">=3.11"

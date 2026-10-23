@@ -60,7 +60,10 @@ executable, `dist/weaverbird`.)
 wrenly40/weaverbird. Running as the standalone executable, it
 downloads the release's `weaverbird` asset, proves the new file runs
 and reports the new version, and only then swaps it in — the old one
-is kept as `weaverbird.bak`. From a source checkout it pulls and
+is kept as `weaverbird.bak`. Running as a native install, it takes
+the platform's native asset instead (`weaverbird-linux`,
+`weaverbird-windows.exe`, `weaverbird-macos.zip`), falling back to
+the zipapp asset when a release carries no native build. From a source checkout it pulls and
 rebuilds instead (and refuses while the tree is dirty); other
 installs get the exact upgrade command printed. For this to work
 end-to-end, releases are published on GitHub with the built
@@ -75,7 +78,10 @@ and `--no-open` (serve without opening a browser — for servers and
 tests).
 
 You also need Python 3.11 or newer to run it, Godot to build games
-with it, and git for versioning. Store accounts, signing keys and
+with it, and git for versioning. (No Python at all? The native
+builds — `weaverbird-linux`, `weaverbird-windows.exe`,
+`weaverbird-macos.zip` on each release — carry their interpreter
+with them; see `docs/RELEASING.md`.) Store accounts, signing keys and
 model-provider keys stay yours, in your own vault — those are external
 by nature, not missing pieces of the app.
 
@@ -172,6 +178,63 @@ takes in, what it produces, and what is built now versus later — and
 `docs/DESIGN.md` for the full design.
 
 ## What works today
+
+New in v0.8:
+
+- The scope interview is a conversation (`src/weaverbird/interview.py`).
+  One session engine drives both front ends: the app's scope page
+  is a chat — message thread on the left, the scope filling in
+  live on the right, the Approve button enabling exactly when
+  every REQUIRED field is filled — and `weaverbird interview
+  <dir>` runs the same conversation in the terminal. The existing
+  form stays as "Edit as form". Without a brain, the engine asks
+  each group of questions in plain language, captures free-text
+  or `Field: value` answers conservatively, and reflects every
+  captured field back before moving on; it never re-asks a field
+  the prompt or an earlier answer already filled (the stored
+  prompt is run through the existing extraction first). With a
+  brain configured, the cheap tier reads the transcript and the
+  still-empty fields each turn and returns strict JSON; the
+  engine validates every value against the scope schema and
+  drops anything unknown or invalid (it is re-asked, never
+  silently written), and any brain failure falls back to the
+  deterministic question for that turn. When the conversation
+  reaches the style lock, the factory generates sample cards —
+  small scenes drawn by the asset code from four candidate
+  palettes — and picking one (click, or type its name) writes
+  the style lock and the palette into the scope. Turns run as
+  jobs under the scope worker, so a slow brain call shows
+  progress like everything else.
+- Games have a dimension. The composition now carries
+  `dimension: 2d | 3d` (from the scope's Dimension field, or a
+  "3D" mention in the genre/title/pitch), defaulting to 2d with
+  every existing behaviour unchanged. One 3D preset ships:
+  **arena_3d**, the arena composition on a 3D ground plane — a
+  `CharacterBody3D` player under a follow camera, spinning
+  collectible orbs, patrolling hazards and obstacle blocks, all
+  primitive meshes coloured from the style-lock palette with an
+  ambient-lit environment (no external assets). The world
+  worker emits the 3D world data and gates it on the XZ plane;
+  the assets worker emits a material palette spec instead of
+  sprites (the icon and audio are generated as usual); the
+  shell, the bridge facts (positions gain a y the testers
+  ignore) and the scripted testers all work as they do in 2D,
+  and the full test stage passes on a generated 3D game with
+  win and lose proven. Asking for 3D with any other composition
+  is recorded honestly in the derivation and built in 2D — 3D
+  covers one flat-ground preset today; 3D platforming is not
+  claimed.
+- Native installers. `./build-native.sh` freezes Weaverbird
+  with PyInstaller into `dist/native/weaverbird-<platform>` —
+  the same app with its Python bundled in, so the machine
+  running it needs no Python at all (the zipapp stays the
+  default build). The manual GitHub workflow builds all three
+  platforms (the macOS artefact is a zipped `.app` bundle), and
+  `weaverbird update` on a native install prefers its
+  platform's native asset, falling back to the zipapp asset,
+  with the same verify-then-swap and `.bak` semantics. See
+  `docs/RELEASING.md` for how a release is cut — and why the
+  workflow stays manual (macOS minutes bill at 10×).
 
 New in v0.7:
 
@@ -527,12 +590,12 @@ From v0.1, the infrastructure:
 These are stages of the platform on the roadmap, in the order the
 pipeline runs — not things left out of scope:
 
-- The multi-turn scope interview conversation (today the prompt is
-  extracted once and the remaining questions are printed; a
-  conversational interview with style samples comes next).
 - More composition primitives (new movement, objective and fail
   kinds compose into new kinds of game without new templates),
   richer bespoke mechanics, and the iterate loop around them.
+- More of the third dimension: 3D movement beyond the flat
+  ground plane (jumping, ramps), and 3D forms of the other
+  compositions.
 - Store connectors that upload and publish (itch first), signing and
   notarisation. Publishing comes last, by the user's direction.
 

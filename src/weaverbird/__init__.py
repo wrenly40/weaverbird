@@ -31,12 +31,21 @@ structure × interactions — with the three archetypes kept as
 named presets, and a bespoke path where a brain-written module
 behind a documented contract provides mechanics no composition
 can express.
+Since 0.8.0: the scope interview is a conversation
+(interview.py — one session engine behind the app's chat page
+and `weaverbird interview`, deterministic without a brain and
+model-driven with one, with generated style-sample cards for
+the style lock), the composition has a dimension (one 3D
+preset, the flat-ground arena_3d, with materials instead of
+sprites), and native installers (PyInstaller binaries per
+platform, built by build-native.sh and the manual workflow;
+`update` prefers the platform's native asset when frozen).
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

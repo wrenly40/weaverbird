@@ -22,3 +22,80 @@ jobs:
         run: ./build.sh
       - name: Smoke-test the built app
         run: ./dist/weaverbird doctor
+
+  # Native binaries (no Python on the user's machine), built with
+  # PyInstaller via build-native.sh — the same script a local build
+  # uses. Manual dispatch only, like everything in this workflow:
+  # a full run costs real minutes (macOS bills at 10x), so cutting
+  # the native artefacts for a release is a deliberate act. See
+  # docs/RELEASING.md.
+  native:
+    name: Native (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            binary: dist/native/weaverbird-linux
+            artifact: weaverbird-linux
+          - os: windows-latest
+            label: windows
+            binary: dist/native/weaverbird-windows.exe
+            artifact: weaverbird-windows.exe
+          - os: macos-latest
+            label: macos
+            binary: dist/native/weaverbird-macos
+            artifact: weaverbird-macos.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install pyyaml pyinstaller
+      - name: Build the native binary
+        shell: bash
+        run: ./build-native.sh
+      - name: Verify the binary runs clean
+        shell: bash
+        run: |
+          "${{ matrix.binary }}" version
+          "${{ matrix.binary }}" doctor
+      - name: Wrap the macOS app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VERSION=$(PYTHONPATH=src python -c "from weaverbird import __version__; print(__version__)")
+          mkdir -p dist/native/Weaverbird.app/Contents/MacOS
+          mv dist/native/weaverbird-macos dist/native/Weaverbird.app/Contents/MacOS/weaverbird
+          cat > dist/native/Weaverbird.app/Contents/Info.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>Weaverbird</string>
+            <key>CFBundleDisplayName</key>
+            <string>Weaverbird</string>
+            <key>CFBundleIdentifier</key>
+            <string>works.wren.weaverbird</string>
+            <key>CFBundleExecutable</key>
+            <string>weaverbird</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+          </dict>
+          </plist>
+          PLIST
+          cd dist/native && zip -r weaverbird-macos.zip Weaverbird.app
+      - name: Upload the artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact == 'weaverbird-macos.zip' && 'dist/native/weaverbird-macos.zip' || matrix.binary }}
+          if-no-files-found: error

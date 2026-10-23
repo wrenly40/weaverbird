@@ -124,6 +124,180 @@ class TestZipappSwap(ZipappCase):
         self.assertEqual(self.target.read_bytes(), b"old-executable")
 
 
+class TestNativeAssetSelection(unittest.TestCase):
+    """The fake-release-payload tests for native asset choice:
+    a frozen install prefers its platform's native asset and
+    falls back to the zipapp asset; nothing else changes."""
+
+    FULL = {
+        "weaverbird": "https://example.invalid/weaverbird",
+        "weaverbird-linux": "https://example.invalid/linux",
+        "weaverbird-windows.exe": "https://example.invalid/win",
+        "weaverbird-macos.zip": "https://example.invalid/mac",
+    }
+
+    def test_platform_names(self):
+        self.assertEqual(update.native_asset_name("linux"),
+                         "weaverbird-linux")
+        self.assertEqual(update.native_asset_name("win32"),
+                         "weaverbird-windows.exe")
+        self.assertEqual(update.native_asset_name("darwin"),
+                         "weaverbird-macos.zip")
+        self.assertIsNone(update.native_asset_name("sunos5"))
+
+    def test_frozen_prefers_the_native_asset(self):
+        self.assertEqual(
+            update.select_update_asset(self.FULL, platform="linux",
+                                       frozen=True),
+            ("weaverbird-linux", "https://example.invalid/linux"))
+        self.assertEqual(
+            update.select_update_asset(self.FULL, platform="win32",
+                                       frozen=True),
+            ("weaverbird-windows.exe", "https://example.invalid/win"))
+        self.assertEqual(
+            update.select_update_asset(self.FULL, platform="darwin",
+                                       frozen=True),
+            ("weaverbird-macos.zip", "https://example.invalid/mac"))
+
+    def test_frozen_falls_back_to_the_zipapp_asset(self):
+        assets = {"weaverbird": "https://example.invalid/weaverbird"}
+        self.assertEqual(
+            update.select_update_asset(assets, platform="linux",
+                                       frozen=True),
+            ("weaverbird", "https://example.invalid/weaverbird"))
+
+    def test_not_frozen_never_takes_a_native_asset(self):
+        self.assertEqual(
+            update.select_update_asset(self.FULL, platform="linux",
+                                       frozen=False),
+            ("weaverbird", "https://example.invalid/weaverbird"))
+
+    def test_no_usable_asset_is_none(self):
+        self.assertIsNone(update.select_update_asset(
+            {}, platform="linux", frozen=True))
+        self.assertIsNone(update.select_update_asset(
+            {"weaverbird-linux": "https://example.invalid/linux"},
+            platform="linux", frozen=False))
+
+
+class NativeCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.target = self.tmp / "weaverbird-linux"
+        self.target.write_bytes(b"old-native")
+        self.target.chmod(0o755)
+        self.info = release("v99.0.0", {
+            "weaverbird": "https://example.invalid/weaverbird",
+            "weaverbird-linux": "https://example.invalid/linux",
+        })
+
+    def drive(self, download=None, run=None):
+        with mock.patch.object(update, "latest_release",
+                               return_value=self.info), \
+                mock.patch.object(update, "detect_install",
+                                  return_value=("native", self.target)), \
+                mock.patch.object(update.sys, "platform", "linux"), \
+                mock.patch.object(update, "_download",
+                                  download or self._write_new), \
+                mock.patch.object(update, "_run",
+                                  run or (lambda cmd, cwd=None:
+                                          (0, "weaverbird 99.0.0"))):
+            return run_captured()
+
+    @staticmethod
+    def _write_new(url, dest):
+        Path(dest).write_bytes(b"new-native")
+
+
+class TestNativeSwap(NativeCase):
+    def test_happy_path_downloads_native_and_keeps_backup(self):
+        seen = {}
+
+        def download(url, dest):
+            seen["url"] = url
+            Path(dest).write_bytes(b"new-native")
+        code, text = self.drive(download=download)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(seen["url"], "https://example.invalid/linux")
+        self.assertEqual(self.target.read_bytes(), b"new-native")
+        self.assertEqual((self.tmp / "weaverbird-linux.bak").read_bytes(),
+                         b"old-native")
+
+    def test_falls_back_to_zipapp_asset_when_no_native(self):
+        self.info = release("v99.0.0", {
+            "weaverbird": "https://example.invalid/weaverbird"})
+        seen = {}
+
+        def download(url, dest):
+            seen["url"] = url
+            Path(dest).write_bytes(b"new-native")
+        code, text = self.drive(download=download)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(seen["url"],
+                         "https://example.invalid/weaverbird")
+
+    def test_verification_failure_keeps_the_original(self):
+        code, text = self.drive(
+            run=lambda cmd, cwd=None: (0, "weaverbird 0.0.1"))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.target.read_bytes(), b"old-native")
+        self.assertIn("did not verify", text)
+
+    def test_release_without_any_usable_asset(self):
+        self.info = release("v99.0.0", {})
+        code, text = self.drive()
+        self.assertEqual(code, 1)
+        self.assertIn("no executable asset for this platform", text)
+        self.assertEqual(self.target.read_bytes(), b"old-native")
+
+
+class TestDetectInstallNative(unittest.TestCase):
+    def test_frozen_detection_wins(self):
+        kind, where = update.detect_install(
+            frozen=True, executable="/opt/Weaverbird.app/Contents/MacOS/weaverbird")
+        self.assertEqual(kind, "native")
+        self.assertEqual(str(where),
+                         "/opt/Weaverbird.app/Contents/MacOS/weaverbird")
+
+
+class TestMacosBundleSwap(unittest.TestCase):
+    def test_bundle_verified_and_swapped_with_backup(self):
+        import zipfile
+
+        tmp = Path(tempfile.mkdtemp())
+        app = tmp / "Weaverbird.app"
+        exe = app / "Contents" / "MacOS" / "weaverbird"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"old-bundle-exe")
+        exe.chmod(0o755)
+
+        def download(url, dest):
+            new_app = tmp / "stage" / "Weaverbird.app"
+            new_exe = new_app / "Contents" / "MacOS" / "weaverbird"
+            new_exe.parent.mkdir(parents=True)
+            new_exe.write_bytes(b"new-bundle-exe")
+            with zipfile.ZipFile(dest, "w") as bundle:
+                bundle.write(new_exe, "Weaverbird.app/Contents/MacOS/weaverbird")
+
+        info = release("v99.0.0", {
+            "weaverbird-macos.zip": "https://example.invalid/mac"})
+        with mock.patch.object(update, "latest_release",
+                               return_value=info), \
+                mock.patch.object(update, "detect_install",
+                                  return_value=("native", exe)), \
+                mock.patch.object(update.sys, "platform", "darwin"), \
+                mock.patch.object(update, "_download", download), \
+                mock.patch.object(update, "_run",
+                                  lambda cmd, cwd=None:
+                                  (0, "weaverbird 99.0.0")):
+            code, text = run_captured()
+        self.assertEqual(code, 0, text)
+        self.assertEqual(exe.read_bytes(), b"new-bundle-exe")
+        backup_exe = (tmp / "Weaverbird.app.bak" / "Contents"
+                      / "MacOS" / "weaverbird")
+        self.assertEqual(backup_exe.read_bytes(), b"old-bundle-exe")
+
+
 class TestSourceCheckout(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
