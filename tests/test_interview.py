@@ -263,6 +263,104 @@ class AuthoritativeAnswerTests(unittest.TestCase):
         self.assertEqual(out["pending_fields"], ["Telemetry"])
 
 
+class CorrectionTests(unittest.TestCase):
+    """Dogfood finding D3: a 'Field: value' line naming an
+    already-filled field is a correction — it updates the field
+    and the interviewer confirms it, at any stage. Before
+    0.10.1 it was silently dropped."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = make_project(self.tmp)
+
+    def _values(self):
+        return {f.name: f.value for f in
+                scope.load_scope(self.project / "SCOPE.md").fields}
+
+    def _drive_all(self):
+        state_dict = interview.start(self.project)
+        for answer in ANSWERS:
+            state_dict = interview.respond(self.project, answer)
+        self.assertTrue(state_dict["complete"])
+        return state_dict
+
+    def test_mid_interview_correction_updates_and_confirms(self):
+        interview.start(self.project)
+        interview.respond(self.project, "Bubble Bounce")
+        self.assertEqual(self._values()["Title (working)"],
+                         "Bubble Bounce")
+        out = interview.respond(
+            self.project, "Title (working): Bubble Bounce II")
+        self.assertEqual(out["updated"],
+                         {"Title (working)": "Bubble Bounce II"})
+        self.assertEqual(self._values()["Title (working)"],
+                         "Bubble Bounce II")
+        reflections = [t["text"] for t in out["turns"]
+                       if t.get("kind") == "reflection"]
+        self.assertTrue(any(
+            "Updated Title (working): Bubble Bounce II" in text
+            for text in reflections), reflections)
+        # The interview carries on with the remaining groups.
+        self.assertFalse(out["complete"])
+
+    def test_post_completion_correction_by_short_field_name(self):
+        # The dogfood case: correcting the disclosure field
+        # after the scope completed, addressed by the shortened
+        # name a maker naturally uses.
+        self._drive_all()
+        out = interview.respond(
+            self.project,
+            "AI disclosure stance: Disclose AI assistance "
+            "prominently in the store listing")
+        field = ("AI disclosure stance for stores "
+                 "(follows the allowed sources)")
+        self.assertEqual(out["updated"].get(field),
+                         "Disclose AI assistance prominently "
+                         "in the store listing")
+        self.assertEqual(self._values()[field],
+                         "Disclose AI assistance prominently "
+                         "in the store listing")
+
+    def test_post_approval_correction_records_an_amendment(self):
+        self._drive_all()
+        scope.approve_scope(self.project / "SCOPE.md", by="Tester")
+        out = interview.respond(self.project, "Telemetry: yes")
+        self.assertEqual(out["updated"].get("Telemetry"), "yes")
+        self.assertEqual(self._values()["Telemetry"], "yes")
+        text = (self.project / "SCOPE.md").read_text(
+            encoding="utf-8")
+        amendments = [line for line in text.splitlines()
+                      if line.startswith("- Amendments:")]
+        self.assertEqual(len(amendments), 1)
+        self.assertIn("Telemetry", amendments[0])
+        self.assertIn("Interview correction", amendments[0])
+
+    def test_unknown_field_name_gets_a_plain_reply(self):
+        self._drive_all()
+        before = self._values()
+        out = interview.respond(
+            self.project, "Soundtrack quality: very loud")
+        self.assertEqual(out["unknown_fields"],
+                         ["Soundtrack quality"])
+        self.assertEqual(out["updated"], {})
+        self.assertEqual(self._values(), before)
+        reflections = [t["text"] for t in out["turns"]
+                       if t.get("kind") == "reflection"]
+        self.assertTrue(any(
+            "I don't have a field called" in text
+            and "Soundtrack quality" in text
+            for text in reflections), reflections)
+
+    def test_unknown_name_mid_interview_is_not_intercepted(self):
+        # Precision guard: while questions are open, a
+        # colon-shaped line that names no field is still just
+        # an answer line — no "unknown field" complaint.
+        interview.start(self.project)
+        out = interview.respond(
+            self.project, "Soundtrack quality: very loud")
+        self.assertEqual(out["unknown_fields"], [])
+
+
 class BrainInterviewTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

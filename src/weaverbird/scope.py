@@ -248,6 +248,31 @@ def set_original_prompt(path, prompt: str) -> Scope:
     return load_scope(path)
 
 
+_AMENDMENTS_RE = re.compile(r"^- Amendments:.*$", re.MULTILINE)
+
+
+def append_amendment(path, note: str, on: date | None = None) -> Scope:
+    """Record a dated amendment on the scope file's Amendments
+    line — the file's own convention: later changes are appended
+    there, dated, never edited silently. Used when a frozen
+    (approved) scope is corrected, so the approval stays honest
+    about what changed after it was given."""
+    path = Path(path)
+    if not path.exists():
+        raise ScopeError(f"Scope file not found: {path}")
+    day = (on or date.today()).isoformat()
+    entry = f"[{day}] {_one_line(note)}"
+    text = path.read_text(encoding="utf-8")
+    match = _AMENDMENTS_RE.search(text)
+    if match:
+        line = match.group(0) + " · " + entry
+        text = text[:match.start()] + line + text[match.end():]
+    else:
+        text = text.rstrip("\n") + f"\n- Amendments: {entry}\n"
+    path.write_text(text, encoding="utf-8")
+    return load_scope(path)
+
+
 def set_field_value(path, field_name: str, value) -> Scope:
     """Write one field's value into the scope file, in place.
 

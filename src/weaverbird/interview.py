@@ -468,6 +468,89 @@ def _why_hint(field_name: str) -> str:
     return hints.get(field_name, "")
 
 
+def _field_named(typed: str, names) -> str | None:
+    """The scope field a 'Name: value' line addresses, or None:
+    the full field name, its head (the part before any " (…)"
+    qualifier — "Title" for "Title (working)"), or an
+    unambiguous prefix of either ("AI disclosure stance" for
+    "AI disclosure stance for stores (follows the allowed
+    sources)" — the name a maker naturally shortens it to)."""
+    wanted = str(typed or "").strip().lower()
+    if not wanted:
+        return None
+    for name in names:
+        full = name.lower()
+        head = name.split(" (")[0].lower()
+        if wanted in (full, head):
+            return name
+        if len(wanted) >= 8 and (full.startswith(wanted)
+                                 or head.startswith(wanted)):
+            return name
+    return None
+
+
+def _explicit_corrections(project_dir, parsed, text: str):
+    """'Field: value' lines that CORRECT an already-filled field
+    (dogfood finding D3): the composer advertises the form, but
+    a correction naming a filled field used to be ignored with
+    no reply at all.
+
+    Returns (updated, dropped, unknown_names, confirmed,
+    rest_text): filled-field lines are consumed here — validated
+    authoritatively, written, and, when the scope is already
+    approved, recorded as a dated amendment on the scope file.
+    Lines naming missing fields, and everything else, pass
+    through in rest_text for the answer engines, unchanged. A
+    line naming NO field is reported as unknown only when it
+    cannot be a plain answer instead: the scope is complete
+    (nothing else could take the line), or the name is a close
+    miss for a real field."""
+    import difflib
+
+    scope_file = _scope_file(project_dir)
+    all_names = [f.name for f in parsed.fields]
+    filled = {f.name: f.value for f in parsed.fields if f.filled}
+    updated: dict = {}
+    dropped: list[str] = []
+    unknown: list[str] = []
+    confirmed: list[str] = []
+    rest: list[str] = []
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^([^:]{2,80}):\s*(.+)$", line)
+        named = _field_named(match.group(1), all_names) \
+            if match else None
+        if match and named is None:
+            typed = match.group(1).strip()
+            close = difflib.get_close_matches(
+                typed.lower(), [n.lower() for n in all_names],
+                n=1, cutoff=0.7)
+            if parsed.is_complete or close:
+                unknown.append(typed)
+                continue
+        if named is None or named not in filled:
+            rest.append(line)
+            continue
+        canonical = validate_value(named, match.group(2),
+                                   authoritative=True)
+        if canonical is None:
+            dropped.append(named)
+            continue
+        if canonical == filled[named]:
+            confirmed.append(named)
+            continue
+        scope_module.set_field_value(scope_file, named, canonical)
+        updated[named] = canonical
+        if parsed.is_approved:
+            scope_module.append_amendment(
+                scope_file,
+                f"Interview correction: {named} set to "
+                f"“{canonical}” (was “{filled[named]}”).")
+    return updated, dropped, unknown, confirmed, "\n".join(rest)
+
+
 def _deterministic_apply(project_dir, parsed,
                          text: str) -> tuple[dict, list, list, list]:
     """Parse one message without a model: 'Field: value' lines
@@ -505,13 +588,8 @@ def _deterministic_apply(project_dir, parsed,
         if not line:
             continue
         match = re.match(r"^([^:]{2,80}):\s*(.+)$", line)
-        named = None
-        if match:
-            wanted = match.group(1).strip().lower()
-            for name in empty:
-                if name.lower() == wanted:
-                    named = name
-                    break
+        named = _field_named(match.group(1), list(empty)) \
+            if match else None
         if named is not None:
             canonical = validate_value(named, match.group(2),
                                        authoritative=True)
@@ -768,6 +846,9 @@ def respond(project_dir, text: str, settings_path=None,
     dropped: list[str] = []
     ignored: list[str] = []
     uncaptured: list[str] = []
+    updated: dict = {}
+    unknown_names: list[str] = []
+    confirmed: list[str] = []
     next_message = ""
     brain_used = False
     if text:
@@ -785,6 +866,8 @@ def respond(project_dir, text: str, settings_path=None,
             out["dropped"] = dropped
             out["ignored"] = ignored
             out["uncaptured"] = uncaptured
+            out["updated"] = updated
+            out["unknown_fields"] = unknown_names
             out["brain_used"] = brain_used
             if extra:
                 out.update(extra)
@@ -828,6 +911,19 @@ def respond(project_dir, text: str, settings_path=None,
             _save_session(project, session)
             return finish()
 
+        # 'Field: value' corrections to already-filled fields
+        # run first (D3): they are explicit and addressed, so
+        # both engines honour them, and the engines then see
+        # only the lines that are left. Corrections may have
+        # written the scope, so the parsed state and the standing
+        # style choice are reloaded afterwards.
+        updated, corr_dropped, unknown_names, confirmed, text = \
+            _explicit_corrections(project, parsed, text)
+        dropped.extend(corr_dropped)
+        if updated or confirmed:
+            parsed = _load_scope(project)
+            choice = style_choice(project)
+
         # An explicit style pick is a decision, not an extraction —
         # honoured in both modes before anything else runs, but
         # only while the style lock is the pending question (so an
@@ -860,15 +956,23 @@ def respond(project_dir, text: str, settings_path=None,
             _save_session(project, session)
             return finish({"style_refused": True})
         else:
-            outcome = _brain_turn(project, session, parsed, text,
-                                  settings_path=settings_path)
+            outcome = None
+            if text.strip():
+                outcome = _brain_turn(project, session, parsed, text,
+                                      settings_path=settings_path)
             if outcome is not None:
-                applied, dropped, next_message = outcome
+                eng_applied, eng_dropped, next_message = outcome
+                applied.update(eng_applied)
+                dropped.extend(eng_dropped)
                 brain_used = True
-            else:
+            elif text.strip():
                 parsed = _load_scope(project)
-                applied, dropped, ignored, uncaptured = \
+                eng_applied, eng_dropped, ignored, uncaptured = \
                     _deterministic_apply(project, parsed, text)
+                applied.update(eng_applied)
+                dropped.extend(eng_dropped)
+            # An empty remainder means the message was entirely
+            # corrections (handled above) — no engine runs.
         if reporter is not None:
             reporter(f"Interview turn recorded "
                      f"({len(applied)} field(s) captured)")
@@ -878,6 +982,24 @@ def respond(project_dir, text: str, settings_path=None,
                 "Got it — " + "; ".join(
                     f"{name}: {value}"
                     for name, value in applied.items())))
+        if updated:
+            bits.append(_sentence(
+                "Updated " + "; ".join(
+                    f"{name}: {value}"
+                    for name, value in updated.items())))
+        if confirmed:
+            bits.append(
+                "Already as you say: "
+                + ", ".join(sorted(set(confirmed)))
+                + " — nothing to change there.")
+        if unknown_names:
+            bits.append(
+                "I don't have a field called "
+                + "; ".join(f'"{name}"' for name in unknown_names)
+                + " — the scope's fields are the ones listed in "
+                "the panel, so nothing was changed for "
+                + ("that line." if len(unknown_names) == 1
+                   else "those lines."))
         if dropped:
             whys = "; ".join(
                 f"{name} — {_why_hint(name)}" if _why_hint(name)
@@ -886,7 +1008,7 @@ def respond(project_dir, text: str, settings_path=None,
             bits.append(
                 "I could not use the answer for: " + whys
                 + ". I will ask about those again below.")
-        if uncaptured and not applied:
+        if uncaptured and not applied and not updated:
             # The turn changed nothing at all. Say so plainly,
             # with the reason — a silent re-ask here is what
             # looped makers forever on answers like "None" (D1).
@@ -922,18 +1044,21 @@ def respond(project_dir, text: str, settings_path=None,
                 "text": "\n".join(
                     bit for bit in (next_message, "\n".join(bits))
                     if bit),
-                "fields": sorted(applied),
+                "fields": sorted(set(applied) | set(updated)),
             })
         parsed = _load_scope(project)
         _maybe_present(session, project, parsed,
                        force=bool(applied or dropped or uncaptured
-                                  or ignored))
+                                  or ignored or updated
+                                  or unknown_names))
         _save_session(project, session)
     out = public_state(project, load_session(project) or session)
     out["applied"] = applied
     out["dropped"] = dropped
     out["ignored"] = ignored
     out["uncaptured"] = uncaptured
+    out["updated"] = updated
+    out["unknown_fields"] = unknown_names
     out["brain_used"] = brain_used
     return out
 
@@ -944,6 +1069,9 @@ def summary_text(state: dict) -> str:
     bits = []
     if applied:
         bits.append("Captured: " + ", ".join(sorted(applied)) + ".")
+    updated = state.get("updated") or {}
+    if updated:
+        bits.append("Updated: " + ", ".join(sorted(updated)) + ".")
     if state.get("complete"):
         bits.append("The scope is complete — ready to approve.")
     else:
