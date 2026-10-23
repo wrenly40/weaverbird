@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +39,7 @@ from pathlib import Path
 
 import yaml
 
-from . import __version__
+from . import __version__, template_text
 from . import assets_gen as assets_module
 from . import balance as balance_module
 from . import brain as brain_module
@@ -966,21 +967,105 @@ def render_scope(server, name: str, notice: str = "",
                    app_class=" fitview")
 
 
+SETTINGS_FILENAME = "global-settings.yaml"
+
+
+def _project_settings_note(server) -> str:
+    """One plain line when a project carries its own settings
+    file: brain.resolve_settings prefers project files, so the
+    maker's project file wins for that project — say so."""
+    for project in find_projects(server.workspace):
+        if (Path(project["path"]) / SETTINGS_FILENAME).exists():
+            return (f"Note: project {_esc(project['name'])} has its own "
+                    "global-settings.yaml — a project file takes "
+                    "precedence over this workspace file for that "
+                    "project.")
+    return ""
+
+
+def _ladder_fields(data: dict) -> str:
+    """The editable model ladder: one block per tier. The key
+    field takes the NAME of an environment variable — never a
+    key value — and shows whether that variable is set."""
+    models = data.get("models", {})
+    if not isinstance(models, dict):
+        models = {}
+    statuses = brain_module.brain_status(data)
+    blocks = ""
+    for tier in brain_module.TIERS:
+        entry = models.get(tier, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        provider = str(entry.get("provider") or "")
+        base_url = str(entry.get("base_url") or "")
+        display = provider
+        if provider == "openai" and brain_module._is_local(base_url):
+            display = "local"
+        options = ""
+        for value, label in (("", "None — tier off"),
+                             ("openai", "OpenAI"),
+                             ("anthropic", "Anthropic"),
+                             ("local", "Local server (no key needed)")):
+            selected = " selected" if display == value else ""
+            options += (f'<option value="{value}"{selected}>'
+                        f"{label}</option>")
+        key_env = str(entry.get("api_key_env") or "")
+        st = statuses[tier]
+        if key_env:
+            key_state = "set" if st["key_present"] else "not set"
+            key_hint = (f'<p class="hint">{_esc(key_env)} — {key_state} '
+                        "in this app's environment.</p>")
+        else:
+            key_hint = ('<p class="hint">No key variable named — '
+                        "hosted providers need one.</p>")
+        cost = entry.get("cost_per_1k_tokens")
+        blocks += f"""
+    <fieldset class="tier"><legend>{tier} tier —
+      {'usable' if st['usable'] else 'not usable'}</legend>
+      <label for="m_{tier}_provider">Provider</label>
+      <select id="m_{tier}_provider" name="m_{tier}_provider">{options}</select>
+      <label for="m_{tier}_model">Model</label>
+      <input type="text" id="m_{tier}_model" name="m_{tier}_model" value="{_esc(str(entry.get('model') or ''))}" placeholder="model name">
+      <label for="m_{tier}_base_url">Base URL <span class="hint">(blank = the provider's default)</span></label>
+      <input type="text" id="m_{tier}_base_url" name="m_{tier}_base_url" value="{_esc(base_url)}" placeholder="https://…">
+      <label for="m_{tier}_api_key_env">API key — environment variable name</label>
+      <input type="text" id="m_{tier}_api_key_env" name="m_{tier}_api_key_env" value="{_esc(key_env)}" placeholder="OPENAI_API_KEY">
+      {key_hint}
+      <label for="m_{tier}_cost">Cost per 1k tokens <span class="hint">(your estimate, for the ledger)</span></label>
+      <input type="number" step="0.0001" id="m_{tier}_cost" name="m_{tier}_cost_per_1k_tokens" value="{_esc('' if cost is None else cost)}">
+    </fieldset>"""
+    return blocks
+
+
 def render_settings(server, notice: str = "", notice_kind: str = "ok") -> str:
-    path, data = workspace_settings(server.workspace)
+    """The workspace settings page. The app edits the
+    workspace-ROOT global-settings.yaml only; when there is no
+    root file yet, one click creates it from the shipped
+    template (the same file `init --with-settings` copies)."""
+    root = Path(server.workspace) / SETTINGS_FILENAME
     notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
                    if notice else "")
-    if path is None:
+    note = _project_settings_note(server)
+    note_html = (f'<div class="notice warn">{note}</div>' if note else "")
+    if not root.exists():
         body = f"""
-<div class="top"><div><h1>Settings</h1><div class="sub">One global settings file serves the whole factory.</div></div></div>
+<div class="top"><div><h1>Settings</h1><div class="sub">One global settings file serves the whole factory: budgets, and the model ladder the brain climbs.</div></div></div>
 {notice_html}
-<div class="empty">No <code>global-settings.yaml</code> in this workspace yet.
-Create one from the template that ships with Weaverbird
-(<code>weaverbird init &lt;dir&gt; --with-settings</code> copies it into a
-project; for the app, place it in the workspace root), fill in the budgets
-and the model ladder, and reload.</div>"""
+{note_html}
+<div class="empty">No <code>global-settings.yaml</code> in the workspace root yet — so no budgets are set and no model tier is configured.
+<form method="post" action="/settings/create" style="margin-top:14px"><button class="btn" type="submit">Create settings file</button></form>
+<p class="hint" style="margin-top:12px">One click copies the template that ships with Weaverbird — the same file
+<code>weaverbird init --with-settings</code> writes — into the workspace root. Then set the budgets and the model ladder here.</p></div>"""
         return _layout("Settings", "settings", body)
-    data = data or {}
+    _path, data = workspace_settings(server.workspace)
+    if _path != root:
+        # Only a project-level file resolved; the root file is the
+        # one this page edits, so read it directly.
+        try:
+            data = yaml.safe_load(root.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            data = {}
+    data = data if isinstance(data, dict) else {}
     budgets = data.get("budgets", {}) if isinstance(data.get("budgets"), dict) else {}
 
     def bfield(name, step="1"):
@@ -989,20 +1074,6 @@ and the model ladder, and reload.</div>"""
                 f'<input type="number" step="{step}" id="b_{name}" name="{name}" '
                 f'value="{_esc("" if value is None else value)}">')
 
-    statuses = brain_module.brain_status(data)
-    ladder_rows = ""
-    for tier in brain_module.TIERS:
-        st = statuses[tier]
-        key_text = "—"
-        if st["api_key_env"]:
-            key_text = (f"{_esc(st['api_key_env'])} — "
-                        f"{'set' if st['key_present'] else 'not set'}")
-        ladder_rows += (f"<tr><td>{tier}</td><td>{_esc(st['provider'] or '—')}</td>"
-                        f"<td>{_esc(st['model'] or '—')}</td>"
-                        f"<td>{_esc(st['base_url'] or '—')}</td>"
-                        f"<td>{key_text}</td>"
-                        f"<td>{'usable' if st['usable'] else 'not usable'}</td></tr>")
-
     validation = settings_module.validate_settings(data)
     valid_line = ("Global settings are valid."
                   if validation.ok else
@@ -1010,26 +1081,28 @@ and the model ladder, and reload.</div>"""
                       [f"missing {m}" for m in validation.missing_required]
                       + validation.errors))
     body = f"""
-<div class="top"><div><h1>Settings</h1><div class="sub">{_esc(str(path))} — budgets are edited here; everything else is shown read-only. Key values are never shown — only whether each key's environment variable is set.</div></div></div>
+<div class="top"><div><h1>Settings</h1><div class="sub">{_esc(str(root))} — the workspace settings file. Key values are never typed or shown here — only the NAME of each key's environment variable, and whether it is set.</div></div></div>
 {notice_html}
+{note_html}
 <div class="notice {'ok' if validation.ok else 'warn'}">{_esc(valid_line)}</div>
+<form class="stack" method="post" action="/settings">
 <div class="row" style="grid-template-columns:1fr 1fr;margin-top:0">
   <div class="q" style="margin-bottom:0"><h4>Budgets (global — never per game)</h4>
-    <form class="stack" method="post" action="/settings">
       {bfield("tokens_per_run")}
       {bfield("tokens_per_game")}
       {bfield("cost_ceiling_per_month", "0.01")}
       {bfield("max_build_iterations")}
       {bfield("warn_at_percent_of_cap")}
-      <div class="actions"><button class="btn" type="submit">Save budgets</button></div>
-      <p class="hint">Saving rewrites this YAML file (comments in it are not kept). Nothing else in the file changes.</p>
-    </form>
+      <p class="hint">Caps are hard stops, in tokens. The factory never raises a cap to keep its own loop alive.</p>
   </div>
-  <div class="card"><h3>Model ladder (bring your own key)</h3>
-    <table><tr><th>Tier</th><th>Provider</th><th>Model</th><th>Base URL</th><th>Key env</th><th>Status</th></tr>{ladder_rows}</table>
-    <p class="hint" style="margin-top:10px">To change a tier, edit the <code>models</code> section of the settings file. A local server (Ollama, LM Studio) needs no key when its base_url is on this machine.</p>
+  <div class="q" style="margin-bottom:0"><h4>Model ladder (bring your own key)</h4>
+    {_ladder_fields(data)}
+    <p class="hint">A local server (Ollama, LM Studio) needs no key when its base URL is on this machine.</p>
   </div>
-</div>"""
+</div>
+<div class="actions" style="margin-top:14px"><button class="btn" type="submit">Save settings</button></div>
+<p class="hint">Saving rewrites this YAML file (comments in it are not kept). An invalid save is refused and the file is left exactly as it was.</p>
+</form>"""
     return _layout("Settings", "settings", body)
 
 
@@ -1498,7 +1571,13 @@ class _Handler(BaseHTTPRequestHandler):
             if parts == ["new"]:
                 return self._send_html(render_new_project(self.app))
             if parts == ["settings"]:
-                return self._send_html(render_settings(self.app))
+                created = (query.get("created") or [""])[0] == "1"
+                return self._send_html(render_settings(
+                    self.app,
+                    notice=("Settings file created in the workspace "
+                            "root — set the budgets and the model "
+                            "ladder below, then save.")
+                    if created else ""))
             if parts[0] == "project" and len(parts) >= 2:
                 name = urllib.parse.unquote(parts[1])
                 if len(parts) == 2:
@@ -1577,6 +1656,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._post_new_project()
             if parts == ["settings"]:
                 return self._post_settings()
+            if parts == ["settings", "create"]:
+                return self._post_settings_create()
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] \
                     and parts[3] == "cancel":
                 job = self.app.jobs.cancel(urllib.parse.unquote(parts[2]))
@@ -1882,18 +1963,45 @@ class _Handler(BaseHTTPRequestHandler):
             notice=f"Scope approved and frozen. {_esc(parsed.approval)}",
             notice_kind="ok"))
 
+    def _post_settings_create(self) -> None:
+        """One click: write the shipped template to the workspace
+        root — byte-identical to what `init --with-settings`
+        copies, from the same template source — then land on the
+        editable form."""
+        root = Path(self.app.workspace) / SETTINGS_FILENAME
+        if not root.exists():
+            root.write_text(template_text(SETTINGS_FILENAME),
+                            encoding="utf-8")
+        return self._redirect("/settings?created=1")
+
     def _post_settings(self) -> None:
-        path, data = workspace_settings(self.app.workspace)
-        if path is None:
-            return self._fail_page("No global-settings.yaml exists in this workspace.")
+        """Save budgets AND the model ladder to the workspace-root
+        settings file. Only whitelisted field names are read from
+        the form — a key VALUE posted under any other name is
+        ignored, never stored. Validation runs before any write:
+        an invalid save leaves the file byte-identical."""
+        root = Path(self.app.workspace) / SETTINGS_FILENAME
+        if not root.exists():
+            return self._fail_page(
+                "No global-settings.yaml exists in the workspace root "
+                "yet — create one from the Settings page first.")
         form = self._form()
-        data = dict(data or {})
-        budgets = dict(data.get("budgets", {}))
+        try:
+            data = yaml.safe_load(root.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data = dict(data)
+        budgets = dict(data.get("budgets", {})
+                       if isinstance(data.get("budgets"), dict) else {})
         numeric = {"tokens_per_run": int, "tokens_per_game": int,
                    "max_build_iterations": int, "warn_at_percent_of_cap": int,
                    "cost_ceiling_per_month": float}
         errors = []
         for field_name, convert in numeric.items():
+            if field_name not in form:
+                continue
             raw = form.get(field_name, "")
             if raw is None or str(raw).strip() == "":
                 budgets[field_name] = None
@@ -1902,25 +2010,70 @@ class _Handler(BaseHTTPRequestHandler):
                 budgets[field_name] = convert(str(raw).strip())
             except ValueError:
                 errors.append(f"{field_name} must be a number.")
+        data["budgets"] = budgets
+
+        models = data.get("models")
+        models = dict(models) if isinstance(models, dict) else {}
+        for tier in brain_module.TIERS:
+            prefix = f"m_{tier}_"
+            if not any(key.startswith(prefix) for key in form):
+                continue  # this POST did not carry the ladder at all
+            entry = models.get(tier)
+            entry = dict(entry) if isinstance(entry, dict) else {}
+            provider = str(form.get(prefix + "provider", "")).strip()
+            model = str(form.get(prefix + "model", "")).strip()
+            base_url = str(form.get(prefix + "base_url", "")).strip()
+            key_env = str(form.get(prefix + "api_key_env", "")).strip()
+            if key_env and not re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]*", key_env):
+                errors.append(
+                    f"{tier} tier: the key field takes the NAME of an "
+                    "environment variable (letters, digits, "
+                    "underscores) — never the key itself.")
+            if provider == "":
+                entry["model"] = ""
+            elif provider == "local":
+                entry["provider"] = "openai"
+                entry["model"] = model
+                entry["base_url"] = base_url or "http://localhost:11434/v1"
+                entry["api_key_env"] = key_env
+            elif provider in brain_module.PROVIDERS:
+                entry["provider"] = provider
+                entry["model"] = model
+                entry["base_url"] = base_url
+                entry["api_key_env"] = key_env
+            else:
+                errors.append(f"{tier} tier: unknown provider "
+                              f"{provider!r}.")
+            cost_raw = str(form.get(prefix + "cost_per_1k_tokens", "")
+                           ).strip()
+            if cost_raw:
+                try:
+                    entry["cost_per_1k_tokens"] = float(cost_raw)
+                except ValueError:
+                    errors.append(f"{tier} tier: the cost per 1k "
+                                  "tokens must be a number.")
+            models[tier] = entry
+        if models:
+            data["models"] = models
         if errors:
             return self._send_html(render_settings(
                 self.app, notice="Not saved: " + "; ".join(errors),
                 notice_kind="bad"))
-        candidate = dict(data)
-        candidate["budgets"] = budgets
-        validation = settings_module.validate_settings(candidate)
+        validation = settings_module.validate_settings(data)
         if not validation.ok:
             problems = [f"missing {m}" for m in validation.missing_required] \
                 + validation.errors
             return self._send_html(render_settings(
                 self.app,
-                notice="Not saved — the budgets would be invalid: "
+                notice="Not saved — the settings would be invalid: "
                        + "; ".join(problems),
                 notice_kind="bad"))
-        path.write_text(yaml.safe_dump(candidate, sort_keys=False),
+        root.write_text(yaml.safe_dump(data, sort_keys=False),
                         encoding="utf-8")
         return self._send_html(render_settings(
-            self.app, notice="Budgets saved to the workspace global settings.",
+            self.app, notice="Settings saved to the workspace global "
+                             "settings file.",
             notice_kind="ok"))
 
 

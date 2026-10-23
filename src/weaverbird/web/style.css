@@ -60,6 +60,11 @@ td, th { padding:9px 4px; border-bottom:1px solid #F0EFF5; text-align:left; vert
 tr:last-child td { border:none; } td.r, th.r { text-align:right; }
 form.stack label { display:block; font-size:13.5px; font-weight:600; margin:13px 0 6px; }
 form.stack label:first-of-type { margin-top:0; }
+form.stack select { width:100%; padding:9px 11px; border:1px solid var(--line);
+  border-radius:9px; font:inherit; background:#fff; }
+form.stack fieldset.tier { border:1px solid var(--line); border-radius:10px;
+  padding:4px 14px 14px; margin:14px 0 0; }
+form.stack fieldset.tier legend { font-weight:650; padding:0 6px; }
 input[type=text], input[type=number], textarea, select { width:100%; background:#F7F6FA; border:1.5px solid #E5E3EE; border-radius:11px; padding:10px 13px; font-size:14px; color:#232936; font-family:inherit; }
 textarea { line-height:1.45; }
 input:focus, textarea:focus { outline:2px solid #B7A6F7; border-color:#6C4CF1; background:#fff; }

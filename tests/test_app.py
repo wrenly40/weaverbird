@@ -18,6 +18,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import yaml  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text, template_scope_text  # noqa: E402
 
@@ -235,6 +237,166 @@ class TestSettingsPage(AppTestCase):
                 encoding="utf-8"))
         self.assertEqual(saved["budgets"]["tokens_per_game"], 9000)
         self.assertEqual(saved["models"]["cheap"]["provider"], "openai")
+
+
+class TestSettingsLadder(AppTestCase):
+    """0.9.0 (S): the settings form edits the full file — budgets
+    AND the model ladder — in the workspace-root file only, and
+    can create that file from the shipped template."""
+
+    def setUp(self):
+        super().setUp()
+        self.settings_path = self.workspace / "global-settings.yaml"
+        self.settings_path.write_text(
+            "budgets:\n"
+            "  tokens_per_run: 4000\n"
+            "  tokens_per_game: 9000\n"
+            "  cost_ceiling_per_month: null\n"
+            "  max_build_iterations: 3\n"
+            "  warn_at_percent_of_cap: 80\n"
+            "models:\n"
+            "  cheap: {provider: openai, model: '', base_url: '', api_key_env: OPENAI_API_KEY, cost_per_1k_tokens: 0.0}\n",
+            encoding="utf-8")
+
+    def _budgets(self):
+        return {"tokens_per_run": "4000", "tokens_per_game": "9000",
+                "cost_ceiling_per_month": "", "max_build_iterations": "3",
+                "warn_at_percent_of_cap": "80"}
+
+    def test_ladder_fields_render(self):
+        status, page = get(self.base + "/settings")
+        self.assertEqual(status, 200)
+        self.assertIn('name="m_cheap_provider"', page)
+        self.assertIn('name="m_mid_model"', page)
+        self.assertIn('name="m_frontier_api_key_env"', page)
+        self.assertIn('value="OPENAI_API_KEY"', page)
+
+    def test_ladder_save_roundtrip_and_dashboard_reflects_it(self):
+        import os
+        os.environ.pop("WB_TEST_KEY", None)
+        fields = self._budgets()
+        fields.update({
+            "m_cheap_provider": "openai", "m_cheap_model": "test-model",
+            "m_cheap_base_url": "", "m_cheap_api_key_env": "WB_TEST_KEY",
+            "m_cheap_cost_per_1k_tokens": "0.002"})
+        status, page = post(self.base + "/settings", fields)
+        self.assertEqual(status, 200)
+        self.assertIn("saved", page)
+        data = yaml.safe_load(self.settings_path.read_text())
+        cheap = data["models"]["cheap"]
+        self.assertEqual(cheap["provider"], "openai")
+        self.assertEqual(cheap["model"], "test-model")
+        self.assertEqual(cheap["api_key_env"], "WB_TEST_KEY")
+        self.assertEqual(cheap["cost_per_1k_tokens"], 0.002)
+        # the form shows the saved tier, with the honest key state
+        status, page = get(self.base + "/settings")
+        self.assertIn('value="test-model"', page)
+        self.assertIn("WB_TEST_KEY — not set", page)
+        # and the dashboard brain card derives the same status
+        status, page = get(self.base + "/")
+        self.assertIn("cheap — configured, key missing (WB_TEST_KEY)",
+                      page)
+
+    def test_local_provider_needs_no_key(self):
+        fields = self._budgets()
+        fields.update({
+            "m_mid_provider": "local", "m_mid_model": "llama3",
+            "m_mid_base_url": "", "m_mid_api_key_env": "",
+            "m_mid_cost_per_1k_tokens": ""})
+        status, page = post(self.base + "/settings", fields)
+        self.assertEqual(status, 200)
+        self.assertIn("saved", page)
+        data = yaml.safe_load(self.settings_path.read_text())
+        mid = data["models"]["mid"]
+        self.assertEqual(mid["provider"], "openai")
+        self.assertEqual(mid["model"], "llama3")
+        self.assertEqual(mid["base_url"], "http://localhost:11434/v1")
+        status, page = get(self.base + "/")
+        self.assertIn("mid — openai/llama3, key set", page)
+
+    def test_tier_off_clears_the_model(self):
+        fields = self._budgets()
+        fields.update({
+            "m_cheap_provider": "", "m_cheap_model": "ignored",
+            "m_cheap_base_url": "", "m_cheap_api_key_env": "",
+            "m_cheap_cost_per_1k_tokens": ""})
+        post(self.base + "/settings", fields)
+        data = yaml.safe_load(self.settings_path.read_text())
+        self.assertEqual(data["models"]["cheap"]["model"], "")
+
+    def test_invalid_save_leaves_the_file_byte_identical(self):
+        before = self.settings_path.read_bytes()
+        fields = self._budgets()
+        fields["tokens_per_run"] = "-5"
+        status, page = post(self.base + "/settings", fields)
+        self.assertEqual(status, 200)
+        self.assertIn("Not saved", page)
+        self.assertEqual(self.settings_path.read_bytes(), before)
+
+    def test_bad_key_env_name_refused_and_file_untouched(self):
+        before = self.settings_path.read_bytes()
+        fields = self._budgets()
+        fields.update({
+            "m_cheap_provider": "openai", "m_cheap_model": "m",
+            "m_cheap_base_url": "",
+            "m_cheap_api_key_env": "sk-not-a-name!",
+            "m_cheap_cost_per_1k_tokens": ""})
+        status, page = post(self.base + "/settings", fields)
+        self.assertEqual(status, 200)
+        self.assertIn("Not saved", page)
+        self.assertIn("never the key itself", page)
+        self.assertEqual(self.settings_path.read_bytes(), before)
+
+    def test_a_posted_key_value_is_never_persisted(self):
+        secret = "sk-live-SECRET-0123456789"
+        fields = self._budgets()
+        fields.update({
+            "api_key": secret, "m_cheap_api_key": secret,
+            "OPENAI_API_KEY": secret,
+            "m_cheap_provider": "openai", "m_cheap_model": "test-model",
+            "m_cheap_base_url": "", "m_cheap_api_key_env": "WB_TEST_KEY",
+            "m_cheap_cost_per_1k_tokens": ""})
+        status, page = post(self.base + "/settings", fields)
+        self.assertEqual(status, 200)
+        self.assertNotIn(secret, self.settings_path.read_text())
+        self.assertNotIn(secret, page)
+        status, page = get(self.base + "/settings")
+        self.assertNotIn(secret, page)
+        status, page = get(self.base + "/")
+        self.assertNotIn(secret, page)
+
+    def test_project_level_file_is_noted_as_taking_precedence(self):
+        (self.project / "global-settings.yaml").write_text(
+            "budgets:\n  tokens_per_run: 1\n  tokens_per_game: 2\n",
+            encoding="utf-8")
+        status, page = get(self.base + "/settings")
+        self.assertEqual(status, 200)
+        self.assertIn("takes", page)
+        self.assertIn("precedence", page)
+        self.assertIn("bee-game", page)
+
+
+class TestSettingsCreation(AppTestCase):
+    """No settings file anywhere: the page offers one-click
+    creation from the shipped template."""
+
+    def test_create_writes_the_template_to_the_workspace_root(self):
+        from weaverbird import template_text
+        root = self.workspace / "global-settings.yaml"
+        self.assertFalse(root.exists())
+        status, page = get(self.base + "/settings")
+        self.assertEqual(status, 200)
+        self.assertIn("Create settings file", page)
+        self.assertIn('action="/settings/create"', page)
+        status, page = post(self.base + "/settings/create", {})
+        self.assertEqual(status, 200)
+        self.assertIn("Settings file created", page)
+        self.assertTrue(root.exists())
+        self.assertEqual(root.read_text(encoding="utf-8"),
+                         template_text("global-settings.yaml"))
+        # and the editable form is what we landed on
+        self.assertIn('name="m_cheap_provider"', page)
+        self.assertIn('name="tokens_per_run"', page)
 
 
 class TestJobActionRedirects(AppTestCase):
