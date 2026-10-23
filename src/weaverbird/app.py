@@ -54,6 +54,7 @@ from . import provenance as provenance_module
 from . import scope as scope_module
 from . import settings as settings_module
 from . import orchestrator as orchestrator_module
+from . import projects as projects_module
 from . import skeleton as skeleton_module
 from . import state as state_module
 from . import vcs as vcs_module
@@ -258,10 +259,12 @@ def render_dashboard(server) -> str:
 <div class="meta"><span>Stage: <b>{_esc(STAGE_LABELS.get(facts['stage'], facts['stage']))}</b></span><span><b>{facts['ledger']['tokens']}</b> tokens</span></div>
 </div>"""
     if not cards:
-        cards = ('<div class="empty">No projects in this workspace yet. '
-                 'A project is a folder with a SCOPE.md — create one with '
-                 '<code>weaverbird init &lt;dir&gt;</code> inside this '
-                 'workspace, then reload.</div>')
+        cards = ('<div class="empty">No projects in this workspace '
+                 'yet — start your first game.<br><br>'
+                 '<a class="btn" href="/new">New project</a>'
+                 '<p class="hint" style="margin-top:14px">From a '
+                 'terminal, <code>weaverbird init &lt;dir&gt;</code> '
+                 'inside this workspace does the same thing.</p></div>')
 
     gh = vcs_module.github_status()
     if gh["available"] and gh["logged_in"]:
@@ -304,7 +307,8 @@ def render_dashboard(server) -> str:
 <div class="meta"><span><b>{highest}</b> tokens</span><span>cap {int(cap)}</span></div></div>"""
 
     body = f"""
-<div class="top"><div><h1>Projects</h1><div class="sub">Every game in this workspace, where it is, and what it has cost.</div></div></div>
+<div class="top"><div><h1>Projects</h1><div class="sub">Every game in this workspace, where it is, and what it has cost.</div></div>
+<div><a class="btn" href="/new">New project</a></div></div>
 <div class="grid">{cards}</div>
 {_jobs_strip(server)}
 <div class="row">
@@ -320,6 +324,49 @@ def render_dashboard(server) -> str:
     foot = (f"<b>Workspace</b><br>{_esc(str(workspace))}<br><br>"
             f"<b>Total spend</b><br>{totals['tokens']} tokens · cost {totals['cost']:.4f}")
     return _layout("Projects", "projects", body, foot)
+
+
+def render_new_project(server, notice: str = "",
+                       notice_kind: str = "ok",
+                       values: dict | None = None) -> str:
+    """The New project form: a name, a folder, an optional
+    starting prompt. Creation runs through projects.new_project —
+    the same scaffold `weaverbird init` performs — so an app-made
+    project and a CLI-made one are identical on disk."""
+    values = values or {}
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
+    body = f"""
+<div class="top"><div><h1>New project</h1><div class="sub">Start a game in this workspace. Weaverbird creates the project folder and its scope file; the scope interview takes it from there.</div></div>
+<div><a class="btn ghost" href="/">Back to projects</a></div></div>
+{notice_html}
+<div class="q"><form class="stack" method="post" action="/new">
+  <label for="np_name">Project name</label>
+  <input type="text" id="np_name" name="name" value="{_esc(values.get('name', ''))}" placeholder="Star Shepherd">
+  <p class="hint">The working title of your game — it becomes the scope's Title.</p>
+  <label for="np_folder">Folder name</label>
+  <input type="text" id="np_folder" name="folder" value="{_esc(values.get('folder', ''))}" placeholder="star-shepherd">
+  <p class="hint">Lowercase letters, digits and dashes. Filled in from the name until you type your own.</p>
+  <label for="np_prompt">Starting prompt <span class="hint">(optional)</span></label>
+  <textarea id="np_prompt" name="prompt" rows="4" placeholder="Describe the game in plain words — the interview reads this first and only asks about what is missing…">{_esc(values.get('prompt', ''))}</textarea>
+  <div class="actions"><button class="btn" type="submit">Create project</button></div>
+</form></div>
+<script>
+(function () {{
+  var name = document.getElementById("np_name");
+  var folder = document.getElementById("np_folder");
+  var touched = false;
+  folder.addEventListener("input", function () {{ touched = true; }});
+  function slug(text) {{
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }}
+  name.addEventListener("input", function () {{
+    if (!touched) {{ folder.value = slug(name.value); }}
+  }});
+}})();
+</script>"""
+    return _layout("New project", "projects", body)
 
 
 def _plan_card(server, project: dict, quoted: str) -> str:
@@ -1448,6 +1495,8 @@ class _Handler(BaseHTTPRequestHandler):
                     self.app, urllib.parse.unquote(parts[1])))
             if not parts:
                 return self._send_html(render_dashboard(self.app))
+            if parts == ["new"]:
+                return self._send_html(render_new_project(self.app))
             if parts == ["settings"]:
                 return self._send_html(render_settings(self.app))
             if parts[0] == "project" and len(parts) >= 2:
@@ -1524,6 +1573,8 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
         try:
+            if parts == ["new"]:
+                return self._post_new_project()
             if parts == ["settings"]:
                 return self._post_settings()
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] \
@@ -1596,6 +1647,36 @@ class _Handler(BaseHTTPRequestHandler):
             return self._fail_page(str(exc), 404)
         except Exception as exc:
             return self._fail_page(f"{type(exc).__name__}: {exc}", 500)
+
+    def _post_new_project(self) -> None:
+        """Create a project from the dashboard's New project form.
+
+        Validation failures re-render the form with the reason in
+        plain language (projects.new_project validates before it
+        touches the disk, so a refused creation leaves nothing
+        behind). Success is a 303: into the interview when a
+        starting prompt was given — it is consumed there first —
+        and to the project page otherwise."""
+        form = self._form()
+        values = {key: form.get(key, "")
+                  for key in ("name", "folder", "prompt")}
+        try:
+            created = projects_module.new_project(
+                self.app.workspace, values["name"],
+                folder=values["folder"], prompt=values["prompt"])
+        except projects_module.ProjectError as exc:
+            return self._send_html(render_new_project(
+                self.app, notice=_esc(f"Not created. {exc}"),
+                notice_kind="bad", values=values))
+        except Exception as exc:  # a half-made folder is already removed
+            return self._send_html(render_new_project(
+                self.app,
+                notice=_esc(f"Not created. {type(exc).__name__}: {exc}"),
+                notice_kind="bad", values=values))
+        quoted = urllib.parse.quote(created["name"])
+        if values["prompt"].strip():
+            return self._redirect(f"/project/{quoted}/scope")
+        return self._redirect(f"/project/{quoted}")
 
     # -- job-backed actions ------------------------------------------------
     def _redirect(self, location: str) -> None:

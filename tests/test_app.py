@@ -387,3 +387,127 @@ class TestGenerationAndTestCards(AppTestCase):
         job = wait_for_job(self.base, page)
         self.assertEqual(job["status"], "failed")
         self.assertIn("No game found", job["error"])
+
+
+class TestNewProject(AppTestCase):
+    """0.9.0 (R): a project can be created entirely in the app —
+    the dashboard's New project form runs the same scaffold as
+    `weaverbird init`, seeds the scope title from the maker's
+    name for the game, stores an optional starting prompt for
+    the interview, and refuses cleanly (nothing left on disk)
+    when the folder cannot be used."""
+
+    def _raw_post(self, path, fields):
+        import http.client
+        host, port = self.server.server_address[:2]
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        conn.request("POST", path,
+                     body=urllib.parse.urlencode(fields),
+                     headers={"Content-Type":
+                              "application/x-www-form-urlencoded"})
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        result = (response.status, response.getheader("Location"), body)
+        conn.close()
+        return result
+
+    def test_dashboard_has_a_new_project_button(self):
+        status, page = get(self.base + "/")
+        self.assertEqual(status, 200)
+        self.assertIn('href="/new"', page)
+        self.assertIn("New project", page)
+
+    def test_empty_workspace_leads_with_new_project(self):
+        import tempfile as _tempfile
+        tmp = _tempfile.mkdtemp()
+        empty = Path(tmp) / "empty-ws"
+        empty.mkdir(parents=True)
+        server = app_module.create_server(empty, port=0)
+        thread = threading.Thread(target=server.serve_forever,
+                                  daemon=True)
+        thread.start()
+        try:
+            status, page = get(server.url.rstrip("/") + "/")
+            self.assertEqual(status, 200)
+            self.assertIn("No projects in this workspace", page)
+            self.assertIn('href="/new"', page)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_form_renders(self):
+        status, page = get(self.base + "/new")
+        self.assertEqual(status, 200)
+        self.assertIn('name="name"', page)
+        self.assertIn('name="folder"', page)
+        self.assertIn('name="prompt"', page)
+
+    def test_create_without_prompt_redirects_to_the_project_page(self):
+        status, location, _body = self._raw_post(
+            "/new", {"name": "Star Shepherd", "folder": "",
+                     "prompt": ""})
+        self.assertEqual(status, 303)
+        self.assertEqual(location, "/project/star-shepherd")
+        target = self.workspace / "star-shepherd"
+        self.assertTrue((target / "SCOPE.md").exists())
+        self.assertEqual(state.current_stage(target), "scope")
+        parsed = scope.load_scope(target / "SCOPE.md")
+        title = next(f for f in parsed.fields
+                     if f.name == "Title (working)")
+        self.assertEqual(title.value, "Star Shepherd")
+        # and the dashboard card shows the seeded title, not the slug
+        status, page = get(self.base + "/")
+        self.assertIn("Star Shepherd", page)
+
+    def test_create_with_prompt_redirects_to_the_interview(self):
+        status, location, _body = self._raw_post(
+            "/new", {"name": "Star Shepherd", "folder": "ss",
+                     "prompt": "A herding game in space."})
+        self.assertEqual(status, 303)
+        self.assertEqual(location, "/project/ss/scope")
+        parsed = scope.load_scope(self.workspace / "ss" / "SCOPE.md")
+        self.assertIn("A herding game in space.",
+                      parsed.original_prompt)
+        title = next(f for f in parsed.fields
+                     if f.name == "Title (working)")
+        self.assertEqual(title.value, "Star Shepherd")
+
+    def test_duplicate_folder_rerenders_with_error_and_creates_nothing(self):
+        before = (self.project / "SCOPE.md").read_bytes()
+        status, _location, body = self._raw_post(
+            "/new", {"name": "Bee Game", "folder": "bee-game",
+                     "prompt": ""})
+        self.assertEqual(status, 200)
+        self.assertIn("Not created", body)
+        self.assertIn("already exists", body)
+        # the existing project is untouched
+        self.assertEqual((self.project / "SCOPE.md").read_bytes(), before)
+
+    def test_bad_folder_rerenders_and_no_partial_folder_survives(self):
+        before = sorted(p.name for p in self.workspace.iterdir())
+        status, _location, body = self._raw_post(
+            "/new", {"name": "Bad", "folder": "Not A Folder",
+                     "prompt": ""})
+        self.assertEqual(status, 200)
+        self.assertIn("Not created", body)
+        self.assertEqual(
+            sorted(p.name for p in self.workspace.iterdir()), before)
+
+    def test_reserved_folder_refused(self):
+        status, _location, body = self._raw_post(
+            "/new", {"name": "Sad", "folder": "global-settings.yaml",
+                     "prompt": ""})
+        self.assertEqual(status, 200)
+        self.assertIn("reserved", body)
+        self.assertFalse((self.workspace / "global-settings.yaml"
+                          / "SCOPE.md").exists())
+
+    def test_missing_name_refused(self):
+        status, _location, body = self._raw_post(
+            "/new", {"name": "", "folder": "", "prompt": ""})
+        self.assertEqual(status, 200)
+        self.assertIn("Not created", body)
+        self.assertEqual(
+            sorted(p.name for p in self.workspace.iterdir()),
+            ["bee-game"])

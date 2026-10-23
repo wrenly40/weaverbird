@@ -43,6 +43,7 @@ from . import repair as repair_module
 from . import scope as scope_module
 from . import settings as settings_module
 from . import orchestrator as orchestrator_module
+from . import projects as projects_module
 from . import skeleton as skeleton_module
 from . import state as state_module
 from . import vcs as vcs_module
@@ -123,38 +124,11 @@ def cmd_identity(args) -> int:
 
 def cmd_init(args) -> int:
     target = Path(args.dir)
-    if target.exists() and any(target.iterdir()) and not args.force:
-        return _fail(
-            f"Refusing to initialise in {target}: the directory is not empty. "
-            "Use --force to scaffold anyway."
-        )
-    target.mkdir(parents=True, exist_ok=True)
-    created = []
-
-    scope_dest = target / "SCOPE.md"
-    scope_dest.write_text(template_text("SCOPE.md"), encoding="utf-8")
-    created.append("SCOPE.md (scope interview file — fill every REQUIRED field)")
-
-    connectors_dest = target / "connectors.yaml"
-    connectors_dest.write_text(template_text("connectors.yaml"), encoding="utf-8")
-    created.append("connectors.yaml (connector registry for this project)")
-
-    if args.with_settings:
-        settings_dest = target / "global-settings.yaml"
-        settings_dest.write_text(template_text("global-settings.yaml"), encoding="utf-8")
-        created.append("global-settings.yaml (global budgets — fill in the REQUIRED budget fields)")
-
-    state_dir = target / ".weaverbird"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_module.init_state(target)
-    created.append(".weaverbird/state.json (pipeline state, at stage: scope)")
-    provenance_file = provenance_module.provenance_path_for(target)
-    if not provenance_file.exists():
-        provenance_file.write_text(json.dumps({"records": []}, indent=2) + "\n", encoding="utf-8")
-    created.append(".weaverbird/provenance.json (asset provenance log, empty)")
-    ledger_file = ledger_module.ledger_path_for(target)
-    ledger_file.touch(exist_ok=True)
-    created.append(".weaverbird/ledger.jsonl (token/cost ledger, empty)")
+    try:
+        created = projects_module.create_project(
+            target, with_settings=args.with_settings, force=args.force)
+    except projects_module.ProjectError as exc:
+        return _fail(str(exc))
 
     print(f"Created a new Weaverbird project in {target}:")
     for item in created:
