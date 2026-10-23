@@ -68,6 +68,324 @@ def write_world(project_dir, world_data: dict) -> Path:
     return path
 
 
+# ---------------------------------------------------------------------------
+# 2D arena layouts (0.10.0) — collectibles are placed by PATTERN,
+# never in the dead-straight row the old fixed spot list produced
+# (the first five spots all sat at y≈110). The world worker owns
+# the positions now: each round's unit carries its collectibles,
+# its hazards and its spawn, and the mechanics template reads
+# them from world.json, falling back to its built-in spots only
+# when a world file predates layouts.
+#
+# Placement is deterministic: a per-project seed (the config's
+# world_seed, derived from the project title) plus the round
+# index pick a pattern and drive every random draw, so the same
+# project lays out identically on every re-run and a different
+# project lays out differently. Patterns are tried in a fixed
+# rotation; one whose positions fail the layout checks (the same
+# checks the world gate runs) falls back deterministically to the
+# next, and the fallbacks are recorded in the unit.
+
+SPAWN_2D = [576, 470]
+# The 2D arena's hazard patrols: centre + horizontal range. The
+# mechanics template's built-in table is this same list — the
+# world data is the source of truth when present.
+HAZARD_SPOTS_2D = [
+    {"pos": [400, 330], "range": 170},
+    {"pos": [740, 452], "range": 140},
+    {"pos": [300, 200], "range": 130},
+    {"pos": [850, 240], "range": 120},
+    {"pos": [576, 380], "range": 180},
+]
+LAYOUT_PATTERNS = ("ring", "arc", "scattered", "clusters", "zigzag")
+# Collectibles stay inside this box (the arena rect is
+# (24,24)-(1128,624); the box keeps a margin from its edges).
+_LAYOUT_BOX = (84, 84, 1068, 564)
+_LAYOUT_MIN_PAIRWISE = 70.0
+_LAYOUT_MIN_SPAWN = 90.0
+_LAYOUT_MIN_HAZARD = 55.0
+
+
+def _dist(a, b) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+
+def _dist_to_segment(point, a, b) -> float:
+    """Distance from a point to the segment a-b."""
+    ax, ay = a
+    bx, by = b
+    px, py = point
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return _dist(point, a)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy)
+                          / (dx * dx + dy * dy)))
+    return _dist(point, [ax + t * dx, ay + t * dy])
+
+
+def arena_layout_issues(positions, hazards, spawn) -> list[str]:
+    """The layout checks, shared by generation (choosing a
+    pattern) and the world gate (checking one): every collectible
+    inside the layout box, no two too close, none on the spawn,
+    none on a hazard's patrol line."""
+    issues: list[str] = []
+    x0, y0, x1, y1 = _LAYOUT_BOX
+    for pos in positions:
+        if len(pos) != 2 or not (x0 <= pos[0] <= x1
+                                 and y0 <= pos[1] <= y1):
+            issues.append(f"collectible {pos} sits outside the "
+                          "arena's layout box")
+            break
+    for i, pos in enumerate(positions):
+        for other in positions[i + 1:]:
+            if _dist(pos, other) < _LAYOUT_MIN_PAIRWISE:
+                issues.append(
+                    f"collectibles {pos} and {other} are closer "
+                    f"than {_LAYOUT_MIN_PAIRWISE:.0f}px")
+                return issues
+    for pos in positions:
+        if _dist(pos, spawn) < _LAYOUT_MIN_SPAWN:
+            issues.append(f"collectible {pos} sits too close to "
+                          "the player spawn")
+            return issues
+        for hazard in hazards:
+            hx, hy = hazard["pos"]
+            reach = hazard["range"]
+            if _dist_to_segment(pos, [hx - reach, hy],
+                                [hx + reach, hy]) < _LAYOUT_MIN_HAZARD:
+                issues.append(
+                    f"collectible {pos} sits too close to a "
+                    "hazard's patrol line")
+                return issues
+    return issues
+
+
+def _layout_positions(pattern: str, count: int, rng,
+                      hazards=(), spawn=None) -> list:
+    """One pattern's candidate positions for `count` collectibles
+    (before the layout checks judge them). The scattered pattern
+    takes the hazards and spawn so its sampling can respect the
+    clearances point by point instead of failing whole sets."""
+    import math
+
+    x0, y0, x1, y1 = _LAYOUT_BOX
+    cx, cy = 576.0, 324.0
+    if pattern == "ring":
+        # The arena's patrol lines and the spawn rule out a big
+        # centred ring (its lower arc would sit on the first
+        # hazard's line), so the ring lives in the freer
+        # upper-right space, squashed vertically. The radius also
+        # grows to whatever the pairwise spacing needs.
+        import math as _math
+        chord_min = 76.0 / (2 * _math.sin(_math.pi / max(count, 2)))
+        radius = rng.uniform(max(120.0, chord_min), 150.0)
+        start = rng.uniform(0, 2 * math.pi)
+        positions = []
+        for i in range(count):
+            angle = start + i * 2 * math.pi / count \
+                + rng.uniform(-0.1, 0.1)
+            r = radius + rng.uniform(-12, 12)
+            positions.append([round(712 + r * math.cos(angle)),
+                              round(268 + r * 0.66 * math.sin(angle))])
+        return positions
+    if pattern == "arc":
+        radius = rng.uniform(430, 510)
+        base_y = 660.0
+        positions = []
+        for i in range(count):
+            frac = i / max(count - 1, 1)
+            angle = math.pi * (0.16 + 0.68 * frac) \
+                + rng.uniform(-0.03, 0.03)
+            positions.append(
+                [round(cx + radius * math.cos(angle)
+                       + rng.uniform(-12, 12)),
+                 round(base_y - radius * math.sin(angle)
+                       + rng.uniform(-12, 12))])
+        return positions
+    if pattern == "clusters":
+        centres = []
+        for _ in range(2 if count <= 6 else 3):
+            for _try in range(50):
+                centre = [rng.uniform(x0 + 90, x1 - 90),
+                          rng.uniform(y0 + 80, y1 - 80)]
+                if all(_dist(centre, c) >= 250 for c in centres):
+                    centres.append(centre)
+                    break
+            else:
+                centres.append(centre)
+        # Points land one at a time around their centre; a point
+        # too close to an already-placed one is redrawn, so a
+        # cluster is a loose knot, not a pile.
+        positions = []
+        for i in range(count):
+            centre = centres[i % len(centres)]
+            for _try in range(30):
+                point = [round(min(max(
+                    centre[0] + rng.gauss(0, 46), x0), x1)),
+                    round(min(max(
+                        centre[1] + rng.gauss(0, 40), y0), y1))]
+                if all(_dist(point, p) >= _LAYOUT_MIN_PAIRWISE
+                       for p in positions):
+                    break
+            positions.append(point)
+        return positions
+    if pattern == "zigzag":
+        amplitude = rng.uniform(120, 185)
+        phase = rng.uniform(0, 2 * math.pi)
+        turns = rng.uniform(1.2, 2.0)
+        positions = []
+        for i in range(count):
+            frac = i / max(count - 1, 1)
+            positions.append(
+                [round(x0 + frac * (x1 - x0) + rng.uniform(-14, 14)),
+                 round(cy + amplitude
+                       * math.sin(phase + frac * turns * math.pi)
+                       + rng.uniform(-12, 12))])
+        return positions
+    # scattered: rejection sampling with a healthy minimum
+    # spacing; candidates that break the spawn or hazard
+    # clearances are rejected on the spot.
+    positions = []
+    spacing = 115.0
+    tries = 0
+    while len(positions) < count and tries < 4000:
+        tries += 1
+        if tries % 800 == 0:
+            spacing = max(72.0, spacing - 12.0)
+        candidate = [round(rng.uniform(x0, x1)),
+                     round(rng.uniform(y0, y1))]
+        if spawn is not None and _dist(candidate, spawn) \
+                < _LAYOUT_MIN_SPAWN:
+            continue
+        if any(_dist_to_segment(
+                candidate,
+                [h["pos"][0] - h["range"], h["pos"][1]],
+                [h["pos"][0] + h["range"], h["pos"][1]])
+                < _LAYOUT_MIN_HAZARD for h in hazards):
+            continue
+        if all(_dist(candidate, p) >= spacing for p in positions):
+            positions.append(candidate)
+    return positions
+
+
+def _violating_indices(positions, hazards, spawn) -> set:
+    """Indices of the positions breaking a layout check."""
+    bad: set = set()
+    x0, y0, x1, y1 = _LAYOUT_BOX
+    for i, pos in enumerate(positions):
+        if len(pos) != 2 or not (x0 <= pos[0] <= x1
+                                 and y0 <= pos[1] <= y1):
+            bad.add(i)
+            continue
+        if _dist(pos, spawn) < _LAYOUT_MIN_SPAWN:
+            bad.add(i)
+        for hazard in hazards:
+            hx, hy = hazard["pos"]
+            reach = hazard["range"]
+            if _dist_to_segment(pos, [hx - reach, hy],
+                                [hx + reach, hy]) < _LAYOUT_MIN_HAZARD:
+                bad.add(i)
+    for i, pos in enumerate(positions):
+        for j in range(i + 1, len(positions)):
+            if _dist(pos, positions[j]) < _LAYOUT_MIN_PAIRWISE:
+                bad.add(i)
+                bad.add(j)
+    return bad
+
+
+def _repair_strays(positions, hazards, spawn, rng):
+    """Nudge a pattern's few stray points back inside the checks.
+
+    A pattern draw often fails on one or two points (a ring point
+    on a patrol line, a zigzag point near the spawn). When at
+    most two points violate, each is jittered — small steps first
+    — until it clears every check against the rest of the set, so
+    the pattern's shape survives. A draw failing on more points
+    is not repaired: it falls back to the next pattern, as
+    designed. Returns the repaired positions or None."""
+    positions = [list(p) for p in positions]
+    for _round in range(30):
+        bad = _violating_indices(positions, hazards, spawn)
+        if not bad:
+            return positions
+        if len(bad) > 2:
+            return None
+        moved = False
+        for i in sorted(bad):
+            placed = None
+            for scale in (40, 70, 100, 130):
+                for _try in range(12):
+                    candidate = [
+                        round(min(max(positions[i][0]
+                                      + rng.uniform(-scale, scale),
+                                      _LAYOUT_BOX[0]), _LAYOUT_BOX[2])),
+                        round(min(max(positions[i][1]
+                                      + rng.uniform(-scale, scale),
+                                      _LAYOUT_BOX[1]), _LAYOUT_BOX[3]))]
+                    trial = list(positions)
+                    trial[i] = candidate
+                    if i not in _violating_indices(
+                            trial, hazards, spawn):
+                        placed = candidate
+                        break
+                if placed is not None:
+                    break
+            if placed is None:
+                return None
+            positions[i] = placed
+            moved = True
+        if not moved:
+            return None
+    return positions if not _violating_indices(
+        positions, hazards, spawn) else None
+
+
+def arena_layout(count: int, seed: int, round_index: int = 0,
+                 patterns=LAYOUT_PATTERNS):
+    """(positions, record) for one 2D arena round.
+
+    Patterns are tried in a rotation seeded by the project; the
+    first whose positions pass arena_layout_issues wins, and the
+    record names it plus any patterns that fell back."""
+    import random
+
+    hazards = HAZARD_SPOTS_2D[:min(2 + round_index, 5)]
+    order = [patterns[(seed + round_index + k) % len(patterns)]
+             for k in range(len(patterns))]
+    fallbacks: list[str] = []
+    for name in order:
+        rng = random.Random(
+            f"arena-layout:{seed}:{round_index}:{name}")
+        for _attempt in range(40):
+            positions = _layout_positions(name, count, rng,
+                                          hazards, SPAWN_2D)
+            if len(positions) != count:
+                continue
+            if arena_layout_issues(positions, hazards, SPAWN_2D):
+                positions = _repair_strays(
+                    positions, hazards, SPAWN_2D, rng)
+                if positions is None or arena_layout_issues(
+                        positions, hazards, SPAWN_2D):
+                    continue
+            return positions, {"pattern": name, "seed": seed,
+                               "fallbacks": list(fallbacks)}
+        fallbacks.append(name)
+    # Every pattern exhausted its draws (should not happen in an
+    # arena this size): one long scattered session, whose sampling
+    # respects the clearances point by point, as the last resort.
+    rng = random.Random(f"arena-layout:{seed}:{round_index}:last")
+    for _attempt in range(200):
+        positions = _layout_positions("scattered", count, rng,
+                                      hazards, SPAWN_2D)
+        if len(positions) == count and not arena_layout_issues(
+                positions, hazards, SPAWN_2D):
+            return positions, {"pattern": "scattered", "seed": seed,
+                               "fallbacks": list(fallbacks)}
+    raise ValueError(
+        f"no arena layout passed its checks for {count} "
+        f"collectibles in round {round_index + 1}")
+
+
 def world_from_config(preset: str, config: dict,
                       composition: dict | None) -> dict:
     """The world data for a preset, extracted from the tuned
@@ -86,13 +404,23 @@ def world_from_config(preset: str, config: dict,
     elif preset == "arena_3d":
         units = _arena3d_units(config)
     else:  # arena_collector
+        seed = int(config.get("world_seed", 1234))
+        targets = int(config.get("targets_per_round", 5))
         for index in range(int(config.get("rounds", 0))):
+            count = min(targets + index, 12)
+            hazards = [dict(h) for h in
+                       HAZARD_SPOTS_2D[:min(2 + index, 5)]]
+            positions, layout = arena_layout(count, seed, index)
             units.append({
                 "index": index, "kind": "round",
                 "round": index + 1,
                 "targets_per_round": config.get("targets_per_round", 5),
                 "round_seconds": config.get("round_seconds", 60),
                 "arena": list(ARENA_SIZE),
+                "spawn": list(SPAWN_2D),
+                "collectibles": positions,
+                "hazards": hazards,
+                "layout": layout,
             })
     return {
         "preset": preset,
@@ -376,4 +704,27 @@ def _validate_round(unit: dict, index) -> list[dict]:
     arena = unit.get("arena") or []
     if len(arena) != 2 or arena[0] <= 0 or arena[1] <= 0:
         issues.append(_issue(f"round {index}: arena bounds missing"))
+    # Layout checks (0.10.0): when a round carries collectible
+    # positions, they must be the round's full set, inside the
+    # arena, spaced from each other, the spawn and the hazard
+    # patrol lines. Rounds written before layouts existed carry
+    # no positions and skip this — the template's fallback spots
+    # serve them.
+    collectibles = unit.get("collectibles")
+    if collectibles is not None:
+        round_index = unit.get("index", index)
+        if not isinstance(round_index, int):
+            round_index = 0
+        expected = (min(int(targets) + round_index, 12)
+                    if isinstance(targets, (int, float)) else None)
+        if expected is not None and len(collectibles) != expected:
+            issues.append(_issue(
+                f"round {index}: {len(collectibles)} collectible "
+                f"positions for a round that needs {expected}"))
+        hazards = unit.get("hazards") or [
+            dict(h) for h in
+            HAZARD_SPOTS_2D[:min(2 + round_index, 5)]]
+        spawn = unit.get("spawn") or SPAWN_2D
+        for detail in arena_layout_issues(collectibles, hazards, spawn):
+            issues.append(_issue(f"round {index}: {detail}"))
     return issues

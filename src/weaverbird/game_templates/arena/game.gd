@@ -24,6 +24,7 @@ const TARGET_SPOTS: Array = [
 ]
 
 var cfg: Dictionary = {}
+var _world_units: Array = []
 var accent := Color(0.42, 0.30, 0.95)
 var target_color := Color(0.25, 0.80, 0.45)
 var rounds_total: int = 3
@@ -91,6 +92,7 @@ func _load_config() -> void:
             var units: Array = wparsed.get("units", [])
             if not units.is_empty():
                 rounds_total = clampi(units.size(), 1, 20)
+                _world_units = units
     targets_per_round = clampi(int(cfg.get("targets_per_round", 5)), 1, 12)
     round_seconds = clampf(float(cfg.get("round_seconds", 60.0)), 15.0, 300.0)
     player_speed = clampf(float(cfg.get("player_speed", 330.0)), 150.0, 600.0)
@@ -111,6 +113,52 @@ func _play_sfx(sfx_name: String) -> void:
         player.play()
 
 
+func _round_spots(index: int) -> Array:
+    # The world worker's layout for this round when world.json
+    # carries one (positions by pattern — ring, arc, scattered,
+    # clusters, zigzag); the built-in spot list is the fallback
+    # for world files written before layouts existed.
+    if index >= 0 and index < _world_units.size():
+        var unit: Dictionary = _world_units[index]
+        var placed: Array = unit.get("collectibles", [])
+        if not placed.is_empty():
+            var out: Array = []
+            for spot in placed:
+                out.append(Vector2(float(spot[0]), float(spot[1])))
+            return out
+    var count := mini(targets_per_round + index, TARGET_SPOTS.size())
+    var offset := index % 3
+    var fallback: Array = []
+    for i in count:
+        fallback.append(TARGET_SPOTS[(i + offset) % TARGET_SPOTS.size()])
+    return fallback
+
+
+func _round_goal(index: int) -> int:
+    return _round_spots(index).size()
+
+
+func _round_hazards(index: int) -> Array:
+    # [[centre, patrol_range], ...] — from the world data when it
+    # carries hazard definitions, else the built-in table.
+    if index >= 0 and index < _world_units.size():
+        var unit: Dictionary = _world_units[index]
+        var defs: Array = unit.get("hazards", [])
+        if not defs.is_empty():
+            var out: Array = []
+            for d in defs:
+                var pos: Array = d.get("pos", [0, 0])
+                out.append([Vector2(float(pos[0]), float(pos[1])),
+                            float(d.get("range", 0.0))])
+            return out
+    var spots: Array = [
+        [Vector2(400, 330), 170.0], [Vector2(740, 452), 140.0],
+        [Vector2(300, 200), 130.0], [Vector2(850, 240), 120.0],
+        [Vector2(576, 380), 180.0],
+    ]
+    return spots.slice(0, mini(2 + index, 5))
+
+
 func _start_round(index: int) -> void:
     _round_index = index
     for target in _targets:
@@ -122,24 +170,15 @@ func _start_round(index: int) -> void:
     _collected = 0
     _time_left = round_seconds
     _player.position = Vector2(576, 470)
-    var count := mini(targets_per_round + index, TARGET_SPOTS.size())
-    var offset := index % 3
-    for i in count:
+    for spot in _round_spots(index):
         var marker := Marker.new()
         marker.kind = "target"
         marker.colour = target_color
-        marker.position = TARGET_SPOTS[(i + offset) % TARGET_SPOTS.size()]
+        marker.position = spot
         add_child(marker)
         marker.add_to_group("targets")
         _targets.append(marker)
-    var hazard_count := mini(2 + index, 5)
-    var spots: Array = [
-        [Vector2(400, 330), 170.0], [Vector2(740, 452), 140.0],
-        [Vector2(300, 200), 130.0], [Vector2(850, 240), 120.0],
-        [Vector2(576, 380), 180.0],
-    ]
-    for i in hazard_count:
-        var definition: Array = spots[i]
+    for definition in _round_hazards(index):
         var hazard := Marker.new()
         hazard.kind = "hazard"
         hazard.colour = HAZARD_COLOR
@@ -219,8 +258,7 @@ func _check_markers() -> void:
             _collected += 1
             _total_collected += 1
             _play_sfx("collect")
-            if _collected >= mini(targets_per_round + _round_index,
-                    TARGET_SPOTS.size()):
+            if _collected >= _round_goal(_round_index):
                 if _round_index + 1 >= rounds_total:
                     _win()
                 else:
@@ -235,7 +273,7 @@ func _check_markers() -> void:
 
 
 func _update_hud() -> void:
-    var goal := mini(targets_per_round + _round_index, TARGET_SPOTS.size())
+    var goal := _round_goal(_round_index)
     _hud.text = "Round: %d / %d    Targets: %d / %d    Time: %d" % [
         _round_index + 1, rounds_total, _collected, goal, int(ceil(_time_left))]
 
@@ -261,7 +299,7 @@ func _on_menu_pressed() -> void:
 func _targets_total() -> int:
     var total := 0
     for i in rounds_total:
-        total += mini(targets_per_round + i, TARGET_SPOTS.size())
+        total += _round_goal(i)
     return total
 
 
@@ -311,7 +349,7 @@ func bridge_actions() -> Array:
 
 
 func bridge_state() -> Dictionary:
-    var goal := mini(targets_per_round + _round_index, TARGET_SPOTS.size())
+    var goal := _round_goal(_round_index)
     var spots: Array = []
     for target in get_tree().get_nodes_in_group("targets"):
         var node := target as Node2D

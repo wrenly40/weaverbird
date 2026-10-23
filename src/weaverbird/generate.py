@@ -885,12 +885,20 @@ def deterministic_config(archetype: str, values: dict, palette: dict,
         values.get("Session length (one sitting)", ""))
     round_seconds = skeleton_module._round_seconds(minutes)
     if archetype == "arena_collector":
+        # The seed the world worker lays the rounds out from
+        # (0.10.0 layout patterns): derived from the project's
+        # identity, so the same project re-lays-out identically
+        # and another project gets another layout.
+        import zlib
+        seed = zlib.crc32(
+            values.get("Title (working)", "").encode("utf-8")) + units
         config.update({
             "rounds": units,
             "targets_per_round": 5,
             "round_seconds": round_seconds,
             "player_speed": 330.0,
             "hazard_speed": 1.4,
+            "world_seed": seed,
         })
         _apply_scope_target_count(config, values)
     elif archetype == "arena_3d":
