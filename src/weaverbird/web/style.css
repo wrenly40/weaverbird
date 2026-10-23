@@ -69,3 +69,10 @@ input:focus, textarea:focus { outline:2px solid #B7A6F7; border-color:#6C4CF1; b
 .kv dt { color:#68707F; } .kv dd { color:#232936; }
 .empty { color:#68707F; font-size:14px; padding:28px; text-align:center; background:#fff; border-radius:16px; box-shadow:0 8px 24px rgba(35,41,54,.07); }
 code { background:#F0EFF5; border-radius:6px; padding:1px 6px; font-size:12.5px; }
+/* Job cards: live progress for background jobs. */
+.joblog { list-style:none; margin-top:10px; max-height:220px; overflow-y:auto; font-size:13px; }
+.joblog li { padding:4px 0; border-bottom:1px solid #F4F3F8; }
+.joblog li:last-child { border:none; }
+.bar i.indeterminate { animation:jobslide 1.4s ease-in-out infinite alternate; }
+@keyframes jobslide { from { margin-left:0; width:35%; } to { margin-left:65%; width:35%; } }
+audio { width:100%; max-width:300px; }

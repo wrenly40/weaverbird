@@ -221,13 +221,17 @@ def _run_godot(godot_bin: str, game_dir: Path, args: list, timeout: int = 120) -
     }
 
 
-def validate_project(project_dir, godot_path=None) -> dict:
+def validate_project(project_dir, godot_path=None, reporter=None) -> dict:
     """Run Godot against the generated project. Returns the report dict.
 
     Four runs, in order: import, main (menu) scene, game scene, and
     the flow smoke run shipped in the project. A run passes when
     Godot exits 0 and prints no errors; the smoke run must also print
     its SMOKE PASS line (it exits 1 itself on failure).
+
+    ``reporter`` (optional) is called after each run with a short
+    step note — the job runner's live-progress hook. It may raise
+    to abort (job cancellation); nothing catches that here.
     """
     project = Path(project_dir)
     game_dir = project / GAME_DIR_NAME
@@ -256,7 +260,7 @@ def validate_project(project_dir, godot_path=None) -> dict:
         ("flow smoke", ["--script", "smoke/smoke.gd"]),
     ]
     passed = True
-    for name, args in steps:
+    for index, (name, args) in enumerate(steps):
         run = _run_godot(godot_bin, game_dir, args)
         run["name"] = name
         if name == "flow smoke" and not run["smoke_pass"]:
@@ -267,6 +271,11 @@ def validate_project(project_dir, godot_path=None) -> dict:
             if not run["errors"]:
                 run["errors"] = ["The smoke run did not print SMOKE PASS."]
         validation["runs"].append(run)
+        if reporter is not None:
+            reporter(
+                f"Validation run {index + 1} of {len(steps)}: {name} — "
+                f"{'ok' if run['ok'] else 'FAILED'}",
+                done=index + 1, total=len(steps))
         if not run["ok"]:
             passed = False
             break
@@ -297,13 +306,16 @@ def _write_report(project_dir, report: dict) -> None:
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
-def build_skeleton(project_dir, godot_path=None, validate: bool = True) -> dict:
+def build_skeleton(project_dir, godot_path=None, validate: bool = True,
+                   reporter=None) -> dict:
     """Build the grey-box skeleton for a project. Returns the report.
 
     Requires the project's scope to be complete AND approved. Raises
     SkeletonError with a plain reason otherwise, and when Godot
     validation fails (the report is still written, so what happened
-    is on record).
+    is on record). ``reporter`` (optional) narrates the step
+    boundaries for the job runner; with none, the build is silent
+    exactly as before.
     """
     project = Path(project_dir)
     scope_file = scope_module.scope_path_for(project)
@@ -339,6 +351,8 @@ def build_skeleton(project_dir, godot_path=None, validate: bool = True) -> dict:
         dest.write_bytes(data)
         written.append(f"{GAME_DIR_NAME}/{dest_rel}")
     written.sort()
+    if reporter is not None:
+        reporter(f"Wrote the grey-box project ({len(written)} files)")
 
     report = {
         "stage": "skeleton",
@@ -351,7 +365,8 @@ def build_skeleton(project_dir, godot_path=None, validate: bool = True) -> dict:
     }
 
     if validate:
-        report["validation"] = validate_project(project, godot_path=godot_path)
+        report["validation"] = validate_project(
+            project, godot_path=godot_path, reporter=reporter)
 
     # The factory's records: provenance for every generated file, and
     # a zero-cost ledger entry — this stage is deterministic.
@@ -382,6 +397,8 @@ def build_skeleton(project_dir, godot_path=None, validate: bool = True) -> dict:
         report["known_good_tag"] = KNOWN_GOOD_TAG
     elif validate:
         report["known_good_tag"] = KNOWN_GOOD_TAG
+    if validate and reporter is not None:
+        reporter("Committed and tagged known-good/skeleton")
     _write_report(project, report)
     return report
 

@@ -31,6 +31,26 @@ def post(url, fields=None):
         return response.status, response.read().decode("utf-8")
 
 
+def wait_for_job(base, body, timeout=60):
+    """Actions are jobs now: pull the job id out of the returned
+    page's live card and poll the JSON API until it lands."""
+    import json as _json
+    import re
+    import time as _time
+    match = re.search(r'data-job-id="([^"]+)"', body)
+    assert match, "the page carries no job card"
+    job_id = match.group(1)
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        _status, payload = get(f"{base}/api/jobs/{job_id}")
+        job = _json.loads(payload)
+        if job["status"] in ("done", "failed", "cancelled",
+                             "interrupted"):
+            return job
+        _time.sleep(0.1)
+    raise AssertionError(f"job {job_id} did not finish in {timeout}s")
+
+
 class Pass3AppTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -69,6 +89,10 @@ class Pass3AppTests(unittest.TestCase):
 
         status, body = post(base + "/triage")
         self.assertEqual(status, 200)
+        job = wait_for_job(self.base, body)
+        self.assertEqual(job["status"], "done")
+        self.assertIn("Triage done", job["result"])
+        status, body = get(base)
         self.assertIn("balance", body)
 
         status, body = post(base + "/fb-001/approve")
@@ -89,7 +113,9 @@ class Pass3AppTests(unittest.TestCase):
                                        encoding="utf-8")
         status, body = post(f"{self.base}/project/bee-game/feedback/fetch")
         self.assertEqual(status, 200)
-        self.assertIn("Fetch done", body)
+        job = wait_for_job(self.base, body)
+        self.assertEqual(job["status"], "done")
+        self.assertIn("Fetch done", job["result"])
         store = feedback.load_store(self.project)
         self.assertEqual(len(store["items"]), 1)
 
@@ -101,15 +127,21 @@ class Pass3AppTests(unittest.TestCase):
         status, body = post(
             f"{self.base}/project/bee-game/patch/{item['id']}")
         self.assertEqual(status, 200)
-        self.assertIn("Patch refused", body)
+        job = wait_for_job(self.base, body)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("game_config", job["error"])
 
     def test_repair_and_model_buttons_fail_plainly(self):
         status, body = post(f"{self.base}/project/bee-game/repair")
         self.assertEqual(status, 200)
-        self.assertIn("Repair not run", body)
+        job = wait_for_job(self.base, body)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("No built game found", job["error"])
         status, body = post(f"{self.base}/project/bee-game/model-playtest")
         self.assertEqual(status, 200)
-        self.assertIn("Model playtest did not run", body)
+        job = wait_for_job(self.base, body)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("No game found", job["error"])
 
 
 if __name__ == "__main__":

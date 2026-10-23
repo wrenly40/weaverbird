@@ -551,13 +551,15 @@ def _git_head(project: Path) -> str | None:
 
 
 def start_patch(project_dir, item_id: str, settings_path=None,
-                godot_path=None, use_brain: bool = True) -> dict:
+                godot_path=None, use_brain: bool = True,
+                reporter=None) -> dict:
     """Run one approved feedback item through the patch loop.
 
     Returns an outcome dict: outcome is "patched" (with version),
     "planned" (PATCH_PLAN.md written), or "rejected" (gates failed,
     tree restored). Refusals (item not approved, category the maker
-    must decide) raise PatchError.
+    must decide) raise PatchError. ``reporter`` (optional) narrates
+    the patch gates for the job runner.
     """
     project = Path(project_dir)
     item = feedback_module.get_item(project, item_id)
@@ -582,6 +584,9 @@ def start_patch(project_dir, item_id: str, settings_path=None,
     if archetype not in generate_module.ARCHETYPES:
         raise PatchError("The game's archetype is unknown, so no safe "
                          "patch can be computed.")
+    if reporter is not None:
+        reporter(f"Planning a patch for [{item_id}] ({category})",
+                 done=0, total=4)
 
     plan_summary = ""
     change_lines: list[str] = []
@@ -649,6 +654,10 @@ def start_patch(project_dir, item_id: str, settings_path=None,
         change_lines = [f"remedy applied: {remedy} ({why})"]
 
     # --- checkpoint, capture, apply --------------------------------
+    if reporter is not None:
+        reporter(f"Patch for [{item_id}] planned: "
+                 + ("; ".join(change_lines) or plan_summary),
+                 done=1, total=4)
     vcs_module.init_repo(project)
     vcs_module.ensure_local_identity(project)
     _commit_quietly(project, f"Weaverbird patch checkpoint: {item_id}")
@@ -664,16 +673,25 @@ def start_patch(project_dir, item_id: str, settings_path=None,
     if new_config is not None:
         save_config(project, new_config)
     elif remedy == "assets":
-        assets_module.generate_assets(project)
+        assets_module.generate_assets(project, reporter=reporter)
     elif remedy == "rebuild":
-        generate_module.build_game(project, settings_path=settings_path)
+        generate_module.build_game(project, settings_path=settings_path,
+                                   reporter=reporter)
+    if reporter is not None:
+        reporter("Change applied behind the checkpoint, with the "
+                 "pre-patch save captured. Gate 1 of 2: the full "
+                 "test stage.", done=2, total=4)
 
     # --- the two gates ----------------------------------------------
     report = testing_module.run_tests(project, godot_path=godot_path,
-                                      allow_repair=False)
+                                      allow_repair=False, reporter=reporter)
     tests_ok = bool(report.get("ok"))
     save_ok, save_stats, save_errors = (False, {}, [])
     if tests_ok:
+        if reporter is not None:
+            reporter("Gate 1 passed. Gate 2 of 2: save compatibility "
+                     "— the pre-patch save must load with its stats "
+                     "intact.", done=3, total=4)
         save_ok, save_stats, save_errors = run_savecheck(
             project, snapshot, godot_path=godot_path)
 
@@ -704,6 +722,9 @@ def start_patch(project_dir, item_id: str, settings_path=None,
         tag = f"known-good/patch-{new_version}"
         if tag not in vcs_module.list_tags(project):
             vcs_module.tag_known_good(project, tag)
+        if reporter is not None:
+            reporter(f"Both gates passed — patch shipped as version "
+                     f"{new_version}.", done=4, total=4)
         return {"outcome": "patched", "item": item_id,
                 "version": new_version, "change": summary,
                 "tests_ok": True, "save_ok": True}

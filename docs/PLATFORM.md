@@ -374,38 +374,117 @@ attached.
   connectors. They plug into: connectors, pipeline state, ledger,
   vcs (each patch is a tagged version).
 
-## Jobs and the runner model (future, designed now)
+## Jobs and the runner model
 
-Stages like asset generation, builds and playtests are long-running.
-The platform treats them as jobs:
+Built in 0.6.0 (`src/weaverbird/jobs.py`). Stages like asset
+generation, builds and playtests are long-running, so every app
+action is a job:
 
-- A job is one stage run for one project. It is started, it reports
-  progress as events (below), and it ends by passing or failing its
-  stage gate.
-- Jobs are resumable. A job checkpoints as it goes: pipeline state on
-  disk, a git commit per iteration, tags on known-good states. A
-  stopped or crashed job resumes from its last checkpoint, not from
-  zero.
-- Jobs are costed as they run. Every model call inside a job writes to
-  the project ledger, and a job stops and escalates when the global
-  budget says so.
-- In v0.1 there is no runner yet — the CLI runs each step in the
-  foreground. The runner will be a library module that calls the same
-  stage handlers the CLI triggers, so the CLI, a future UI and the
-  runner never drift apart. Stage handlers already plug in through
-  `register_handler(stage, fn)` in `state.py`.
+- A job is one action run for one project: {id, workspace,
+  project, action, worker, label, status, created/started/
+  finished, events, result, error}, persisted as JSON under
+  `<workspace>/.weaverbird-app/jobs/<id>.json` the moment it
+  exists and at every step. History survives restarts; a job a
+  dead server left mid-flight is rewritten `interrupted` on the
+  next start — marked, never silently resumed. `worker` names
+  the step that ran the action (skeleton, assets, build,
+  testing, finish, repair, patch, feedback, balance,
+  model-playtest); the orchestrator planned for Pass 5 keys its
+  plan view off that field.
+- Execution is a small thread pool (max 2 concurrent). Jobs for
+  the same project serialise behind a per-project lock — two
+  Godot stages on one project would corrupt each other — while
+  jobs for different projects run side by side.
+- Progress is steps, not log spam: the stage entry points take
+  an optional `reporter` callable and report at step boundaries
+  (per validation run, per playtester, per repair attempt, per
+  patch gate). The app polls `GET /api/jobs/<id>` about every
+  1.5 seconds and updates the live job card in place; the CLI
+  reads the same records (`weaverbird jobs <workspace>`,
+  `weaverbird jobs show <workspace> <id>`). Library and CLI
+  behaviour without a reporter is unchanged.
+- Cancellation is cooperative: a cancel flag is checked at
+  every step boundary, so a cancel lands between steps — never
+  mid-Godot-run — and the record says so ("cancelled between
+  steps"). A cancelled or failed job never marks its stage
+  complete; the stage functions keep owning their state writes.
+- Jobs are costed as they run. Every model call inside a job
+  writes to the project ledger, and the budget guard stops and
+  escalates when the global settings say so.
+- Checkpoints come from the stages themselves: pipeline state
+  on disk, a git commit per stage, tags on known-good states.
+
+## The balance lab
+
+Built in 0.6.0 (`src/weaverbird/balance.py`), on top of stage 5
+/ 6 evidence. The competent and first-time scripted players
+record per-unit stats as they play (per level, per round, per
+puzzle: completed, deaths, time, and moves against budget
+where the game counts moves); the test stage aggregates them
+into `test_report.json` under `units`. The lab reads only that
+data — a unit table, never the game's kind — and shows a
+metric a game does not record as unavailable rather than
+guessing it from the archetype.
+
+- Deterministic flags, each carrying its numbers: difficulty
+  spike (deaths at least twice the median of completed units,
+  minimum 2), wall (a unit the competent player could not
+  complete), first-time stall (over twice the median time, or
+  3+ deaths, on one unit for the first-time player), breeze
+  (every unit completed with no deaths — the game may be too
+  easy).
+- Suggestions reuse only the patch loop's bounded knobs and
+  bounds: spike/wall → ease, breeze → harden, stall → an
+  objective-hint clarification through the confusion path.
+  Applying one files a synthetic feedback record (source
+  `balance-lab`, the rationale as its text) and routes it
+  through the normal patch gates — test stage plus
+  save-compatibility, version bump, changelog entry citing the
+  lab numbers. No side doors.
+- Compare is a checkpointed A/B: baseline from the existing
+  test report when fresh (else a fresh test run), candidate
+  config applied, test stage again, then the original config
+  and checkpoint restored exactly; `.weaverbird/balance_report.json`
+  holds the side-by-side metrics and a plain verdict. It costs
+  up to two full test-stage runs — that is stated wherever it
+  is offered.
+
+## The asset studio
+
+Built in 0.6.0, on top of stage 3. Asset generation is a
+registry of named generator functions in `assets_gen.py` — one
+per sprite, the icon, one synthesiser per audio file — and the
+studio is a view over that registry plus the assets manifest
+and the provenance log:
+
+- `weaverbird assets list <dir>` (and the app's Assets view)
+  shows every generated asset with its provenance and size,
+  and flags files that are missing. Assets the manifest or the
+  provenance log names but no current generator produces are
+  still listed, marked not regenerable — nothing a game ships
+  is hidden.
+- Regenerating one asset redraws exactly that file from the
+  current palette (audio is re-synthesised), records the
+  regeneration in the provenance log, and costs zero tokens.
+- The palette editor writes the scope Palette field's hexes
+  (accent, target, hazard, and the derived roles) back into
+  SCOPE.md through the scope writer, shows a before/after
+  swatch strip, and is honest about the follow-up: regenerate
+  the assets to redraw them, and rebuild the game to pick up
+  palette-driven template colours.
+- The gallery serves asset files through a read-only route
+  confined to the project's `game/assets` directory plus the
+  game icon; anything else is a 404.
 
 ## Events and logs
 
-- Pipeline history: every stage advance is recorded in the pipeline
-  state with a timestamp. This is the durable record of where a game
-  has been.
-- Job events (future): started, progress, checkpoint, gate result,
-  finished or failed — written as plain structured lines alongside
-  the project state, so a UI can follow a run live and a user can read
-  afterwards what happened and what it cost (joined with the ledger).
-- Rule for all logs: digests, not dumps. Raw tool output is summarised
-  before it reaches a model or a user, because raw logs burn tokens.
+- Pipeline history: every stage advance is recorded in the
+  pipeline state with a timestamp. Job events (started, step
+  progress, gate results, finished or failed) live on the job
+  records described above, joined with the ledger for cost.
+- Rule for all logs: digests, not dumps. Raw tool output is
+  summarised before it reaches a model or a user, because raw
+  logs burn tokens.
 
 ## Multi-project workspace model
 

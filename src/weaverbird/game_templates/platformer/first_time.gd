@@ -30,6 +30,11 @@ var _deaths: int = 0
 var _goal_id: int = 0
 var _goal_since: float = 0.0
 var _ignored_until: Dictionary = {}
+# Per-unit (per-level) records for the balance lab.
+var _units: Array = []
+var _unit_level: int = -1
+var _unit_t0: float = 0.0
+var _unit_deaths0: int = 0
 
 
 func _initialize() -> void:
@@ -63,11 +68,13 @@ func _process(delta: float) -> bool:
                 _finished = true
                 _outcome = "win"
                 _release_all()
+                _close_unit(true)
                 _report(true, "")
                 return true
             if _in_scene("game_over.tscn"):
                 _outcome = "lose"
                 _release_all()
+                _close_unit(false)
                 _report(true, "")
                 return true
             _game_time += delta
@@ -94,6 +101,7 @@ func _play(delta: float) -> void:
         return
     var game := current_scene
     _deaths = int(game.get("deaths"))
+    _track_unit()
     if _first_objective_s < 0.0 and int(game.get("stars_collected")) > 0:
         _first_objective_s = _game_time
     var player := game.get_node_or_null("Player") as CharacterBody2D
@@ -110,6 +118,38 @@ func _play(delta: float) -> void:
         _tap_jump()
         _jump_cooldown = 0.35
         _want_jump = false
+
+
+func _track_unit() -> void:
+    # Per-level records, like the competent player's: a level
+    # opens when first seen; moving on means it was completed.
+    if not _in_scene("game.tscn"):
+        return
+    var level := int(current_scene.get("level_index"))
+    if _unit_level < 0:
+        _unit_level = level
+        _unit_t0 = _game_time
+        _unit_deaths0 = _deaths
+    elif level != _unit_level:
+        _units.append({
+            "unit": _unit_level + 1, "completed": true,
+            "deaths": _deaths - _unit_deaths0,
+            "time_s": snappedf(_game_time - _unit_t0, 0.01),
+        })
+        _unit_level = level
+        _unit_t0 = _game_time
+        _unit_deaths0 = _deaths
+
+
+func _close_unit(completed: bool) -> void:
+    if _unit_level < 0:
+        return
+    _units.append({
+        "unit": _unit_level + 1, "completed": completed,
+        "deaths": _deaths - _unit_deaths0,
+        "time_s": snappedf(_game_time - _unit_t0, 0.01),
+    })
+    _unit_level = -1
 
 
 func _decide(player: CharacterBody2D) -> void:
@@ -189,12 +229,14 @@ func _release_all() -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    if _unit_level >= 0:
+        _close_unit(false)  # still mid-level: it was not completed
     var data := {
         "player": "first_time", "mode": "explore", "ok": ok,
         "reason": reason, "time_s": snappedf(_game_time, 0.01),
         "deaths": _deaths,
         "first_objective_s": snappedf(_first_objective_s, 0.01),
-        "finished": _finished, "outcome": _outcome,
+        "finished": _finished, "outcome": _outcome, "units": _units,
         "findings": [] if _outcome != "" else ["did not finish within the run"],
     }
     _silence()

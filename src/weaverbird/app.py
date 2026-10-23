@@ -8,13 +8,18 @@ screens. Everything it shows comes from the library (scope, state,
 ledger, provenance, brain, finish, skeleton) — the app holds no
 logic of its own, so the CLI and the app can never drift apart.
 
-Screens: a dashboard of the workspace's projects, a project view
-(pipeline stepper, definition of done with its evidence, ledger,
-provenance, and the actions: build skeleton, finish check, advance),
-the scope interview as a form (with prompt extraction when a brain
-is configured), and a settings view (budgets editable, the rest —
-including which key environment variables are set, never their
-values — read-only).
+Screens: a dashboard of the workspace's projects (with a Jobs
+strip), a project view (pipeline stepper, definition of done
+with its evidence, ledger, provenance, job history, and the
+stage actions), the scope interview as a form (with prompt
+extraction when a brain is configured), a settings view
+(budgets editable, the rest — including which key environment
+variables are set, never their values — read-only), a Feedback
+view, the balance lab, and the asset studio.
+
+Every long action is a background job (see jobs.py): the POST
+answers at once with a live job card the page polls to
+completion, so no screen ever freezes on a Godot run.
 
 All HTML/CSS/JS is package data in ``weaverbird/web/``, styled from
 the design tokens to match docs/visual-prototype/.
@@ -23,6 +28,7 @@ the design tokens to match docs/visual-prototype/.
 from __future__ import annotations
 
 import html
+import json
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,17 +39,16 @@ import yaml
 
 from . import __version__
 from . import assets_gen as assets_module
+from . import balance as balance_module
 from . import brain as brain_module
 from . import feedback as feedback_module
 from . import finish as finish_module
 from . import generate as generate_module
+from . import jobs as jobs_module
 from . import testing as testing_module
 from . import godot as godot_module
 from . import ledger as ledger_module
-from . import modelplayer as modelplayer_module
-from . import patch as patch_module
 from . import provenance as provenance_module
-from . import repair as repair_module
 from . import scope as scope_module
 from . import settings as settings_module
 from . import skeleton as skeleton_module
@@ -296,6 +301,7 @@ def render_dashboard(server) -> str:
     body = f"""
 <div class="top"><div><h1>Projects</h1><div class="sub">Every game in this workspace, where it is, and what it has cost.</div></div></div>
 <div class="grid">{cards}</div>
+{_jobs_strip(server)}
 <div class="row">
   <div class="card"><h3>Factory</h3>
     <div class="check"><div class="box">{'✓' if gh['logged_in'] else '–'}</div><div>{gh_line}</div></div>
@@ -312,7 +318,8 @@ def render_dashboard(server) -> str:
 
 
 def render_project(server, name: str, notice: str = "",
-                   notice_kind: str = "ok") -> str:
+                   notice_kind: str = "ok",
+                   job_id: str | None = None) -> str:
     project = server.project_by_name(name)
     facts = _project_facts(project)
     state = facts["state"]
@@ -321,6 +328,7 @@ def render_project(server, name: str, notice: str = "",
 
     notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
                    if notice else "")
+    job_html = _job_card_for(server, job_id)
 
     dod_html = ""
     if state:
@@ -515,8 +523,11 @@ Scripted players are deterministic bots; the model playtester plays from screens
     body = f"""
 <div class="top"><div><h1>{_esc(facts['title'])}</h1><div class="sub">{_esc(facts['pitch'] or 'No pitch in the scope yet.')}</div></div>
 <div><a class="btn ghost" href="/project/{quoted}/scope">Scope interview</a>
-<a class="btn ghost" href="/project/{quoted}/feedback">Feedback</a></div></div>
+<a class="btn ghost" href="/project/{quoted}/feedback">Feedback</a>
+<a class="btn ghost" href="/project/{quoted}/balance">Balance lab</a>
+<a class="btn ghost" href="/project/{quoted}/assets">Asset studio</a></div></div>
 {notice_html}
+{job_html}
 {_stepper(facts['stage'])}
 <div class="actions">
   {skeleton_button}
@@ -528,6 +539,7 @@ Scripted players are deterministic bots; the model playtester plays from screens
 {gate_html}
 {generation_card}
 {test_card}
+{_job_history_card(server, name)}
 <div class="row">
   <div class="card"><h3>Definition of done</h3>{dod_html}</div>
   <div class="card"><h3>Cost so far</h3>
@@ -544,7 +556,8 @@ Scripted players are deterministic bots; the model playtester plays from screens
 
 
 def render_feedback(server, name: str, notice: str = "",
-                    notice_kind: str = "ok") -> str:
+                    notice_kind: str = "ok",
+                    job_id: str | None = None) -> str:
     project = server.project_by_name(name)
     path = project["path"]
     quoted = urllib.parse.quote(name)
@@ -552,6 +565,7 @@ def render_feedback(server, name: str, notice: str = "",
     items = feedback_module.ranked_queue(store)
     notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
                    if notice else "")
+    job_html = _job_card_for(server, job_id)
     rows = ""
     for item in items:
         item_id = _esc(item.get("id", ""))
@@ -587,6 +601,7 @@ def render_feedback(server, name: str, notice: str = "",
 <div class="top"><div><h1>Feedback</h1><div class="sub">{_esc(name)} — what players said, triaged and ranked. Approving an item lets the patch loop try to ship it as a tested patch; requests and price are always the maker's call.</div></div>
 <div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
 {notice_html}
+{job_html}
 <div class="actions">
   <form class="action" method="post" action="/project/{quoted}/feedback/fetch"><button class="btn" type="submit">Fetch feedback</button></form>
   <form class="action" method="post" action="/project/{quoted}/feedback/triage"><button class="btn ghost" type="submit">Triage</button></form>
@@ -769,6 +784,380 @@ def render_result(server, title: str, message: str, back_href: str,
 
 
 # ---------------------------------------------------------------------------
+# Jobs UI — live cards, the dashboard strip, history, the job page
+
+_JOB_STATUS_CHIP = {
+    "done": "green", "failed": "red", "cancelled": "grey",
+    "interrupted": "grey", "running": "", "queued": "grey",
+}
+
+
+def _job_card(job: dict, reload_on_done: bool = True) -> str:
+    """A live job card. The server renders the current snapshot;
+    app.js polls /api/jobs/<id> and updates it in place, then
+    reloads the page (keeping this card via ?job=) when the job
+    lands, so the rest of the page refreshes too."""
+    status = job.get("status", "queued")
+    chip = _JOB_STATUS_CHIP.get(status, "")
+    progress = job.get("progress") or {}
+    total = progress.get("total")
+    done = progress.get("done")
+    if status == "done":
+        pct, bar_cls = 100, ""
+    elif total:
+        pct = int(100 * (done or 0) / total)
+        bar_cls = ""
+    elif status in ("queued", "running"):
+        pct, bar_cls = 35, "indeterminate"
+    else:
+        pct, bar_cls = 100, ""
+    events = ""
+    for event in (job.get("events") or [])[-30:]:
+        events += (f"<li><span class='hint'>{_esc(event.get('at', ''))}"
+                   f"</span> {_esc(event.get('text', ''))}</li>")
+    outcome = ""
+    if job.get("result"):
+        outcome = (f'<p data-role="outcome" style="margin-top:10px">'
+                   f'{_esc(job["result"])}</p>')
+    elif job.get("error"):
+        outcome = (f'<p data-role="outcome" style="margin-top:10px;'
+                   f'color:#D24545">{_esc(job["error"])}</p>')
+    cancel = ""
+    if status in ("queued", "running"):
+        cancel = (f'<form method="post" action="/jobs/{_esc(job["id"])}/cancel" '
+                  'data-cancel-form style="margin-top:10px">'
+                  '<button class="btn ghost small" type="submit">Cancel job</button></form>')
+    reload_attr = ' data-reload-on-done="1"' if reload_on_done else ""
+    return f"""
+<div class="card jobcard" data-job-id="{_esc(job['id'])}" data-job-status="{_esc(status)}"{reload_attr} style="margin-top:20px">
+<h3>{_esc(job.get('label', job.get('action', 'Job')))} <span class="chip {chip}" data-role="status">{_esc(status)}</span></h3>
+<p class="hint" style="margin:6px 0">Elapsed <span data-role="elapsed">{jobs_module.elapsed_seconds(job):.0f}s</span> · job {_esc(job['id'])}</p>
+<div class="bar jobbar"><i data-role="fill" class="{bar_cls}" style="width:{pct}%"></i></div>
+<ol class="joblog" data-role="log">{events}</ol>
+{outcome}{cancel}
+</div>"""
+
+
+def _job_card_for(server, job_id: str | None) -> str:
+    if not job_id:
+        return ""
+    job = server.jobs.get(job_id)
+    if job is None:
+        return ""
+    return _job_card(job)
+
+
+def _jobs_strip(server) -> str:
+    jobs = server.jobs.list(limit=30)
+    if not jobs:
+        return ""
+    running = [j for j in jobs if j.get("status") in ("queued", "running")]
+    recent = [j for j in jobs if j.get("status") not in ("queued", "running")]
+    rows = ""
+    for job in (running + recent)[:6]:
+        status = job.get("status", "")
+        chip = _JOB_STATUS_CHIP.get(status, "")
+        detail = job.get("error") or job.get("result") or ""
+        rows += (f'<div class="check"><div class="box'
+                 f'{" open" if status in ("queued", "running") else ""}">'
+                 f'{"…" if status in ("queued", "running") else "✓"}</div>'
+                 f'<div style="flex:1"><a href="/jobs/{_esc(job["id"])}">'
+                 f'{_esc(job.get("label", ""))}</a> '
+                 f'<span class="chip {chip}">{_esc(status)}</span>'
+                 f'<small>{_esc(job.get("project", ""))} · '
+                 f'{_esc(job.get("created", ""))}'
+                 f'{(" — " + _esc(detail)) if detail else ""}</small>'
+                 f'</div></div>')
+    heading = "Jobs — running now" if running else "Jobs — recent"
+    return (f'<div class="card" style="margin-top:20px"><h3>{heading}</h3>'
+            f'{rows}</div>')
+
+
+def _job_history_card(server, name: str) -> str:
+    jobs = server.jobs.list(project=name, limit=8)
+    if not jobs:
+        return ""
+    rows = ""
+    for job in jobs:
+        status = job.get("status", "")
+        chip = _JOB_STATUS_CHIP.get(status, "")
+        detail = job.get("error") or job.get("result") or ""
+        rows += (f'<div class="check"><div class="box'
+                 f'{" open" if status in ("queued", "running") else ""}">'
+                 f'{"…" if status in ("queued", "running") else "✓"}</div>'
+                 f'<div style="flex:1"><a href="/jobs/{_esc(job["id"])}">'
+                 f'{_esc(job.get("label", ""))}</a> '
+                 f'<span class="chip {chip}">{_esc(status)}</span>'
+                 f'<small>{_esc(job.get("created", ""))}'
+                 f'{(" — " + _esc(detail)) if detail else ""}</small>'
+                 f'</div></div>')
+    return (f'<div class="card" style="margin-top:20px"><h3>Job history</h3>'
+            f'{rows}</div>')
+
+
+def render_job_page(server, job_id: str) -> str:
+    job = server.jobs.get(job_id)
+    if job is None:
+        raise AppError(f"No job with id {job_id!r} in this workspace.")
+    back = "/"
+    if job.get("project"):
+        back = f"/project/{urllib.parse.quote(str(job['project']))}"
+    body = f"""
+<div class="top"><div><h1>{_esc(job.get('label', 'Job'))}</h1><div class="sub">{_esc(job.get('project', ''))} · started from the app; the record lives in .weaverbird-app/jobs/ and survives restarts.</div></div>
+<div><a class="btn ghost" href="{_esc(back)}">Back to project</a></div></div>
+{_job_card(job, reload_on_done=False)}"""
+    return _layout("Job", "projects", body)
+
+
+# ---------------------------------------------------------------------------
+# Balance view
+
+def _unit_cell(record) -> str:
+    """One player's per-unit record, formatted from the fields
+    the record itself carries — a metric a game does not record
+    is simply absent, never guessed from the game's kind."""
+    if record is None:
+        return '<span class="hint">no record</span>'
+    bits = ["completed" if record.get("completed") else "NOT completed"]
+    if record.get("deaths"):
+        bits.append(f"{record['deaths']} deaths")
+    if record.get("time_s") is not None:
+        bits.append(f"{record['time_s']}s")
+    if record.get("moves_used") is not None:
+        bits.append(f"{record['moves_used']}/{record.get('move_budget', '?')} moves")
+    return _esc(", ".join(bits))
+
+
+def render_balance(server, name: str, notice: str = "",
+                   notice_kind: str = "ok", job_id: str | None = None) -> str:
+    project = server.project_by_name(name)
+    path = project["path"]
+    quoted = urllib.parse.quote(name)
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
+    job_html = _job_card_for(server, job_id)
+    report = finish_module.load_test_report(path)
+    if report is None:
+        body = f"""
+<div class="top"><div><h1>Balance lab</h1><div class="sub">{_esc(name)} — per-unit difficulty evidence from the scripted players.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}{job_html}
+<div class="empty">No test report yet. Run the test stage first — the lab reads the per-unit records the scripted players write into the test report.</div>"""
+        return _layout("Balance lab", "projects", body)
+    units = balance_module.load_units(path)
+    flags = balance_module.analyse(units)
+    flags_by_unit: dict = {}
+    for flag in flags:
+        flags_by_unit.setdefault(flag.get("unit"), []).append(flag)
+    rows = ""
+    for row in balance_module.unit_rows(units):
+        badges = ""
+        for flag in flags_by_unit.get(row["unit"], []):
+            cls = "red" if flag["kind"] in ("wall", "spike") else ""
+            badges += f' <span class="chip {cls}">{_esc(flag["kind"])}</span>'
+        rows += (f"<tr><td>Unit {_esc(row['unit'])}</td>"
+                 f"<td>{_unit_cell(row['competent'])}</td>"
+                 f"<td>{_unit_cell(row['first_time'])}</td>"
+                 f"<td>{badges}</td></tr>")
+    if not rows:
+        rows = ('<tr><td colspan="4" class="hint">The latest test report '
+                'has no per-unit records — it was written by an older '
+                'build. Re-run the test stage and the scripted players '
+                'will record per-unit stats.</td></tr>')
+    flag_html = ""
+    for flag in flags:
+        flag_html += (f'<div class="check"><div class="box open">!</div>'
+                      f'<div><b>{_esc(flag["kind"])}</b>'
+                      f'<small>{_esc(flag["text"])}</small></div></div>')
+    if not flag_html and units:
+        flag_html = ('<p class="hint">No flags — no spikes, walls, '
+                     'stalls or breeze in the recorded units.</p>')
+    model = balance_module.model_summary(path)
+    model_html = ""
+    if model:
+        model_html = (f'<p class="hint" style="margin-top:10px">Model '
+                      f'playtest on record: {_esc(model["outcome"])} — '
+                      f'{_esc(model["decisions"])} decisions, '
+                      f'{_esc(model["deaths"])} deaths, finished: '
+                      f'{_esc(model["finished"])}.</p>')
+    try:
+        found = balance_module.suggestions(path)
+    except balance_module.BalanceError as exc:
+        found = []
+        flag_html += f'<p class="hint">{_esc(exc)}</p>'
+    sugg_html = ""
+    for index, suggestion in enumerate(found, start=1):
+        changes = "".join(f"<small>{_esc(line)}</small><br>"
+                           for line in suggestion["changes"])
+        sugg_html += f"""
+<div class="check"><div class="box open">{index}</div>
+<div style="flex:1"><b>{_esc(suggestion['kind'])}</b> — {_esc(suggestion['rationale'])}
+<div style="margin-top:4px">{changes}</div></div>
+<div>
+<form class="action" method="post" action="/project/{quoted}/balance/apply"><input type="hidden" name="suggestion" value="{index}"><button class="btn" type="submit">Apply (patch gates)</button></form>
+<form class="action" method="post" action="/project/{quoted}/balance/compare"><input type="hidden" name="suggestion" value="{index}"><button class="btn ghost" type="submit">Compare A/B</button></form>
+</div></div>"""
+    if not sugg_html:
+        sugg_html = ('<p class="hint">No suggestions on offer — either '
+                     'nothing is flagged, or the flagged fixes are '
+                     'already at their bounds.</p>')
+    compare = balance_module.load_compare_report(path)
+    compare_html = ""
+    if compare:
+        base = compare.get("baseline", {})
+        cand = compare.get("candidate_metrics", {})
+
+        def metric(label, key, fmt="{}"):
+            b, c = base.get(key), cand.get(key)
+            return (f"<tr><td>{label}</td><td>{_esc(fmt.format(b) if b is not None else '—')}</td>"
+                    f"<td>{_esc(fmt.format(c) if c is not None else '—')}</td></tr>")
+
+        unit_rows_cmp = ""
+        base_units = {(u.get("unit"), u.get("source")): u
+                      for u in base.get("units", [])}
+        cand_units = {(u.get("unit"), u.get("source")): u
+                      for u in cand.get("units", [])}
+        for key in sorted(set(base_units) | set(cand_units),
+                          key=lambda k: (k[0] or 0, k[1] or "")):
+            b = base_units.get(key, {})
+            c = cand_units.get(key, {})
+            unit_rows_cmp += (
+                f"<tr><td>Unit {_esc(key[0])} ({_esc(key[1])})</td>"
+                f"<td>{_esc(b.get('deaths', '—'))} deaths · {_esc(b.get('time_s', '—'))}s</td>"
+                f"<td>{_esc(c.get('deaths', '—'))} deaths · {_esc(c.get('time_s', '—'))}s</td></tr>")
+        compare_html = f"""
+<div class="card" style="margin-top:20px"><h3>Last compare — {_esc(compare.get('candidate', ''))}</h3>
+<p style="margin:8px 0">{_esc(compare.get('verdict', ''))}</p>
+<p class="hint">{_esc('; '.join(compare.get('changes', [])))} · compared {_esc(compare.get('compared_at', ''))}; the project was restored to its starting state afterwards.</p>
+<table><tr><th>Metric</th><th>Baseline</th><th>Candidate</th></tr>
+{metric("Test suite", "ok")}{metric("Win proven", "win_proven")}{metric("Lose proven", "lose_proven")}{metric("Average FPS", "avg_fps")}{metric("Total unit deaths (competent)", "total_deaths")}{metric("Total unit time (competent)", "total_time_s", "{}s")}{metric("First-time finished", "first_time_finished")}
+{unit_rows_cmp}</table></div>"""
+    body = f"""
+<div class="top"><div><h1>Balance lab</h1><div class="sub">{_esc(name)} — what the scripted players found, unit by unit. Suggestions use only the patch loop's bounded knobs; applying one ships through the full patch gates.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}{job_html}
+<div class="card" style="margin-top:20px"><h3>Per-unit records</h3>
+<table><tr><th>Unit</th><th>Competent</th><th>First-time</th><th>Flags</th></tr>{rows}</table>
+{model_html}</div>
+<div class="card" style="margin-top:20px"><h3>Flags</h3>{flag_html}</div>
+<div class="card" style="margin-top:20px"><h3>Suggestions</h3>{sugg_html}</div>
+{compare_html}"""
+    return _layout("Balance lab", "projects", body)
+
+
+# ---------------------------------------------------------------------------
+# Asset studio view
+
+def render_assets(server, name: str, notice: str = "",
+                  notice_kind: str = "ok", job_id: str | None = None,
+                  palette_before: dict | None = None) -> str:
+    project = server.project_by_name(name)
+    path = project["path"]
+    quoted = urllib.parse.quote(name)
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
+    job_html = _job_card_for(server, job_id)
+    try:
+        listing = assets_module.list_assets(path)
+    except assets_module.AssetsError as exc:
+        body = f"""
+<div class="top"><div><h1>Asset studio</h1><div class="sub">{_esc(name)}</div></div>
+<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}{job_html}
+<div class="empty">{_esc(exc)}</div>"""
+        return _layout("Asset studio", "projects", body)
+    cards = ""
+    for entry in listing:
+        rel = entry["path"]
+        kind = entry.get("kind", "file")
+        file_url = f"/project/{quoted}/asset-file/{urllib.parse.quote(rel)}"
+        # Visuals follow the entry's kind (from the generator
+        # registry / manifest data), never a hardcoded name list.
+        if entry["missing"]:
+            visual = '<span class="chip red">missing</span>'
+        elif kind == "icon":
+            visual = (f'<img src="{file_url}" width="96" height="96" alt="icon"> '
+                      f'<img src="{file_url}" width="48" height="48" alt="icon"> '
+                      f'<img src="{file_url}" width="24" height="24" alt="icon">')
+        elif kind in ("sprite", "image"):
+            visual = (f'<img src="{file_url}" width="96" height="96" '
+                      f'alt="{_esc(entry["name"])}" '
+                      'style="background:#F0EFF6;border-radius:8px">')
+        elif kind == "audio":
+            visual = f'<audio controls src="{file_url}"></audio>'
+        else:
+            visual = ""
+        size = ("missing" if entry["missing"]
+                else f"{entry['size']} bytes")
+        regen = ""
+        if entry.get("regenerable"):
+            regen = (
+                f'<form class="action" method="post" '
+                f'action="/project/{quoted}/assets/regenerate" '
+                'style="margin-top:10px">'
+                f'<input type="hidden" name="asset" '
+                f'value="{_esc(entry["name"])}">'
+                '<button class="btn ghost small" type="submit">'
+                'Regenerate</button></form>')
+        cards += f"""
+<div class="card"><h3>{_esc(entry['name'])}</h3>
+<div style="margin:10px 0">{visual}</div>
+<p class="hint">{_esc(rel)} · {size}</p>
+<p class="hint" style="margin-top:6px">{_esc(entry['note'] or 'No provenance note.')}</p>
+<p class="hint">{_esc(entry['provider'] or entry['source'] or '')}</p>
+{regen}
+</div>"""
+    # Palette editor.
+    state = assets_module.palette_state(path)
+    role_rows = ""
+    for role in state["roles"]:
+        role_rows += (
+            f'<label for="pal_{_esc(role["role"])}">{_esc(role["label"])}'
+            f'{" (pinned in the scope)" if role["pinned"] else " (derived)"}</label>'
+            f'<div style="display:flex;gap:8px;align-items:center">'
+            f'<input type="color" id="pal_{_esc(role["role"])}" '
+            f'name="{_esc(role["role"])}" value="{_esc(role["hex"].lower())}" '
+            'style="width:56px;height:34px;padding:2px">'
+            f'<span class="hint">{_esc(role["hex"])}</span></div>')
+    before_after = ""
+    if palette_before:
+        def swatches(palette: dict) -> str:
+            out = ""
+            for _role, label, key in assets_module.PALETTE_ROLES:
+                out += (f'<span title="{label}: {_esc(palette.get(key, ""))}" '
+                        f'style="display:inline-block;width:34px;height:34px;'
+                        f'border-radius:8px;background:{_esc(palette.get(key, ""))};'
+                        'margin-right:6px;border:1px solid #E5E3EE"></span>')
+            return out
+        before_after = (
+            f'<div style="margin-top:14px"><p class="hint">Before</p>'
+            f'<div>{swatches(palette_before)}</div>'
+            f'<p class="hint" style="margin-top:8px">After</p>'
+            f'<div>{swatches(state["palette"])}</div></div>')
+    body = f"""
+<div class="top"><div><h1>Asset studio</h1><div class="sub">{_esc(name)} — every generated asset with its provenance. Regenerating redraws one file from the current palette; it costs no tokens.</div></div>
+<div><a class="btn ghost" href="/project/{quoted}">Back to project</a></div></div>
+{notice_html}{job_html}
+<div class="actions" style="margin-top:16px">
+  <form class="action" method="post" action="/project/{quoted}/generate-assets"><button class="btn" type="submit">Regenerate all assets</button></form>
+</div>
+<div class="grid" style="margin-top:16px">{cards}</div>
+<div class="card" style="margin-top:20px"><h3>Palette — the style lock</h3>
+<p class="hint" style="margin:6px 0 10px">Saving writes the colours back into the scope's Palette field, in role order (accent, target, hazard, platform, crate). Asset files pick the new palette up when they are regenerated; the game's own template colours need a game rebuild.</p>
+<form class="stack" method="post" action="/project/{quoted}/assets/palette">
+{role_rows}
+<div class="actions"><button class="btn" type="submit">Save palette to the scope</button></div>
+</form>
+{before_after}
+<div class="actions" style="margin-top:14px">
+  <form class="action" method="post" action="/project/{quoted}/generate-assets"><button class="btn ghost" type="submit">Regenerate all assets</button></form>
+  <form class="action" method="post" action="/project/{quoted}/build-game"><button class="btn ghost" type="submit">Build game (picks up template colours)</button></form>
+</div>
+</div>"""
+    return _layout("Asset studio", "projects", body)
+
+
+# ---------------------------------------------------------------------------
 # The server
 
 class _Handler(BaseHTTPRequestHandler):
@@ -798,6 +1187,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_json(self, payload, status: int = 200) -> None:
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _form(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8", "replace")
@@ -812,6 +1209,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (stdlib handler name)
         parsed = urllib.parse.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
+        query = urllib.parse.parse_qs(parsed.query)
+        job_id = (query.get("job") or [None])[0]
         try:
             if parsed.path == "/style.css":
                 return self._send_bytes(_web_text("style.css").encode(), "text/css")
@@ -821,6 +1220,20 @@ class _Handler(BaseHTTPRequestHandler):
             if parsed.path == "/mark.svg":
                 return self._send_bytes(_asset_bytes("weaverbird.svg"),
                                         "image/svg+xml")
+            if parts == ["api", "jobs"]:
+                project = (query.get("project") or [None])[0]
+                jobs = self.app.jobs.list(project=project, limit=30)
+                return self._send_json(
+                    {"jobs": [jobs_module.public_job(j) for j in jobs]})
+            if len(parts) == 3 and parts[:2] == ["api", "jobs"]:
+                job = self.app.jobs.get(urllib.parse.unquote(parts[2]))
+                if job is None:
+                    return self._send_json(
+                        {"error": "no such job"}, status=404)
+                return self._send_json(jobs_module.public_job(job))
+            if len(parts) == 2 and parts[0] == "jobs":
+                return self._send_html(render_job_page(
+                    self.app, urllib.parse.unquote(parts[1])))
             if not parts:
                 return self._send_html(render_dashboard(self.app))
             if parts == ["settings"]:
@@ -828,16 +1241,44 @@ class _Handler(BaseHTTPRequestHandler):
             if parts[0] == "project" and len(parts) >= 2:
                 name = urllib.parse.unquote(parts[1])
                 if len(parts) == 2:
-                    return self._send_html(render_project(self.app, name))
+                    return self._send_html(render_project(
+                        self.app, name, job_id=job_id))
                 if len(parts) == 3 and parts[2] == "scope":
                     return self._send_html(render_scope(self.app, name))
                 if len(parts) == 3 and parts[2] == "feedback":
-                    return self._send_html(render_feedback(self.app, name))
+                    return self._send_html(render_feedback(
+                        self.app, name, job_id=job_id))
+                if len(parts) == 3 and parts[2] == "balance":
+                    return self._send_html(render_balance(
+                        self.app, name, job_id=job_id))
+                if len(parts) == 3 and parts[2] == "assets":
+                    return self._send_html(render_assets(
+                        self.app, name, job_id=job_id))
+                if len(parts) >= 4 and parts[2] == "asset-file":
+                    return self._get_asset_file(name, parts[3:])
             return self._fail_page("That page does not exist here.", 404)
         except AppError as exc:
             return self._fail_page(str(exc), 404)
         except Exception as exc:  # a page must fail plainly, never hang
             return self._fail_page(f"{type(exc).__name__}: {exc}", 500)
+
+    def _get_asset_file(self, name: str, rest: list) -> None:
+        """Serve one generated asset file, read-only, confined to
+        the project's game/assets/ tree (plus the game icon)."""
+        project = self.app.project_by_name(name)
+        rel = "/".join(urllib.parse.unquote(p) for p in rest)
+        game_dir = (project["path"] / skeleton_module.GAME_DIR_NAME)
+        candidate = (project["path"] / rel).resolve()
+        assets_root = (game_dir / "assets").resolve()
+        icon = (game_dir / "icon.svg").resolve()
+        allowed = candidate == icon or candidate.is_relative_to(assets_root)
+        if not allowed or not candidate.is_file():
+            return self._fail_page("That asset does not exist here.", 404)
+        content_types = {".svg": "image/svg+xml", ".wav": "audio/wav",
+                         ".png": "image/png"}
+        content_type = content_types.get(candidate.suffix.lower(),
+                                         "application/octet-stream")
+        return self._send_bytes(candidate.read_bytes(), content_type)
 
     def do_POST(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -845,6 +1286,19 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if parts == ["settings"]:
                 return self._post_settings()
+            if len(parts) == 4 and parts[:2] == ["api", "jobs"] \
+                    and parts[3] == "cancel":
+                job = self.app.jobs.cancel(urllib.parse.unquote(parts[2]))
+                if job is None:
+                    return self._send_json(
+                        {"error": "no such job"}, status=404)
+                return self._send_json(jobs_module.public_job(job))
+            if len(parts) == 3 and parts[0] == "jobs" \
+                    and parts[2] == "cancel":
+                job_id = urllib.parse.unquote(parts[1])
+                if self.app.jobs.cancel(job_id) is None:
+                    return self._fail_page("No such job.", 404)
+                return self._send_html(render_job_page(self.app, job_id))
             if parts[0] == "project" and len(parts) >= 3:
                 name = urllib.parse.unquote(parts[1])
                 action = parts[2]
@@ -853,21 +1307,30 @@ class _Handler(BaseHTTPRequestHandler):
                 if action == "patch" and len(parts) == 4:
                     return self._post_patch_start(name, parts[3])
                 if action == "repair":
-                    return self._post_repair(name)
+                    return self._post_job_action(name, "repair")
                 if action == "model-playtest":
-                    return self._post_model_playtest(name)
+                    return self._post_job_action(name, "model-playtest")
                 if action == "build-skeleton":
-                    return self._post_build_skeleton(name)
+                    return self._post_job_action(name, "build-skeleton")
                 if action == "generate-assets":
-                    return self._post_generate_assets(name)
+                    return self._post_job_action(name, "generate-assets")
                 if action == "build-game":
-                    return self._post_build_game(name)
+                    return self._post_job_action(name, "build-game")
                 if action == "run-tests":
-                    return self._post_run_tests(name)
+                    return self._post_job_action(name, "run-tests")
                 if action == "finish-check":
-                    return self._post_finish_check(name)
+                    return self._post_job_action(name, "finish-check")
                 if action == "finish-report":
-                    return self._post_finish_report(name)
+                    return self._post_job_action(name, "finish-report")
+                if action == "balance" and len(parts) == 4 \
+                        and parts[3] in ("apply", "compare"):
+                    return self._post_balance(name, parts[3])
+                if action == "assets" and len(parts) == 4 \
+                        and parts[3] == "regenerate":
+                    return self._post_assets_regenerate(name)
+                if action == "assets" and len(parts) == 4 \
+                        and parts[3] == "palette":
+                    return self._post_assets_palette(name)
                 if action == "advance":
                     return self._post_advance(name)
                 if action == "scope" and len(parts) == 3:
@@ -882,27 +1345,82 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             return self._fail_page(f"{type(exc).__name__}: {exc}", 500)
 
+    # -- job-backed actions ------------------------------------------------
+    def _post_job_action(self, name: str, action: str,
+                         params: dict | None = None,
+                         view: str = "project") -> None:
+        """Every long project action is a job now: submit it,
+        answer at once with the page carrying the live job card."""
+        project = self.app.project_by_name(name)
+        job = self.app.jobs.submit(project["name"], project["path"],
+                                   action, params=params)
+        if view == "feedback":
+            return self._send_html(render_feedback(
+                self.app, name, job_id=job["id"]))
+        if view == "balance":
+            return self._send_html(render_balance(
+                self.app, name, job_id=job["id"]))
+        if view == "assets":
+            return self._send_html(render_assets(
+                self.app, name, job_id=job["id"]))
+        return self._send_html(render_project(
+            self.app, name, job_id=job["id"]))
+
+    def _post_balance(self, name: str, sub: str) -> None:
+        form = self._form()
+        try:
+            index = int(form.get("suggestion", ""))
+        except ValueError:
+            return self._fail_page("That suggestion number is not "
+                                   "a number.", 400)
+        action = "balance-apply" if sub == "apply" else "balance-compare"
+        return self._post_job_action(name, action,
+                                     params={"suggestion": index},
+                                     view="balance")
+
+    def _post_assets_regenerate(self, name: str) -> None:
+        form = self._form()
+        asset = form.get("asset", "").strip()
+        if not asset:
+            return self._fail_page("No asset was named.", 400)
+        return self._post_job_action(name, "assets-regenerate",
+                                     params={"asset": asset},
+                                     view="assets")
+
+    def _post_assets_palette(self, name: str) -> None:
+        project = self.app.project_by_name(name)
+        form = self._form()
+        try:
+            before = assets_module.palette_state(project["path"])
+            hexes = [form.get(role, "")
+                     for role, _label, _key in assets_module.PALETTE_ROLES]
+            assets_module.save_palette(project["path"], hexes)
+        except (assets_module.AssetsError,
+                scope_module.ScopeError) as exc:
+            return self._send_html(render_assets(
+                self.app, name,
+                notice=_esc(f"Palette not saved. {exc}"),
+                notice_kind="bad"))
+        return self._send_html(render_assets(
+            self.app, name,
+            notice="Palette saved — the colours are written back "
+                   "into the scope's Palette field. Regenerate the "
+                   "assets to redraw them in the new palette; a "
+                   "game rebuild picks up palette-driven template "
+                   "colours.",
+            notice_kind="ok", palette_before=before["palette"]))
+
     # -- actions ---------------------------------------------------------
     def _post_feedback(self, name: str, parts: list) -> None:
         project = self.app.project_by_name(name)
         path = project["path"]
         sub = parts[3] if len(parts) > 3 else ""
         if sub == "fetch" and len(parts) == 4:
-            report = feedback_module.fetch_feedback(path)
-            bits = "; ".join(
-                f"{source}: {entry['detail']} (+{entry['added']})"
-                for source, entry in report.items())
-            return self._send_html(render_feedback(
-                self.app, name, notice=_esc("Fetch done. " + bits),
-                notice_kind="ok"))
+            return self._post_job_action(name, "feedback-fetch",
+                                         view="feedback")
         if sub == "triage" and len(parts) == 4:
-            settings_path, _ = workspace_settings(self.app.workspace)
-            result = feedback_module.triage(path, settings_path=settings_path)
-            return self._send_html(render_feedback(
-                self.app, name,
-                notice=_esc(f"Triage done: {result['note']}. "
-                            f"{len(result['items'])} item(s) in the queue."),
-                notice_kind="ok"))
+            return self._post_job_action(name, "feedback-triage",
+                                         view="feedback")
         if sub == "add" and len(parts) == 4:
             form = self._form()
             text = form.get("text", "").strip()
@@ -932,164 +1450,9 @@ class _Handler(BaseHTTPRequestHandler):
         return self._fail_page("That feedback action does not exist here.", 404)
 
     def _post_patch_start(self, name: str, item_id: str) -> None:
-        project = self.app.project_by_name(name)
-        settings_path, _ = workspace_settings(self.app.workspace)
-        try:
-            result = patch_module.start_patch(
-                project["path"], item_id, settings_path=settings_path)
-        except patch_module.PatchError as exc:
-            return self._send_html(render_feedback(
-                self.app, name, notice=_esc(f"Patch refused. {exc}"),
-                notice_kind="bad"))
-        if result["outcome"] == "patched":
-            notice, kind = (f"Patch shipped: version {result['version']} — "
-                            f"{result['change']}. Tests and save "
-                            "compatibility both passed.", "ok")
-        elif result["outcome"] == "planned":
-            notice, kind = (f"No automatic patch — a plan was written to "
-                            f"PATCH_PLAN.md. {result['reason']}", "warn")
-        else:
-            notice, kind = (f"Patch rejected and the tree restored: "
-                            f"{result['reason']}", "bad")
-        return self._send_html(render_feedback(
-            self.app, name, notice=_esc(notice), notice_kind=kind))
-
-    def _post_repair(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        settings_path, _ = workspace_settings(self.app.workspace)
-        try:
-            result = repair_module.run_repair(
-                project["path"], settings_path=settings_path)
-        except repair_module.RepairError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Repair not run. {exc}"),
-                notice_kind="bad"))
-        kind = "ok" if result["outcome"] in ("repaired", "already_passing") \
-            else "warn"
-        return self._send_html(render_project(
-            self.app, name,
-            notice=_esc(f"Self-repair: {result['outcome']} — {result['note']} "
-                        "Full record in REPAIR_REPORT.md."),
-            notice_kind=kind))
-
-    def _post_model_playtest(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        settings_path, _ = workspace_settings(self.app.workspace)
-        try:
-            record = modelplayer_module.run_model_playtest(
-                project["path"], settings_path=settings_path)
-        except modelplayer_module.ModelPlayerError as exc:
-            return self._send_html(render_project(
-                self.app, name,
-                notice=_esc(f"Model playtest did not run: {exc}"),
-                notice_kind="warn"))
-        return self._send_html(render_project(
-            self.app, name,
-            notice=_esc(
-                f"Model playtest: {record['outcome']} — "
-                f"{record['decisions']} decisions, {record['deaths']} "
-                f"deaths. Confusion notes were filed as feedback."),
-            notice_kind="ok" if record["finished"] else "warn"))
-
-    def _post_build_skeleton(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        back = f"/project/{urllib.parse.quote(name)}"
-        try:
-            report = skeleton_module.build_skeleton(project["path"])
-        except skeleton_module.SkeletonError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Skeleton not built. {exc}"),
-                notice_kind="bad"))
-        validation = report.get("validation", {})
-        message = (f"Skeleton built and validated in Godot "
-                   f"({validation.get('godot_version', '')}). "
-                   f"Known-good tag: {_esc(report.get('known_good_tag'))}.")
-        return self._send_html(render_project(
-            self.app, name, notice=message, notice_kind="ok"))
-
-    def _post_generate_assets(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        try:
-            report = assets_module.generate_assets(project["path"])
-        except assets_module.AssetsError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Assets not generated. {exc}"),
-                notice_kind="bad"))
-        return self._send_html(render_project(
-            self.app, name,
-            notice=f"Assets generated: {len(report['files'])} files for the "
-                   f"{_esc(report['archetype'])} game, every one recorded "
-                   "in the provenance log. Cost: 0 tokens.",
-            notice_kind="ok"))
-
-    def _post_build_game(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        settings_path, _ = workspace_settings(self.app.workspace)
-        try:
-            report = generate_module.build_game(
-                project["path"], settings_path=settings_path)
-        except generate_module.GenerationError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Game not built. {exc}"),
-                notice_kind="bad"))
-        return self._send_html(render_project(
-            self.app, name,
-            notice=f"Game built: archetype {_esc(report['archetype'])}, "
-                   f"{report['units_delivered']} content units, Godot "
-                   "validation passed, tagged known-good/build.",
-            notice_kind="ok"))
-
-    def _post_run_tests(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        try:
-            report = testing_module.run_tests(project["path"])
-        except testing_module.TestingError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Tests not run. {exc}"),
-                notice_kind="bad"))
-        digest = " ".join(testing_module.digest_lines(report)[-3:])
-        kind = "ok" if report.get("ok") else "bad"
-        return self._send_html(render_project(
-            self.app, name,
-            notice=f"Test suite finished. {_esc(digest)}",
-            notice_kind=kind))
-
-    def _post_finish_check(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        try:
-            result = finish_module.evaluate_finish(project["path"])
-        except finish_module.FinishError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(str(exc)), notice_kind="bad"))
-        bits = []
-        if result["marked_now"]:
-            bits.append("Marked now: " + ", ".join(
-                finish_module.DOD_LABELS.get(k, k) for k in result["marked_now"]))
-        if result["already_marked"]:
-            bits.append("Already marked: " + ", ".join(
-                finish_module.DOD_LABELS.get(k, k) for k in result["already_marked"]))
-        if result["open"]:
-            bits.append("Still open: " + "; ".join(
-                f"{finish_module.DOD_LABELS.get(k, k)} — {reason}"
-                for k, reason in result["open"].items()))
-        message = "Finish check done. " + (" ".join(bits) if bits else "")
-        kind = "ok" if not result["open"] else "warn"
-        return self._send_html(render_project(
-            self.app, name, notice=_esc(message), notice_kind=kind))
-
-    def _post_finish_report(self, name: str) -> None:
-        project = self.app.project_by_name(name)
-        settings_path, _ = workspace_settings(self.app.workspace)
-        try:
-            path = finish_module.build_finish_report(
-                project["path"], settings_path=settings_path)
-        except finish_module.FinishError as exc:
-            return self._send_html(render_project(
-                self.app, name, notice=_esc(str(exc)), notice_kind="bad"))
-        return self._send_html(render_project(
-            self.app, name,
-            notice=f"Finish report written to {_esc(path.name)} in the project folder.",
-            notice_kind="ok"))
+        return self._post_job_action(name, "patch-start",
+                                     params={"item": item_id},
+                                     view="feedback")
 
     def _post_advance(self, name: str) -> None:
         project = self.app.project_by_name(name)
@@ -1213,7 +1576,17 @@ class WeaverbirdAppServer(ThreadingHTTPServer):
         self.workspace = Path(workspace)
         if not self.workspace.is_dir():
             raise AppError(f"Workspace not found: {self.workspace}")
+        # The job runner: every project action runs through it.
+        # Creating it also marks any job a previous server left
+        # mid-flight as interrupted, honestly.
+        self.jobs = jobs_module.JobManager(self.workspace)
         super().__init__(("127.0.0.1", port), _Handler)
+
+    def server_close(self) -> None:
+        try:
+            self.jobs.shutdown()
+        finally:
+            super().server_close()
 
     def project_by_name(self, name: str) -> dict:
         for project in find_projects(self.workspace):

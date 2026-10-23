@@ -113,8 +113,38 @@ def _run(godot_bin: str, game_dir: Path, args: list, timeout: int) -> dict:
     }
 
 
+def _units_from_details(win_details, first_details) -> list[dict]:
+    """Aggregate the bots' per-unit records into the report's
+    ``units`` list: [{unit, source, completed, deaths, time_s,
+    ...}] with source "competent" (the win run) or "first_time".
+
+    Bots that predate per-unit recording simply contribute
+    nothing — the balance lab reads an empty list as "re-run the
+    tests with a current build", never as invented numbers.
+    """
+    units: list[dict] = []
+    for source, details in (("competent", win_details),
+                            ("first_time", first_details)):
+        for record in (details or {}).get("units") or []:
+            if not isinstance(record, dict) \
+                    or not isinstance(record.get("unit"), (int, float)):
+                continue
+            entry = {
+                "unit": int(record["unit"]),
+                "source": source,
+                "completed": bool(record.get("completed")),
+            }
+            for key in ("deaths", "time_s", "moves_used", "move_budget"):
+                value = record.get(key)
+                if isinstance(value, (int, float)):
+                    entry[key] = value
+            units.append(entry)
+    units.sort(key=lambda u: (u["unit"], u["source"]))
+    return units
+
+
 def run_tests(project_dir, godot_path=None, settings_path=None,
-              allow_repair: bool = True) -> dict:
+              allow_repair: bool = True, reporter=None) -> dict:
     """Run the full suite for a project. Returns the test report.
 
     The report is written even when the suite fails — what failed
@@ -153,6 +183,17 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
     target_fps = _target_fps(project, settings_path)
 
     runs: list[dict] = []
+    total_runs = 7  # 3 base runs + 4 scripted players
+    steps_done = 0
+
+    def note_run(entry: dict) -> None:
+        nonlocal steps_done
+        steps_done += 1
+        if reporter is not None:
+            reporter(
+                f"Run {steps_done} of {total_runs}: {entry['name']} — "
+                f"{'ok' if entry['ok'] else 'FAILED'}",
+                done=steps_done, total=total_runs)
 
     def base_run(name: str, args: list, timeout: int = 120) -> dict:
         result = _run(godot_bin, game_dir, args, timeout)
@@ -164,6 +205,7 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
             "details": {},
         }
         runs.append(entry)
+        note_run(entry)
         return entry
 
     def player_run(name: str, script: str, timeout: int) -> dict:
@@ -183,8 +225,13 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
             "details": details,
         }
         runs.append(entry)
+        note_run(entry)
         return entry
 
+    if reporter is not None:
+        reporter(f"Running the headless test suite ({total_runs} runs: "
+                 "import, menu, game scene, then the scripted players)",
+                 done=0, total=total_runs)
     base_run("import", ["--import"])
     base_run("main scene", ["--quit-after", "45"])
     base_run("game scene", ["res://scenes/game.tscn", "--quit-after", "45"])
@@ -253,6 +300,7 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
             "breaker": {**breaker["details"], "ok": breaker["ok"]},
             "first_time": {**first["details"], "ok": first["ok"]},
         },
+        "units": _units_from_details(win["details"], first["details"]),
         "warnings": warnings,
         "ok": scenarios_pass,
     }
@@ -260,6 +308,9 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     ledger_module.add_entry(project, "headless_test", "cheap", 0, 0.0)
+    if reporter is not None:
+        reporter("Test report written — verdict: "
+                 + ("PASS" if scenarios_pass else "FAIL"))
 
     if allow_repair and not report.get("ok"):
         _settings_file, data = brain_module.resolve_settings(
@@ -273,10 +324,13 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
                 attempts = 3
         if isinstance(attempts, (int, float)) and attempts > 0:
             from . import repair as repair_module  # lazy: no cycle
+            if reporter is not None:
+                reporter("The suite failed — handing over to self-repair")
             try:
                 outcome = repair_module.run_repair(
                     project, settings_path=settings_path,
-                    godot_path=godot_path, max_attempts=int(attempts))
+                    godot_path=godot_path, max_attempts=int(attempts),
+                    reporter=reporter)
             except repair_module.RepairError:
                 outcome = None
             if outcome and outcome.get("outcome") == "repaired":

@@ -175,18 +175,37 @@ def _shift_hex(hex_value: str, hue_shift: float, saturation=None,
     return _hex_of((r2, g2, b2))
 
 
+def _palette_field_hexes(values: dict) -> list[str]:
+    """Hex colours written in the scope's Palette field alone, in
+    order, normalised to #RRGGBB. The style lock may pin palette
+    roles by position: 1 accent, 2 target, 3 hazard, 4 platform,
+    5 crate. Roles it does not pin are derived from the accent."""
+    found = skeleton_module._HEX_RE.findall(values.get("Palette", "") or "")
+    hexes = []
+    for digits in found:
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        hexes.append("#" + digits.upper())
+    return hexes
+
+
 def _palette(values: dict) -> dict:
     accent, target, accent_hex = skeleton_module._scope_colours(values)
     target_hex = _hex_of(target)
+    pinned = _palette_field_hexes(values)
+
+    def pin(index: int, derived: str) -> str:
+        return pinned[index] if len(pinned) > index else derived
+
     return {
         "accent_hex": accent_hex,
         "target_hex": target_hex,
-        "hazard_hex": _shift_hex(accent_hex, 0.5, saturation=0.72,
-                                 lightness=0.55),
-        "platform_hex": _shift_hex(accent_hex, 0.0, saturation=0.18,
-                                   lightness=0.30),
-        "crate_hex": _shift_hex(accent_hex, 0.06, saturation=0.48,
-                                lightness=0.40),
+        "hazard_hex": pin(2, _shift_hex(accent_hex, 0.5, saturation=0.72,
+                                        lightness=0.55)),
+        "platform_hex": pin(3, _shift_hex(accent_hex, 0.0, saturation=0.18,
+                                          lightness=0.30)),
+        "crate_hex": pin(4, _shift_hex(accent_hex, 0.06, saturation=0.48,
+                                       lightness=0.40)),
     }
 
 
@@ -745,7 +764,7 @@ def _write_report(project_dir, report: dict) -> None:
 
 def build_game(project_dir, archetype: str | None = None, godot_path=None,
                validate: bool = True, settings_path=None,
-               use_brain: bool = True) -> dict:
+               use_brain: bool = True, reporter=None) -> dict:
     """Generate the real game for a project. Returns the report.
 
     Requires the skeleton to exist (``game/project.godot``) and the
@@ -783,12 +802,18 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
     palette = _palette(values)
     units = content_units(values)
     config, _extras = deterministic_config(chosen, values, palette, units)
+    if reporter is not None:
+        reporter(f"Archetype: {chosen} ({why}); {units} content "
+                 "unit(s) from the scope")
 
     brain_used = False
     brain_note = "brain not attempted"
     if use_brain:
         config, brain_used, brain_note = brain_proposal(
             project, chosen, config, values, settings_path=settings_path)
+        if reporter is not None:
+            reporter(f"Tuning: {'proposed by the model' if brain_used else 'deterministic'} "
+                     f"— {brain_note}")
 
     written: list[str] = []
     file_map = _archetype_files(chosen)
@@ -802,6 +827,8 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
         json.dumps(config, indent=2) + "\n", encoding="utf-8")
     written.append(config_rel)
     written.sort()
+    if reporter is not None:
+        reporter(f"Wrote the {chosen} game ({len(written)} files)")
 
     report = {
         "stage": "build",
@@ -822,7 +849,7 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
 
     if validate:
         report["validation"] = skeleton_module.validate_project(
-            project, godot_path=godot_path)
+            project, godot_path=godot_path, reporter=reporter)
 
     for rel in written:
         provenance_module.add_record(
@@ -851,6 +878,8 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
         vcs_module.tag_known_good(project, KNOWN_GOOD_TAG)
     if validate:
         report["known_good_tag"] = KNOWN_GOOD_TAG
+    if validate and reporter is not None:
+        reporter("Committed and tagged known-good/build")
     _write_report(project, report)
     return report
 

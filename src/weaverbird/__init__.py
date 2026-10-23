@@ -12,13 +12,20 @@ with scripted playtesters, all feeding the finish check. Since
 0.5.0: the feedback + patch loop (fetch, triage, approved patches
 gated by the test stage and a save-compatibility check), bounded
 self-repair of failing test runs, and a model-driven playtester
-that plays through a bridge in the generated games.
+that plays through a bridge in the generated games. Since 0.6.0:
+the job runner (every app action a persisted background job with
+live progress and cooperative cancel; each record names its
+worker for the coming orchestrator), the balance lab (per-unit
+metrics from the scripted players, deterministic flags,
+suggestions routed through the patch gates, checkpointed A/B
+compare), and the asset studio (per-asset regeneration from the
+generator registry, palette editor writing back to the scope).
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

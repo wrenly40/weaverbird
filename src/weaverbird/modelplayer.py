@@ -132,7 +132,8 @@ def _default_brain_fn(project, tier, settings_path):
 def run_model_playtest(project_dir, settings_path=None, godot_path=None,
                        max_decisions: int | None = None,
                        tier: str | None = None, brain_fn=None,
-                       decision_timeout: int = DECISION_TIMEOUT) -> dict:
+                       decision_timeout: int = DECISION_TIMEOUT,
+                       reporter=None) -> dict:
     """Play one run. Returns the outcome dict (also written to
     .weaverbird/model_playtest.json).
 
@@ -141,6 +142,7 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
     default calls the configured vision tier through brain.py.
     Raises ModelPlayerError when the run cannot start (no game, no
     bridge, no display) or the brain is not configured.
+    ``reporter`` (optional) narrates progress for the job runner.
     """
     project = Path(project_dir)
     game_dir = project / GAME_DIR_NAME
@@ -199,6 +201,10 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
     command = [godot_bin, "--path", str(game_dir), "--", "--model-bridge"]
     if use_xvfb:
         command = ["xvfb-run", "-a", "-s", "-screen 0 1280x800x24"] + command
+    if reporter is not None:
+        reporter(f"Model playtest started — the {tier} tier plays "
+                 f"“{title}” from screenshots (up to {max_decisions} "
+                 "decisions)", done=0, total=max_decisions)
     log_file = open(log_path, "w", encoding="utf-8")
     process = subprocess.Popen(
         command, stdout=log_file, stderr=subprocess.STDOUT,
@@ -324,6 +330,12 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
                 "state": {k: v for k, v in state.items()
                           if k not in ("actions", "decision")},
             })
+            if reporter is not None and decisions % 5 == 0:
+                reporter(f"Decision {decisions} of up to "
+                         f"{max_decisions}: {action}"
+                         + (f" — confused: {note}" if confused and note
+                            else ""),
+                         done=decisions, total=max_decisions)
             if invalid_streak >= 3:
                 outcome = "invalid"
                 write_action("wait")
@@ -399,4 +411,8 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
             feedback_module.update_item(
                 project, _item["id"], category="confusion",
                 status="triaged", cluster="model playtest")
+    if reporter is not None:
+        reporter(f"Model playtest ended: {outcome} after {decisions} "
+                 f"decisions, {deaths} deaths",
+                 done=decisions, total=max_decisions)
     return record

@@ -19,8 +19,10 @@ are not. The stage adds a zero-token ledger entry.
 
 from __future__ import annotations
 
+import io
 import json
 import math
+import re
 import struct
 import wave
 from datetime import datetime, timezone
@@ -253,16 +255,22 @@ def _sequence(notes: list[tuple[float, float, float]], volume=0.5,
     return out
 
 
-def _write_wav(path: Path, samples: list[float]) -> None:
+def _wav_bytes(samples: list[float]) -> bytes:
     frames = b"".join(
         struct.pack("<h", int(max(-1.0, min(1.0, s)) * 32767 * 0.9))
         for s in samples
     )
-    with wave.open(str(path), "wb") as wav:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
         wav.writeframes(frames)
+    return buffer.getvalue()
+
+
+def _write_wav(path: Path, samples: list[float]) -> None:
+    path.write_bytes(_wav_bytes(samples))
 
 
 def _audio_files() -> dict:
@@ -318,15 +326,11 @@ def load_report(project_dir):
         return None
 
 
-def generate_assets(project_dir, archetype: str | None = None) -> dict:
-    """Generate the game's assets. Returns the assets report.
-
-    Requires the skeleton game to exist (assets live inside it). The
-    palette comes from the scope's style lock; the archetype from
-    the scope, exactly as the build stage detects it (an explicit
-    archetype, e.g. the one a build already chose, may be passed).
-    """
-    project = Path(project_dir)
+def _preflight(project: Path,
+               archetype: str | None = None) -> tuple[dict, str, dict]:
+    """(palette, archetype, scope values) for a project whose
+    skeleton game exists — the shared start of every asset
+    operation."""
     game_dir = project / GAME_DIR_NAME
     if not (game_dir / "project.godot").exists():
         raise AssetsError(
@@ -341,29 +345,82 @@ def generate_assets(project_dir, archetype: str | None = None) -> dict:
     values = {f.name: f.value for f in parsed.fields}
     chosen, _why = generate_module.detect_archetype(
         values, override=archetype)
-    palette = generate_module._palette(values)
+    return generate_module._palette(values), chosen, values
+
+
+def _producers(palette: dict, archetype: str) -> dict:
+    """Every generated asset, by name: {name: (relative path,
+    produce() -> bytes, provenance note, kind)}.
+
+    Each asset is produced by a named generator — the sprite
+    makers above, the icon maker, or a synthesiser for one audio
+    file — so the asset studio can redraw exactly one file
+    without touching the others. The registry is the single
+    source of asset names and kinds: the studio and the CLI read
+    it as data and never hardcode a per-game asset list. (The
+    current generators are the built-in set; a future mechanics
+    layer registers its own producers the same way.)
+    """
+    producers: dict[str, tuple[str, object, str, str]] = {}
+    for name, maker in _SPRITES.items():
+        producers[name] = (
+            f"{GAME_DIR_NAME}/assets/{name}.svg",
+            (lambda maker=maker: maker(palette).encode("utf-8")),
+            f"{name} sprite drawn from the style-lock palette by "
+            "the deterministic SVG generator",
+            "sprite")
+    producers["icon"] = (
+        f"{GAME_DIR_NAME}/icon.svg",
+        (lambda: _icon(palette, archetype).encode("utf-8")),
+        f"game icon generated from the palette with the "
+        f"{archetype} motif",
+        "icon")
+    for filename, samples in _audio_files().items():
+        stem = filename.rsplit(".", 1)[0]
+        producers[stem] = (
+            f"{GAME_DIR_NAME}/assets/audio/{filename}",
+            (lambda samples=samples: _wav_bytes(samples)),
+            "procedurally synthesised audio (stdlib wave, no samples)",
+            "audio")
+    return producers
+
+
+def generate_assets(project_dir, archetype: str | None = None,
+                    reporter=None) -> dict:
+    """Generate the game's assets. Returns the assets report.
+
+    Requires the skeleton game to exist (assets live inside it). The
+    palette comes from the scope's style lock; the archetype from
+    the scope, exactly as the build stage detects it (an explicit
+    archetype, e.g. the one a build already chose, may be passed).
+    ``reporter`` (optional) narrates the step boundaries for the
+    job runner.
+    """
+    project = Path(project_dir)
+    game_dir = project / GAME_DIR_NAME
+    palette, chosen, values = _preflight(project, archetype)
 
     assets_dir = game_dir / "assets"
     audio_dir = assets_dir / "audio"
     assets_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
 
+    producers = _producers(palette, chosen)
+    if reporter is not None:
+        reporter(f"Generating assets for the {chosen} game — palette "
+                 f"{palette['accent_hex']} / {palette['target_hex']} "
+                 "from the style lock", done=0, total=len(producers))
     written: list[str] = []
     notes: dict[str, str] = {}
-    for name, maker in _SPRITES.items():
-        rel = f"{GAME_DIR_NAME}/assets/{name}.svg"
-        (assets_dir / f"{name}.svg").write_text(maker(palette), encoding="utf-8")
+    for name, (rel, produce, note, _kind) in producers.items():
+        dest = project / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(produce())
         written.append(rel)
-        notes[rel] = f"{name} sprite drawn from the style-lock palette by the deterministic SVG generator"
-    icon_rel = f"{GAME_DIR_NAME}/icon.svg"
-    (game_dir / "icon.svg").write_text(_icon(palette, chosen), encoding="utf-8")
-    written.append(icon_rel)
-    notes[icon_rel] = f"game icon generated from the palette with the {chosen} motif"
-    for name, samples in _audio_files().items():
-        rel = f"{GAME_DIR_NAME}/assets/audio/{name}"
-        _write_wav(audio_dir / name, samples)
-        written.append(rel)
-        notes[rel] = "procedurally synthesised audio (stdlib wave, no samples)"
+        notes[rel] = note
+        if reporter is not None:
+            reporter(f"Generated {rel}", done=len(written),
+                     total=len(producers))
     written.sort()
 
     for rel in written:
@@ -378,13 +435,211 @@ def generate_assets(project_dir, archetype: str | None = None) -> dict:
         "archetype": chosen,
         "palette": palette,
         "files": written,
-        "icon": icon_rel,
+        "icon": f"{GAME_DIR_NAME}/icon.svg",
         "icon_generated": True,
     }
     path = report_path_for(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
+
+
+# ---------------------------------------------------------------------------
+# The asset studio: list, regenerate one, edit the palette
+
+def asset_names(project_dir) -> list[str]:
+    """The names `regenerate_asset` accepts, sorted."""
+    palette, chosen, _values = _preflight(Path(project_dir))
+    return sorted(_producers(palette, chosen))
+
+
+def list_assets(project_dir) -> list[dict]:
+    """Every generated asset with its provenance and file state:
+    [{name, path, kind, regenerable, size, missing, source,
+    provider, note}].
+
+    The listing is data-driven: the generator registry says what
+    can be redrawn (kind + regenerable), the assets manifest
+    (.weaverbird/assets_report.json) and the provenance records
+    say what the project claims to have. An asset the manifest
+    or the log names but the registry no longer produces is
+    still listed — flagged, not regenerable — so nothing a game
+    ships is hidden from the studio.
+    """
+    project = Path(project_dir)
+    palette, chosen, _values = _preflight(project)
+    producers = _producers(palette, chosen)
+    records: dict[str, dict] = {}
+    try:
+        for record in provenance_module.list_records(project):
+            records[str(record.get("asset", ""))] = record
+    except provenance_module.ProvenanceError:
+        records = {}
+    listing = []
+    covered: set[str] = set()
+    for name in sorted(producers):
+        rel, _produce, _note, kind = producers[name]
+        covered.add(rel)
+        dest = project / rel
+        record = records.get(rel, {})
+        listing.append({
+            "name": name,
+            "path": rel,
+            "kind": kind,
+            "regenerable": True,
+            "size": dest.stat().st_size if dest.exists() else None,
+            "missing": not dest.exists(),
+            "source": record.get("source", ""),
+            "provider": record.get("provider", ""),
+            "note": record.get("note", ""),
+            "recorded_at": record.get("recorded_at", ""),
+        })
+    extra_paths: list[str] = []
+    manifest = load_report(project)
+    if manifest:
+        for rel in manifest.get("files", []):
+            if rel not in covered and rel not in extra_paths:
+                extra_paths.append(rel)
+    for rel in sorted(records):
+        # Provenance covers every file the factory writes
+        # (scripts, scenes, project files) — only asset-shaped
+        # paths belong in the studio listing.
+        asset_shaped = rel.startswith(f"{GAME_DIR_NAME}/assets/") \
+            or rel == f"{GAME_DIR_NAME}/icon.svg"
+        if asset_shaped and rel not in covered \
+                and rel not in extra_paths:
+            extra_paths.append(rel)
+    for rel in extra_paths:
+        dest = project / rel
+        record = records.get(rel, {})
+        suffix = Path(rel).suffix.lower()
+        kind = {".svg": "image", ".wav": "audio"}.get(suffix, "file")
+        listing.append({
+            "name": Path(rel).stem,
+            "path": rel,
+            "kind": kind,
+            "regenerable": False,
+            "size": dest.stat().st_size if dest.exists() else None,
+            "missing": not dest.exists(),
+            "source": record.get("source", ""),
+            "provider": record.get("provider", ""),
+            "note": record.get("note", "")
+                    or "On record, but no current generator "
+                       "produces this asset.",
+            "recorded_at": record.get("recorded_at", ""),
+        })
+    return listing
+
+
+def regenerate_asset(project_dir, name: str, reporter=None) -> dict:
+    """Redraw exactly one generated asset from the current
+    palette (audio is re-synthesised), leaving every other file
+    untouched, and record the regeneration in the provenance log
+    (a new record for that asset; the rest of the log is
+    untouched). Zero tokens. Returns {name, path, size}."""
+    project = Path(project_dir)
+    palette, chosen, _values = _preflight(project)
+    producers = _producers(palette, chosen)
+    if name not in producers:
+        raise AssetsError(
+            f"Unknown asset {name!r}. The generated assets are: "
+            + ", ".join(sorted(producers)) + ".")
+    rel, produce, note, _kind = producers[name]
+    if reporter is not None:
+        reporter(f"Regenerating {rel} from the current palette",
+                 done=0, total=1)
+    dest = project / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    data = produce()
+    dest.write_bytes(data)
+    provenance_module.add_record(
+        project, rel, "code", provider=PROVENANCE_PROVIDER,
+        note=note + " — regenerated in the asset studio")
+    if reporter is not None:
+        reporter(f"Regenerated {rel} and recorded it in the "
+                 "provenance log", done=1, total=1)
+    return {"name": name, "path": rel, "size": len(data)}
+
+
+# Palette roles, in scope order: the scope's Palette field pins
+# them by position (accent, target, hazard, platform, crate);
+# generate._palette derives any role the field does not pin.
+PALETTE_ROLES = (
+    ("accent", "Accent", "accent_hex"),
+    ("target", "Target", "target_hex"),
+    ("hazard", "Hazard", "hazard_hex"),
+    ("platform", "Platform", "platform_hex"),
+    ("crate", "Crate", "crate_hex"),
+)
+
+_HEX_INPUT_RE = re.compile(r"#?[0-9a-fA-F]{6}\Z")
+
+
+def normalise_hex(value: str) -> str:
+    """'#rrggbb' in any case → '#RRGGBB'. Raises AssetsError."""
+    text = str(value or "").strip()
+    if not _HEX_INPUT_RE.match(text):
+        raise AssetsError(f"{value!r} is not a six-digit hex colour.")
+    return "#" + text.lstrip("#").upper()
+
+
+def palette_state(project_dir) -> dict:
+    """The palette editor's view: the effective palette, each
+    role's current hex, and whether the scope pins that role."""
+    project = Path(project_dir)
+    scope_file = scope_module.scope_path_for(project)
+    if not scope_file.exists():
+        raise AssetsError(f"No scope file found at {scope_file}.")
+    parsed = scope_module.load_scope(scope_file)
+    values = {f.name: f.value for f in parsed.fields}
+    palette = generate_module._palette(values)
+    pinned = generate_module._palette_field_hexes(values)
+    roles = []
+    for index, (role, label, key) in enumerate(PALETTE_ROLES):
+        roles.append({
+            "role": role, "label": label, "hex": palette[key],
+            "pinned": len(pinned) > index,
+        })
+    return {"palette": palette, "roles": roles,
+            "palette_text": values.get("Palette", "")}
+
+
+def _apply_palette_hexes(text: str, hexes: list[str]) -> str:
+    """Replace the hex tokens of a Palette field value position
+    by position, keeping the field's words; hexes beyond the
+    tokens present are appended."""
+    tokens = list(skeleton_module._HEX_RE.finditer(text))
+    out = text
+    # Replace from the end so earlier offsets stay valid.
+    for index in range(min(len(tokens), len(hexes)) - 1, -1, -1):
+        match = tokens[index]
+        out = out[:match.start()] + hexes[index] + out[match.end():]
+    extra = hexes[len(tokens):]
+    if extra:
+        suffix = " ".join(extra)
+        out = (out.rstrip() + " " + suffix) if out.strip() else suffix
+    return out
+
+
+def save_palette(project_dir, hexes: list[str]) -> dict:
+    """Write new role hexes into the scope's Palette field (the
+    scope writer owns the file's shape), in role order. Returns
+    the new palette_state. Roles beyond the list keep their
+    current values: the caller passes all five."""
+    project = Path(project_dir)
+    if len(hexes) != len(PALETTE_ROLES):
+        raise AssetsError(
+            f"The palette editor saves {len(PALETTE_ROLES)} role "
+            f"colours, got {len(hexes)}.")
+    normalised = [normalise_hex(value) for value in hexes]
+    scope_file = scope_module.scope_path_for(project)
+    if not scope_file.exists():
+        raise AssetsError(f"No scope file found at {scope_file}.")
+    parsed = scope_module.load_scope(scope_file)
+    values = {f.name: f.value for f in parsed.fields}
+    new_text = _apply_palette_hexes(values.get("Palette", ""), normalised)
+    scope_module.set_field_value(scope_file, "Palette", new_text)
+    return palette_state(project)
 
 
 # ---------------------------------------------------------------------------

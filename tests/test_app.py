@@ -37,6 +37,25 @@ def post(url, fields):
         return response.status, response.read().decode("utf-8")
 
 
+def wait_for_job(base, body, timeout=60):
+    """Actions are jobs now: pull the job id out of the returned
+    page's live card and poll the JSON API until it lands."""
+    import re
+    import time as _time
+    match = re.search(r'data-job-id="([^"]+)"', body)
+    assert match, "the page carries no job card"
+    job_id = match.group(1)
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        _status, payload = get(f"{base}/api/jobs/{job_id}")
+        job = json.loads(payload)
+        if job["status"] in ("done", "failed", "cancelled",
+                             "interrupted"):
+            return job
+        _time.sleep(0.1)
+    raise AssertionError(f"job {job_id} did not finish in {timeout}s")
+
+
 class AppTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -110,7 +129,10 @@ class TestProjectPage(AppTestCase):
                                                  encoding="utf-8")
         status, page = post(self.base + "/project/bee-game/finish-check", {})
         self.assertEqual(status, 200)
-        self.assertIn("Finish check done", page)
+        job = wait_for_job(self.base, page)
+        self.assertEqual(job["status"], "done")
+        self.assertIn("Finish check done", job["result"])
+        _status, page = get(self.base + "/project/bee-game")
         self.assertIn("Still open", page)  # losable etc. stay honest
         current = state.load_state(self.project)
         self.assertTrue(
@@ -270,7 +292,9 @@ class TestGenerationAndTestCards(AppTestCase):
         status, page = post(self.base + "/project/bee-game/generate-assets",
                             {})
         self.assertEqual(status, 200)
-        self.assertIn("Assets generated", page)
+        job = wait_for_job(self.base, page)
+        self.assertEqual(job["status"], "done")
+        self.assertIn("Assets generated", job["result"])
         self.assertTrue(
             (self.project / ".weaverbird" / "assets_report.json").exists())
         self.assertTrue(
@@ -279,4 +303,6 @@ class TestGenerationAndTestCards(AppTestCase):
     def test_run_tests_action_reports_refusal_before_build(self):
         status, page = post(self.base + "/project/bee-game/run-tests", {})
         self.assertEqual(status, 200)
-        self.assertIn("Tests not run", page)
+        job = wait_for_job(self.base, page)
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("No game found", job["error"])

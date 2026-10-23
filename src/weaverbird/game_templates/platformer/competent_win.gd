@@ -68,6 +68,11 @@ var _recoveries: int = 0
 var _recoveries_level: int = 0
 var _facing_mem: float = 1.0
 var _takeoff_top: float = 1e18
+# Per-unit (per-level) records for the balance lab.
+var _units: Array = []
+var _unit_level: int = -1
+var _unit_t0: float = 0.0
+var _unit_deaths0: int = 0
 
 
 func _initialize() -> void:
@@ -101,11 +106,13 @@ func _process(delta: float) -> bool:
         1:
             if _in_scene("win.tscn"):
                 _release_all()
+                _close_unit(true)
                 print("SMOKE PASS: menu -> game -> every level -> win screen")
                 _report(true, "")
                 return true
             if _in_scene("game_over.tscn"):
                 _release_all()
+                _close_unit(false)
                 _report(false, "the competent player ran out of lives")
                 return true
             if current_scene != null and _load_ms == 0:
@@ -169,6 +176,7 @@ func _steer(delta: float) -> void:
     if player == null:
         return
     _deaths = int(current_scene.get("deaths"))
+    _track_unit()
     if _deaths >= MAX_DEATHS:
         _fail("the competent player died %d times%s" % [_deaths, _where()])
         return
@@ -357,6 +365,39 @@ func _track_progress(delta: float, player: CharacterBody2D,
         _plan = []  # discard the route; replan from here
         _no_progress = 0.0
         _best_dist = 1e18
+
+
+func _track_unit() -> void:
+    # Per-level records: a level opens when first seen; when the
+    # level index moves on, the level just left was completed.
+    if not _in_scene("game.tscn"):
+        return
+    var level := int(current_scene.get("level_index"))
+    var deaths := int(current_scene.get("deaths"))
+    if _unit_level < 0:
+        _unit_level = level
+        _unit_t0 = _game_time
+        _unit_deaths0 = deaths
+    elif level != _unit_level:
+        _units.append({
+            "unit": _unit_level + 1, "completed": true,
+            "deaths": deaths - _unit_deaths0,
+            "time_s": snappedf(_game_time - _unit_t0, 0.01),
+        })
+        _unit_level = level
+        _unit_t0 = _game_time
+        _unit_deaths0 = deaths
+
+
+func _close_unit(completed: bool) -> void:
+    if _unit_level < 0:
+        return
+    _units.append({
+        "unit": _unit_level + 1, "completed": completed,
+        "deaths": _deaths - _unit_deaths0,
+        "time_s": snappedf(_game_time - _unit_t0, 0.01),
+    })
+    _unit_level = -1
 
 
 func _fail(reason: String) -> void:
@@ -722,6 +763,8 @@ func _release_all() -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    if _unit_level >= 0:
+        _close_unit(false)  # still mid-level: it was not completed
     var fps := 0.0
     if _game_time > 0.5:
         fps = _frames / _game_time
@@ -744,7 +787,7 @@ func _report(ok: bool, reason: String) -> void:
         "deaths": _deaths, "fps_avg": snappedf(fps, 0.1),
         "load_ms": _load_ms, "findings": [],
         "level": level, "player_pos": pos, "goal_pos": goal_pos,
-        "recoveries": _recoveries,
+        "recoveries": _recoveries, "units": _units,
     }
     _silence()
     OS.delay_msec(400)

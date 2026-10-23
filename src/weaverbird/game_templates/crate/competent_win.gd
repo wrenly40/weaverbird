@@ -29,6 +29,12 @@ var _move_index: int = 0
 var _step_wait: float = 0.0
 var _step_stage: int = 0
 var _advance_wait: float = 0.0
+# Per-unit (per-puzzle) records for the balance lab.
+var _units: Array = []
+var _unit_open: bool = false
+var _unit_t0: float = 0.0
+var _cur_moves: int = 0
+var _cur_budget: int = 0
 
 
 func _initialize() -> void:
@@ -65,10 +71,12 @@ func _process(delta: float) -> bool:
                 _phase = 1
         1:
             if _in_scene("win.tscn"):
+                _close_unit(true)
                 print("SMOKE PASS: menu -> game -> solve every puzzle -> win screen")
                 _report(true, "")
                 return true
             if _in_scene("game_over.tscn"):
+                _close_unit(false)
                 _report(false, "ran out of moves on a solution replay")
                 return true
             if current_scene != null and _load_ms == 0:
@@ -86,7 +94,19 @@ func _play(delta: float) -> void:
         return
     var game := current_scene
     var puzzle_index := int(game.get("puzzle_index"))
+    if puzzle_index == _puzzle_seen:
+        # Same puzzle: keep the latest move count — it resets to
+        # 0 the moment the next puzzle loads, so the last sample
+        # before the index moves is the finished puzzle's count.
+        _cur_moves = int(game.get("moves_used"))
+        _cur_budget = int(game.get("move_budget"))
     if puzzle_index != _puzzle_seen:
+        if _puzzle_seen >= 0:
+            _close_unit(true)  # moving on means it was solved
+        _unit_open = true
+        _unit_t0 = _game_time
+        _cur_moves = 0
+        _cur_budget = int(game.get("move_budget"))
         _puzzle_seen = puzzle_index
         _moves.clear()
         if puzzle_index < _solutions.size():
@@ -119,6 +139,18 @@ func _play(delta: float) -> void:
             _step_wait = 0.11
 
 
+func _close_unit(completed: bool) -> void:
+    if not _unit_open or _puzzle_seen < 0:
+        return
+    _units.append({
+        "unit": _puzzle_seen + 1, "completed": completed,
+        "deaths": 0,
+        "time_s": snappedf(_game_time - _unit_t0, 0.01),
+        "moves_used": _cur_moves, "move_budget": _cur_budget,
+    })
+    _unit_open = false
+
+
 func _tap(keycode: int, pressed: bool) -> void:
     var event := InputEventKey.new()
     event.physical_keycode = keycode
@@ -128,6 +160,8 @@ func _tap(keycode: int, pressed: bool) -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    if _unit_open:
+        _close_unit(false)  # still mid-puzzle: not completed
     var fps := 0.0
     if _game_time > 0.5:
         fps = _frames / _game_time
@@ -135,7 +169,7 @@ func _report(ok: bool, reason: String) -> void:
         "player": "competent", "mode": "win", "ok": ok,
         "reason": reason, "time_s": snappedf(_game_time, 0.01),
         "deaths": 0, "fps_avg": snappedf(fps, 0.1),
-        "load_ms": _load_ms, "findings": [],
+        "load_ms": _load_ms, "findings": [], "units": _units,
     }
     _silence()
     OS.delay_msec(400)

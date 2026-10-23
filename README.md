@@ -161,6 +161,71 @@ takes in, what it produces, and what is built now versus later — and
 
 ## What works today
 
+New in v0.6:
+
+- The job runner (`src/weaverbird/jobs.py`). Every action in
+  the app — build skeleton, generate assets, build game, run
+  tests, finish check and report, repair, patch shipping,
+  feedback fetch/triage, the model playtest, and the balance
+  and studio actions below — now runs as a background job
+  instead of freezing the page. Jobs persist as JSON under
+  `<workspace>/.weaverbird-app/jobs/`, run on a small pool (2
+  at a time; two jobs for the same project serialise), and
+  report at step boundaries, so the app shows a live card:
+  status, elapsed time, a progress bar (steps done of steps
+  expected, or an indeterminate bar when a stage cannot know),
+  a scrolling event log, and a Cancel button. Cancelling is
+  cooperative — it lands between steps, never mid-Godot-run,
+  and the record says so. A job a dead server leaves behind is
+  marked `interrupted` on the next start, honestly, not
+  resumed. Each record also names the `worker` that ran the
+  action (skeleton, assets, build, testing, finish, repair,
+  patch, feedback, balance, model-playtest) — the planned
+  orchestrator will key its plan view off it. From the shell:
+  `weaverbird jobs <workspace>` and `weaverbird jobs show
+  <workspace> <id>`. The dashboard gained a Jobs strip, and
+  each project page lists its job history.
+- The balance lab (`weaverbird balance show|suggest|apply|
+  compare <dir>`, and the app's Balance view). The competent
+  and first-time scripted players now record per-unit stats —
+  per level, round or puzzle: completed, deaths, time, moves
+  against budget where the game counts moves — and the test
+  report aggregates them under `units`. The lab reads that
+  table only (never the game's kind; a metric a game does not
+  record shows as unavailable) and flags, with the numbers:
+  difficulty spikes, walls the competent player cannot pass,
+  first-time stalls, and breezes (everything completed, no
+  deaths — maybe too easy). Suggestions use only the patch
+  loop's bounded knobs: ease, harden, or a clearer objective
+  hint for a stall. Applying one files a synthetic feedback
+  record (source `balance-lab`) and goes through the full
+  patch gates — test stage plus save-compatibility — with the
+  version bump and a changelog entry citing the lab numbers;
+  if the gates fail, nothing ships. Compare runs a checkpointed
+  A/B (candidate config in, test stage, original restored
+  exactly) and writes `.weaverbird/balance_report.json` with
+  side-by-side metrics and a plain verdict; it costs up to two
+  full test runs, and says so.
+- The asset studio (`weaverbird assets list <dir>`,
+  `weaverbird assets regenerate <dir> <name>`, and the app's
+  Assets view). Generation is now a
+  registry of named generators — one per sprite, the icon,
+  one synthesiser per audio file — and the studio lists every
+  asset from the registry, the assets manifest and the
+  provenance log, with sizes and missing files flagged (an
+  asset on record that no current generator produces is still
+  listed, marked not regenerable). Regenerating redraws exactly
+  one file from the current palette — audio re-synthesised —
+  and records it in the provenance log, at zero tokens. The
+  palette editor writes the palette hexes back into SCOPE.md,
+  shows a before/after swatch strip, offers Regenerate all
+  assets, and notes that a game rebuild picks up the
+  palette-driven template colours. The gallery renders SVGs as
+  images, plays audio with the browser's own controls, shows
+  the icon at three sizes, and serves files through a
+  read-only route confined to the project's `game/assets`
+  directory plus the icon.
+
 New in v0.5:
 
 - The feedback + patch loop (`weaverbird feedback …`,
@@ -400,9 +465,11 @@ pipeline runs — not things left out of scope:
   conversational interview with style samples comes next).
 - More archetypes beyond the first three, generated game code
   beyond the archetype cores (model-written diffs for what makes a
-  game different), and the iterate loop around them.
-- The background job runner, so long stages run, checkpoint and
-  resume instead of blocking a terminal or a page.
+  game different), and the iterate loop around them. Next pass:
+  an archetype-independent mechanics layer — independent
+  workers (world, player/mechanics, assets) coordinated by an
+  orchestrator over the job runner, with the archetypes demoted
+  to presets.
 - Store connectors that upload and publish (itch first), signing and
   notarisation. Publishing comes last, by the user's direction.
 

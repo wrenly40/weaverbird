@@ -268,9 +268,10 @@ def _brain_choose(project, failure: dict, offered: list[str],
 # The loop
 
 def run_repair(project_dir, settings_path=None, godot_path=None,
-               max_attempts: int | None = None) -> dict:
+               max_attempts: int | None = None, reporter=None) -> dict:
     """Run the repair loop. Returns the outcome dict and writes
-    REPAIR_REPORT.md either way."""
+    REPAIR_REPORT.md either way. ``reporter`` (optional) narrates
+    each attempt for the job runner."""
     project = Path(project_dir)
     if not (project / patch_module.config_path_for(project)).exists() \
             and not (project / "game" / "project.godot").exists():
@@ -281,12 +282,16 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
     if report is None:
         report = testing_module.run_tests(
             project, godot_path=godot_path, settings_path=settings_path,
-            allow_repair=False)
+            allow_repair=False, reporter=reporter)
     attempts: list[dict] = []
     started = {
         "pass_count": pass_count(report),
         "failures": classify_failures(report),
     }
+    if reporter is not None:
+        found = ", ".join(f["class"] for f in started["failures"]) or "none"
+        reporter(f"Repair: classified failures — {found} "
+                 f"(pass count {started['pass_count']})")
 
     def finish(outcome: str, note: str) -> dict:
         result = {
@@ -345,6 +350,11 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
                           + ", ".join(blocked or [f["class"] for f in failures])})
             break
 
+        if reporter is not None:
+            reporter(
+                f"Repair attempt {number} of {max_attempts}: "
+                + "; ".join(f"{f['class']} → {s}" for f, s in plan),
+                done=number - 1, total=max_attempts)
         patch_module._commit_quietly(
             project, f"Weaverbird repair checkpoint before attempt {number}")
         checkpoint_sha = patch_module._git_head(project)
@@ -394,7 +404,7 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
 
         new_report = testing_module.run_tests(
             project, godot_path=godot_path, settings_path=settings_path,
-            allow_repair=False)
+            allow_repair=False, reporter=reporter)
         new_count = pass_count(new_report)
         resolved = [f["class"] for f in failures
                     if f["class"] not in
@@ -411,6 +421,12 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
             "resolved": resolved,
             "failures": [f["class"] for f in failures],
         })
+        if reporter is not None:
+            reporter(
+                f"Repair attempt {number}: "
+                f"{'kept' if keep else 'restored'} — pass count "
+                f"{best_count} → {new_count}",
+                done=number, total=max_attempts)
         if new_report.get("ok"):
             patch_module._commit_quietly(
                 project, f"Weaverbird repair: attempt {number} fixed the suite")
@@ -437,7 +453,8 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
             # Re-run the suite on the restored tree so records match.
             testing_module.run_tests(
                 project, godot_path=godot_path,
-                settings_path=settings_path, allow_repair=False)
+                settings_path=settings_path, allow_repair=False,
+                reporter=reporter)
 
     # Exhausted: restore the best state seen, never worse than start.
     current_report = testing_module.load_report(project)
@@ -446,7 +463,8 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
             vcs_module.reset_to_commit(project, best_sha)
             testing_module.run_tests(
                 project, godot_path=godot_path,
-                settings_path=settings_path, allow_repair=False)
+                settings_path=settings_path, allow_repair=False,
+                reporter=reporter)
     final_report = testing_module.load_report(project)
     if final_report and final_report.get("ok"):
         if "known-good/repair" not in vcs_module.list_tags(project):

@@ -24,6 +24,10 @@ var _direction := Vector2.ZERO
 var _first_objective_s: float = -1.0
 var _finished: bool = false
 var _outcome: String = ""
+# Per-unit (per-round) records for the balance lab.
+var _units: Array = []
+var _unit_round: int = -1
+var _unit_t0: float = 0.0
 
 
 func _initialize() -> void:
@@ -57,11 +61,13 @@ func _process(delta: float) -> bool:
                 _finished = true
                 _outcome = "win"
                 _release_all()
+                _close_unit(true, 0)
                 _report(true, "")
                 return true
             if _in_scene("game_over.tscn"):
                 _outcome = "lose"
                 _release_all()
+                _close_unit(false, 1)
                 _report(true, "")
                 return true
             _game_time += delta
@@ -87,9 +93,40 @@ func _find_button(node: Node, text: String) -> bool:
     return false
 
 
+func _track_unit() -> void:
+    # Per-round records, like the competent player's (the arena
+    # has no death counter; a lost run closes its last round
+    # with deaths 1).
+    if not _in_scene("game.tscn"):
+        return
+    var round_index := int(current_scene.get("_round_index"))
+    if _unit_round < 0:
+        _unit_round = round_index
+        _unit_t0 = _game_time
+    elif round_index != _unit_round:
+        _units.append({
+            "unit": _unit_round + 1, "completed": true, "deaths": 0,
+            "time_s": snappedf(_game_time - _unit_t0, 0.01),
+        })
+        _unit_round = round_index
+        _unit_t0 = _game_time
+
+
+func _close_unit(completed: bool, deaths: int) -> void:
+    if _unit_round < 0:
+        return
+    _units.append({
+        "unit": _unit_round + 1, "completed": completed,
+        "deaths": deaths,
+        "time_s": snappedf(_game_time - _unit_t0, 0.01),
+    })
+    _unit_round = -1
+
+
 func _play(delta: float) -> void:
     if not _in_scene("game.tscn"):
         return
+    _track_unit()
     var game := current_scene
     if _first_objective_s < 0.0 and int(game.get("_collected")) > 0:
         _first_objective_s = _game_time
@@ -133,12 +170,14 @@ func _release_all() -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    if _unit_round >= 0:
+        _close_unit(false, 1 if _outcome == "lose" else 0)
     var data := {
         "player": "first_time", "mode": "explore", "ok": ok,
         "reason": reason, "time_s": snappedf(_game_time, 0.01),
         "deaths": 1 if _outcome == "lose" else 0,
         "first_objective_s": snappedf(_first_objective_s, 0.01),
-        "finished": _finished, "outcome": _outcome,
+        "finished": _finished, "outcome": _outcome, "units": _units,
         "findings": [] if _outcome != "" else ["did not finish within the run"],
     }
     _silence()

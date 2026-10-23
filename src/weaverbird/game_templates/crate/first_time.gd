@@ -35,6 +35,12 @@ var _first_objective_s: float = -1.0
 var _finished: bool = false
 var _outcome: String = ""
 var _gave_up: String = ""
+# Per-unit (per-puzzle) records for the balance lab.
+var _units: Array = []
+var _unit_index: int = -1
+var _unit_t0: float = 0.0
+var _cur_moves: int = 0
+var _cur_budget: int = 0
 
 
 func _initialize() -> void:
@@ -66,10 +72,12 @@ func _process(delta: float) -> bool:
             if _in_scene("win.tscn"):
                 _finished = true
                 _outcome = "win"
+                _close_unit(true)
                 _report(true, "")
                 return true
             if _in_scene("game_over.tscn"):
                 _outcome = "lose"
+                _close_unit(false)
                 _report(true, "")
                 return true
             _game_time += delta
@@ -104,9 +112,47 @@ func _snapshot() -> Dictionary:
     }
 
 
+func _track_unit() -> void:
+    # Per-puzzle records: a puzzle opens when first seen; when
+    # the index moves on, the puzzle just left was solved. Moves
+    # are sampled while the puzzle is current — the counter
+    # resets the moment the next puzzle loads.
+    if not _in_scene("game.tscn"):
+        return
+    var game := current_scene
+    var index := int(game.get("puzzle_index"))
+    if index == _unit_index:
+        _cur_moves = int(game.get("moves_used"))
+        _cur_budget = int(game.get("move_budget"))
+    elif _unit_index < 0:
+        _unit_index = index
+        _unit_t0 = _game_time
+        _cur_moves = int(game.get("moves_used"))
+        _cur_budget = int(game.get("move_budget"))
+    else:
+        _close_unit(true)
+        _unit_index = index
+        _unit_t0 = _game_time
+        _cur_moves = int(game.get("moves_used"))
+        _cur_budget = int(game.get("move_budget"))
+
+
+func _close_unit(completed: bool) -> void:
+    if _unit_index < 0:
+        return
+    _units.append({
+        "unit": _unit_index + 1, "completed": completed,
+        "deaths": 0 if completed else (1 if _outcome == "lose" else 0),
+        "time_s": snappedf(_game_time - _unit_t0, 0.01),
+        "moves_used": _cur_moves, "move_budget": _cur_budget,
+    })
+    _unit_index = -1
+
+
 func _play(delta: float) -> void:
     if not _in_scene("game.tscn"):
         return
+    _track_unit()
     if not _move_queue.is_empty():
         _step_wait -= delta
         if _step_wait > 0.0:
@@ -240,13 +286,15 @@ func _report(ok: bool, reason: String) -> void:
         findings.append(_gave_up)
     elif _outcome == "":
         findings.append("did not finish within the run")
+    if _unit_index >= 0:
+        _close_unit(false)  # still mid-puzzle: not completed
     var data := {
         "player": "first_time", "mode": "explore", "ok": ok,
         "reason": reason, "time_s": snappedf(_game_time, 0.01),
         "deaths": 1 if _outcome == "lose" else 0,
         "first_objective_s": snappedf(_first_objective_s, 0.01),
         "finished": _finished, "outcome": _outcome,
-        "findings": findings,
+        "findings": findings, "units": _units,
     }
     _silence()
     OS.delay_msec(400)

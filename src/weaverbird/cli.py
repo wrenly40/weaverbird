@@ -23,8 +23,10 @@ from pathlib import Path
 from . import __version__, template_text
 from . import app as app_module
 from . import assets_gen as assets_module
+from . import balance as balance_module
 from . import brain as brain_module
 from . import generate as generate_module
+from . import jobs as jobs_module
 from . import testing as testing_module
 from . import update as update_module
 from . import connectors as connectors_module
@@ -588,6 +590,37 @@ def cmd_assets_generate(args) -> int:
     return 0
 
 
+def cmd_assets_list(args) -> int:
+    try:
+        listing = assets_module.list_assets(args.dir)
+    except assets_module.AssetsError as exc:
+        return _fail(str(exc))
+    print(f"Generated assets for {args.dir} (provenance in brackets):")
+    for entry in listing:
+        if entry["missing"]:
+            size = "MISSING — the file is gone"
+        else:
+            size = f"{entry['size']} bytes"
+        who = entry["provider"] or entry["source"] or "no record"
+        print(f"- {entry['name']}: {entry['path']} — {size} "
+              f"[{who}]")
+        if entry["note"]:
+            print(f"    {entry['note']}")
+    print("Redraw one with 'weaverbird assets regenerate <dir> <name>'.")
+    return 0
+
+
+def cmd_assets_regenerate(args) -> int:
+    try:
+        result = assets_module.regenerate_asset(args.dir, args.name)
+    except assets_module.AssetsError as exc:
+        return _fail(str(exc))
+    print(f"Regenerated {result['path']} ({result['size']} bytes) "
+          "from the current palette and recorded it in the "
+          "provenance log. Cost: 0 tokens.")
+    return 0
+
+
 def cmd_build_game(args) -> int:
     try:
         report = generate_module.build_game(
@@ -748,6 +781,219 @@ def cmd_playtest_model(args) -> int:
     print("Transcript: .weaverbird/model_playtest.json; screenshots "
           "in .weaverbird/model_playtest/shots/.")
     return 0 if record["finished"] else 1
+
+
+# ---------------------------------------------------------------------------
+# Balance lab
+
+def _print_balance_table(project) -> list:
+    """Print the per-unit table + flags. Returns the flags."""
+    report = testing_module.load_report(project)
+    if report is None:
+        print("No test report yet — run 'weaverbird test run "
+              f"{project}' first; the lab reads its per-unit records.")
+        return []
+    units = balance_module.load_units(project)
+    if not units:
+        print("The latest test report has no per-unit records — "
+              "it was written by an older build. Re-run "
+              "'weaverbird test run' with the current build and "
+              "the scripted players will record per-unit stats.")
+        return []
+    rows = balance_module.unit_rows(units)
+
+    def cell(record) -> str:
+        # Formatted from the fields the record itself carries —
+        # a metric a game does not record is simply absent, never
+        # guessed from the game's kind.
+        if record is None:
+            return "—"
+        if not record.get("completed"):
+            state = "NOT completed"
+        else:
+            state = "completed"
+        bits = [state]
+        if record.get("deaths"):
+            bits.append(f"{record['deaths']} deaths")
+        if record.get("time_s") is not None:
+            bits.append(f"{record['time_s']}s")
+        if record.get("moves_used") is not None:
+            bits.append(f"{record['moves_used']}/"
+                        f"{record.get('move_budget', '?')} moves")
+        return ", ".join(bits)
+
+    print("Per-unit records from the latest test run:")
+    for row in rows:
+        print(f"- Unit {row['unit']}: competent — "
+              f"{cell(row['competent'])} · first-time — "
+              f"{cell(row['first_time'])}")
+    model = balance_module.model_summary(project)
+    if model:
+        print(f"Model playtest on record: {model['outcome']} — "
+              f"{model['decisions']} decisions, {model['deaths']} "
+              f"deaths, finished: {model['finished']}.")
+    flags = balance_module.analyse(units)
+    if flags:
+        print("Flags:")
+        for flag in flags:
+            print(f"- [{flag['kind']}] {flag['text']}")
+    else:
+        print("No flags — no spikes, walls, stalls or breeze in "
+              "the recorded units.")
+    return flags
+
+
+def cmd_balance_show(args) -> int:
+    _print_balance_table(args.dir)
+    return 0
+
+
+def cmd_balance_suggest(args) -> int:
+    _print_balance_table(args.dir)
+    try:
+        found = balance_module.suggestions(args.dir)
+    except balance_module.BalanceError as exc:
+        return _fail(str(exc))
+    if not found:
+        print("No suggestions — nothing flagged, or the flagged "
+              "fixes are already at their bounds.")
+        return 0
+    print("Suggestions (bounded knobs only — the same clamps the "
+          "patch loop and repair use):")
+    for index, suggestion in enumerate(found, start=1):
+        print(f"{index}. [{suggestion['kind']}] {suggestion['rationale']}")
+        for line in suggestion["changes"]:
+            print(f"     {line}")
+    print("Apply one with 'weaverbird balance apply <dir> "
+          "--suggestion N' (it ships through the patch gates), or "
+          "preview it with 'weaverbird balance compare'.")
+    return 0
+
+
+def cmd_balance_apply(args) -> int:
+    try:
+        result = balance_module.apply_suggestion(
+            args.dir, args.suggestion, settings_path=args.settings)
+    except (balance_module.BalanceError, patch_module.PatchError) as exc:
+        return _fail(str(exc))
+    item = result["item"]
+    if result["outcome"] == "patched":
+        print(f"Balance patch shipped: version {result['version']} "
+              f"(tagged known-good/patch-{result['version']}).")
+        print(f"Change: {result['change']}")
+        print("Gates passed: the full test suite, and save "
+              "compatibility. CHANGELOG.md cites the lab numbers; "
+              f"the synthetic item is [{item}] (source balance-lab).")
+        return 0
+    if result["outcome"] == "planned":
+        print("No automatic patch — a patch plan was written "
+              f"instead: {result['plan']}")
+        print(f"Why: {result['reason']}")
+        return 0
+    print(f"Balance patch rejected: {result['reason']}")
+    print("The working tree was restored to the pre-patch "
+          "checkpoint — nothing shipped.")
+    return 1
+
+
+def cmd_balance_compare(args) -> int:
+    if args.suggestion is not None and args.config:
+        return _fail("Give either --suggestion or --config, not both.")
+    overrides = None
+    if args.config:
+        try:
+            overrides = json.loads(
+                Path(args.config).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return _fail(f"Could not read the overrides file: {exc}")
+        if not isinstance(overrides, dict):
+            return _fail("The overrides file must hold a JSON object "
+                         "of config fields.")
+    try:
+        report = balance_module.compare(
+            args.dir, suggestion_index=args.suggestion,
+            config_overrides=overrides, settings_path=args.settings)
+    except balance_module.BalanceError as exc:
+        return _fail(str(exc))
+    base, cand = report["baseline"], report["candidate_metrics"]
+    print(f"Compare: {report['candidate']} "
+          f"({'; '.join(report['changes'])})")
+    print(f"- baseline: suite {'PASS' if base['ok'] else 'FAIL'}, "
+          f"unit deaths {base['total_deaths']}, unit time "
+          f"{base['total_time_s']}s, {base['avg_fps']} avg FPS"
+          + (" (from the existing test report)"
+             if report["baseline_from_existing_report"] else ""))
+    print(f"- candidate: suite {'PASS' if cand['ok'] else 'FAIL'}, "
+          f"unit deaths {cand['total_deaths']}, unit time "
+          f"{cand['total_time_s']}s, {cand['avg_fps']} avg FPS")
+    print(f"Verdict: {report['verdict']}")
+    print("The project was restored to exactly its starting state. "
+          "Full side-by-side: .weaverbird/balance_report.json")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+
+def _jobs_usage() -> int:
+    print("Usage: weaverbird jobs <workspace> — recent jobs and "
+          "their statuses")
+    print("       weaverbird jobs show <workspace> <job-id> — one "
+          "job's event log")
+    return 1
+
+
+def cmd_jobs(argv) -> int:
+    """`weaverbird jobs <workspace>` / `jobs show <workspace> <id>`.
+
+    Parsed by hand: the jobs command takes a workspace path where
+    other commands take a subcommand, so it does not fit the
+    subparser table. Read-only — the records live under
+    <workspace>/.weaverbird-app/jobs/ and the app writes them.
+    """
+    if not argv:
+        return _jobs_usage()
+    if argv[0] in ("-h", "--help", "help"):
+        _jobs_usage()
+        return 0
+    if argv[0] == "show":
+        if len(argv) != 3:
+            return _jobs_usage()
+        store = jobs_module.JobStore(argv[1])
+        job = store.load(argv[2])
+        if job is None:
+            return _fail(f"No job with id {argv[2]!r} in workspace "
+                         f"{argv[1]}.")
+        print(f"Job {job['id']} — {job.get('label', job.get('action'))} "
+              f"for {job.get('project')}: {job.get('status')}")
+        print(f"Created {job.get('created')} · started "
+              f"{job.get('started') or '—'} · finished "
+              f"{job.get('finished') or '—'}")
+        for event in job.get("events", []):
+            print(f"  {event.get('at', '')}  {event.get('text', '')}")
+        if job.get("result"):
+            print(f"Result: {job['result']}")
+        if job.get("error"):
+            print(f"Error: {job['error']}")
+        return 0
+    if len(argv) != 1:
+        return _jobs_usage()
+    store = jobs_module.JobStore(argv[0])
+    jobs = store.list(limit=15)
+    if not jobs:
+        print("No jobs recorded for this workspace yet — jobs are "
+              "started from the app (every project action is one).")
+        return 0
+    print(f"Recent jobs in {argv[0]} (newest first):")
+    for job in jobs:
+        line = (f"- {job['id']}  {job.get('status', '?'):11s} "
+                f"{job.get('label', job.get('action', ''))} "
+                f"({job.get('project', '')})")
+        print(line)
+        detail = job.get("error") or job.get("result")
+        if detail:
+            print(f"    {detail}")
+    return 0
 
 
 def register_all_stage_handlers() -> None:
@@ -931,6 +1177,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "palette and synthesise the audio, deterministically."
     )
     agen.add_argument("dir")
+    alist = assets_sub.add_parser(
+        "list", help="List the generated assets with their provenance "
+                     "and file sizes; missing files are flagged."
+    )
+    alist.add_argument("dir")
+    aregen = assets_sub.add_parser(
+        "regenerate", help="Redraw exactly one generated asset from "
+                           "the current palette (audio is re-synthesised)."
+    )
+    aregen.add_argument("dir")
+    aregen.add_argument("name", help="Asset name, e.g. player, icon, music "
+                                     "(see 'assets list').")
 
     build_cmd = sub.add_parser(
         "build", help="Generate the real game from the approved scope."
@@ -1018,6 +1276,37 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Decision cap (default: playtest."
                              "model_max_decisions, else 40).")
 
+    balance_cmd = sub.add_parser(
+        "balance", help="The balance lab: per-unit difficulty "
+                        "evidence, flags, suggestions, A/B compares.")
+    balance_sub = balance_cmd.add_subparsers(dest="balance_command")
+    bshow = balance_sub.add_parser(
+        "show", help="Per-unit table from the latest test report, "
+                     "with the deterministic flags.")
+    bshow.add_argument("dir")
+    bsuggest = balance_sub.add_parser(
+        "suggest", help="Numbered suggestions from the flags, using "
+                        "only the patch loop's bounded knobs, with "
+                        "exact config diffs.")
+    bsuggest.add_argument("dir")
+    bapply = balance_sub.add_parser(
+        "apply", help="Ship one suggestion through the patch loop "
+                      "(test stage + save-compatibility gates, "
+                      "version bump, changelog).")
+    bapply.add_argument("dir")
+    bapply.add_argument("--suggestion", type=int, required=True)
+    bapply.add_argument("--settings", default=None)
+    bcompare = balance_sub.add_parser(
+        "compare", help="A/B a suggestion (or a JSON file of config "
+                        "overrides) in a checkpointed run; the "
+                        "project ends exactly as it started.")
+    bcompare.add_argument("dir")
+    bcompare.add_argument("--suggestion", type=int, default=None)
+    bcompare.add_argument("--config", default=None,
+                          help="Path to a JSON object of config "
+                               "overrides (instead of --suggestion).")
+    bcompare.add_argument("--settings", default=None)
+
     return parser
 
 
@@ -1047,6 +1336,8 @@ _HANDLERS = {
     ("pipeline", "advance"): cmd_pipeline_advance,
     ("skeleton", "build"): cmd_skeleton_build,
     ("assets", "generate"): cmd_assets_generate,
+    ("assets", "list"): cmd_assets_list,
+    ("assets", "regenerate"): cmd_assets_regenerate,
     ("build", "game"): cmd_build_game,
     ("test", "run"): cmd_test_run,
     ("feedback", "fetch"): cmd_feedback_fetch,
@@ -1058,6 +1349,10 @@ _HANDLERS = {
     ("patch", "start"): cmd_patch_start,
     ("repair", "run"): cmd_repair_run,
     ("playtest", "model"): cmd_playtest_model,
+    ("balance", "show"): cmd_balance_show,
+    ("balance", "suggest"): cmd_balance_suggest,
+    ("balance", "apply"): cmd_balance_apply,
+    ("balance", "compare"): cmd_balance_compare,
 }
 
 _SUBCOMMAND_ATTRS = {
@@ -1077,6 +1372,7 @@ _SUBCOMMAND_ATTRS = {
     "patch": "patch_command",
     "repair": "repair_command",
     "playtest": "playtest_command",
+    "balance": "balance_command",
 }
 
 
@@ -1107,9 +1403,12 @@ commands, for scripts and terminals:
   weaverbird brain check                the bring-your-own-key ladder
   weaverbird skeleton build <dir>       build the grey-box skeleton
   weaverbird assets generate <dir>      sprites, icon and audio
+  weaverbird assets list|regenerate     the asset studio, as commands
   weaverbird build game <dir>           generate the real game
   weaverbird test run <dir>             headless tests + scripted players
   weaverbird repair run <dir>           self-repair a failing suite
+  weaverbird balance ...                per-unit difficulty lab: show, suggest, apply, compare
+  weaverbird jobs <workspace>           recent background jobs and their statuses
   weaverbird playtest model <dir>       a vision model plays the game
   weaverbird feedback ...               fetch, triage, approve player feedback
   weaverbird patch start <dir>          ship an approved item as a patch
@@ -1134,6 +1433,10 @@ def main(argv=None) -> int:
     if argv and argv[0] in ("help", "-h", "--help"):
         print(help_text(), end="")
         return 0
+    if argv and argv[0] == "jobs":
+        # `weaverbird jobs <workspace>` takes a path, not a
+        # subcommand — handled by its own small parser.
+        return cmd_jobs(argv[1:])
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
