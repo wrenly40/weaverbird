@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text, template_scope_text  # noqa: E402
 
-from weaverbird import finish, generate, scope, state  # noqa: E402
+from weaverbird import finish, generate, scope, state, world  # noqa: E402
 
 WIN = "- REQUIRED Win condition: Filled in for the test"
 COUNTS = ("- REQUIRED Content counts (levels / waves / rooms / items, "
@@ -108,7 +108,7 @@ class ScopeTargetCountTests(unittest.TestCase):
 
 
 class ReconciliationTests(unittest.TestCase):
-    def _project(self, tmp, win_text, built_targets):
+    def _project(self, tmp, win_text, built_targets, world_counts=None):
         project = scoped_project(tmp, {WIN: f"- REQUIRED Win condition: {win_text}"})
         game_dir = project / "game"
         game_dir.mkdir(exist_ok=True)
@@ -116,6 +116,15 @@ class ReconciliationTests(unittest.TestCase):
             (game_dir / "game_config.json").write_text(
                 json.dumps({"targets_per_round": built_targets}),
                 encoding="utf-8")
+        if world_counts is not None:
+            world_dir = game_dir / "world"
+            world_dir.mkdir(exist_ok=True)
+            units = [{"index": i, "kind": "round",
+                      "collectibles": [[0, 0]] * count}
+                     for i, count in enumerate(world_counts)]
+            (world_dir / "world.json").write_text(
+                json.dumps({"preset": "arena_collector",
+                            "units": units}), encoding="utf-8")
         return project
 
     def test_no_number_no_reconciliation(self):
@@ -144,6 +153,31 @@ class ReconciliationTests(unittest.TestCase):
             project = self._project(tmp, "Reach 100% completion", 5)
             recon = finish.scope_number_reconciliation(project)
             self.assertEqual(recon["status"], "unparseable")
+
+    def test_world_counts_matching_the_pin_reconcile(self):
+        # D6: config AND world agree with the scope — the line
+        # quotes the actual per-round placement.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(
+                tmp, "Collect 8 comet pups each round", 8,
+                world_counts=[8, 8, 8])
+            recon = finish.scope_number_reconciliation(project)
+            self.assertEqual(recon["status"], "match")
+            self.assertEqual(recon["world_counts"], [8, 8, 8])
+            self.assertIn("exactly 8", recon["line"])
+
+    def test_world_escalating_past_the_pin_is_a_mismatch(self):
+        # The dogfood hole (D6): config said 8 and the old check
+        # passed, while the world placed 8/9/10 and the game
+        # required collecting them all.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(
+                tmp, "Collect 8 comet pups each round", 8,
+                world_counts=[8, 9, 10])
+            recon = finish.scope_number_reconciliation(project)
+            self.assertEqual(recon["status"], "mismatch")
+            self.assertEqual(recon["world_counts"], [8, 9, 10])
+            self.assertIn("8, 9, 10", recon["line"])
 
     def test_mismatch_blocks_the_content_item(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -178,6 +212,62 @@ class ReconciliationTests(unittest.TestCase):
             self.assertIn("reconciled", marked)
 
 
+class PinnedWorldCountsTests(unittest.TestCase):
+    """D6: a scope-pinned count is placed in EVERY round; the
+    ramp is hazards, not collectibles. Unpinned builds keep the
+    escalation."""
+
+    def _config(self, preset, win_text):
+        vals = {
+            "Title (working)": "Pup Game",
+            "Session length (one sitting)": "10 minutes",
+            "Content counts (levels / waves / rooms / items, "
+            "as applicable)": "3 rounds",
+            "Win condition": win_text,
+            "Lose / fail condition": "Time runs out",
+        }
+        config, _ = generate.deterministic_config(
+            preset, vals, generate._palette(vals), 3)
+        return config
+
+    def _counts(self, preset, config):
+        data = world.world_from_config(
+            preset, config, generate.composition_for_preset(preset))
+        self.assertEqual(world.validate_world(data), [])
+        return [len(u["collectibles"]) for u in data["units"]], data
+
+    def test_pinned_2d_world_places_the_count_every_round(self):
+        config = self._config("arena_collector",
+                              "Collect 8 comet pups each round")
+        counts, data = self._counts("arena_collector", config)
+        self.assertEqual(counts, [8, 8, 8])
+        self.assertTrue(all(u["targets_pinned"] for u in data["units"]))
+
+    def test_pinned_3d_world_places_the_count_every_round(self):
+        config = self._config("arena_3d",
+                              "Collect 8 comet pups each round")
+        counts, data = self._counts("arena_3d", config)
+        self.assertEqual(counts, [8, 8, 8])
+        self.assertTrue(all(u["targets_pinned"] for u in data["units"]))
+
+    def test_unpinned_worlds_still_escalate(self):
+        for preset in ("arena_collector", "arena_3d"):
+            config = self._config(preset, "Collect every pup")
+            counts, data = self._counts(preset, config)
+            self.assertEqual(counts, [5, 6, 7], preset)
+            self.assertFalse(any(u["targets_pinned"]
+                                 for u in data["units"]))
+
+    def test_gate_catches_a_pinned_round_with_the_wrong_count(self):
+        config = self._config("arena_collector",
+                              "Collect 8 comet pups each round")
+        _counts, data = self._counts("arena_collector", config)
+        data["units"][1]["collectibles"].pop()
+        issues = world.validate_world(data)
+        self.assertTrue(any("needs 8" in i["detail"] for i in issues),
+                        issues)
+
+
 class BuildSummaryTests(unittest.TestCase):
     def test_summary_flags_scope_numbers_before_any_build(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -191,7 +281,9 @@ class BuildSummaryTests(unittest.TestCase):
             self.assertEqual(summary["preset"], "arena_collector")
             numbers = {n["label"]: n for n in summary["numbers"]}
             targets = numbers["Targets per round"]
-            self.assertEqual(targets["value"], 10)
+            # D6: the summary states the per-round requirement —
+            # a pinned count holds in every round.
+            self.assertEqual(targets["value"], "10 in every round")
             self.assertEqual(targets["source"], "scope")
             units = numbers["Content units (rounds)"]
             self.assertEqual(units["value"], 3)
@@ -203,7 +295,26 @@ class BuildSummaryTests(unittest.TestCase):
             project = scoped_project(tmp)
             summary = generate.build_summary(project)
             numbers = {n["label"]: n for n in summary["numbers"]}
-            self.assertEqual(numbers["Targets per round"]["value"], 5)
+            # Unpinned: the summary shows the escalation the
+            # rounds will require (D6), flagged as a default.
+            # (The filled fixture states no content count, so the
+            # summary's default unit count is 5 rounds.)
+            self.assertEqual(numbers["Targets per round"]["value"],
+                             "5, 6, 7, 8, 9 across rounds")
+            self.assertEqual(numbers["Targets per round"]["source"],
+                             "default")
+
+    def test_summary_shows_the_escalation_for_unpinned_rounds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, {
+                WIN: "- REQUIRED Win condition: Collect every star",
+                COUNTS: ("- REQUIRED Content counts (levels / waves / "
+                         "rooms / items, as applicable): 3 rounds"),
+            })
+            summary = generate.build_summary(project)
+            numbers = {n["label"]: n for n in summary["numbers"]}
+            self.assertEqual(numbers["Targets per round"]["value"],
+                             "5, 6, 7 across rounds")
             self.assertEqual(numbers["Targets per round"]["source"],
                              "default")
 

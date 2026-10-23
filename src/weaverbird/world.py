@@ -406,8 +406,13 @@ def world_from_config(preset: str, config: dict,
     else:  # arena_collector
         seed = int(config.get("world_seed", 1234))
         targets = int(config.get("targets_per_round", 5))
+        # A scope-pinned count is the maker's spec for EVERY
+        # round (D6): the difficulty ramp comes from hazards,
+        # never from quietly requiring more collectibles than
+        # the scope states. Unpinned, the count still escalates.
+        pinned = "scope_numbers" in config
         for index in range(int(config.get("rounds", 0))):
-            count = min(targets + index, 12)
+            count = targets if pinned else min(targets + index, 12)
             hazards = [dict(h) for h in
                        HAZARD_SPOTS_2D[:min(2 + index, 5)]]
             positions, layout = arena_layout(count, seed, index)
@@ -415,6 +420,7 @@ def world_from_config(preset: str, config: dict,
                 "index": index, "kind": "round",
                 "round": index + 1,
                 "targets_per_round": config.get("targets_per_round", 5),
+                "targets_pinned": pinned,
                 "round_seconds": config.get("round_seconds", 60),
                 "arena": list(ARENA_SIZE),
                 "spawn": list(SPAWN_2D),
@@ -455,6 +461,9 @@ def _arena3d_units(config: dict) -> list[dict]:
     rounds = int(config.get("rounds", 0))
     base_seed = int(config.get("world_seed", 1234))
     targets = int(config.get("targets_per_round", 5))
+    # Scope-pinned counts hold on every round (D6), exactly as
+    # in the 2D arena; unpinned counts escalate as before.
+    pinned = "scope_numbers" in config
     seconds = config.get("round_seconds", 60)
     gx, gz = GROUND_3D
     units: list[dict] = []
@@ -477,7 +486,7 @@ def _arena3d_units(config: dict) -> list[dict]:
                     continue
                 obstacles.append(candidate)
                 break
-        count = min(targets + index, 12)
+        count = targets if pinned else min(targets + index, 12)
         collectibles: list[list[float]] = []
         for _ in range(count):
             for _attempt in range(60):
@@ -494,6 +503,18 @@ def _arena3d_units(config: dict) -> list[dict]:
                     continue
                 collectibles.append(pos)
                 break
+        # The layout record the 2D path has always written (D5):
+        # an honest name for this placer (seeded scatter on the
+        # ground plane), the round's seed, and the placement
+        # gate's outcome — every collectible placed under the
+        # spawn/obstacle/spacing checks above, or the shortfall
+        # stated in numbers.
+        layout3d = {
+            "pattern": "scatter3d",
+            "seed": base_seed + index * 101,
+            "gate": ("passed" if len(collectibles) == count
+                     else f"placed {len(collectibles)} of {count}"),
+        }
         hazards: list[dict] = []
         for _ in range(min(2 + index, 4)):
             for _attempt in range(40):
@@ -512,12 +533,14 @@ def _arena3d_units(config: dict) -> list[dict]:
             "index": index, "kind": "round3d",
             "round": index + 1,
             "targets_per_round": targets,
+            "targets_pinned": pinned,
             "round_seconds": seconds,
             "ground": list(GROUND_3D),
             "spawn": list(SPAWN_3D),
             "collectibles": collectibles,
             "hazards": hazards,
             "obstacles": obstacles,
+            "layout": layout3d,
         })
     return units
 
@@ -672,6 +695,22 @@ def _validate_round3d(unit: dict, index) -> list[dict]:
     collectibles = unit.get("collectibles") or []
     if not collectibles:
         issues.append(_issue(f"round {index}: no collectibles"))
+    # The count the round actually requires (D6): a scope-pinned
+    # round must hold exactly the pinned count; an unpinned round
+    # the escalated one. Worlds written before the pin was
+    # recorded carry no flag and follow the escalation, as their
+    # generator built them.
+    targets3d = unit.get("targets_per_round")
+    if collectibles and isinstance(targets3d, (int, float)):
+        round_index = unit.get("index", index)
+        if not isinstance(round_index, int):
+            round_index = 0
+        expected3d = (int(targets3d) if unit.get("targets_pinned")
+                      else min(int(targets3d) + round_index, 12))
+        if len(collectibles) != expected3d:
+            issues.append(_issue(
+                f"round {index}: {len(collectibles)} collectibles "
+                f"for a round that needs {expected3d}"))
     for point in collectibles:
         if len(point) != 2 or not inside(point, 0.8):
             issues.append(_issue(
@@ -715,8 +754,12 @@ def _validate_round(unit: dict, index) -> list[dict]:
         round_index = unit.get("index", index)
         if not isinstance(round_index, int):
             round_index = 0
-        expected = (min(int(targets) + round_index, 12)
-                    if isinstance(targets, (int, float)) else None)
+        # A scope-pinned round needs exactly the pinned count
+        # (D6); an unpinned round expects the escalation.
+        expected = None
+        if isinstance(targets, (int, float)):
+            expected = (int(targets) if unit.get("targets_pinned")
+                        else min(int(targets) + round_index, 12))
         if expected is not None and len(collectibles) != expected:
             issues.append(_issue(
                 f"round {index}: {len(collectibles)} collectible "

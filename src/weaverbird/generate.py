@@ -1113,9 +1113,26 @@ def build_summary(project_dir) -> dict:
     })
     if preset in ("arena_collector", "arena_3d"):
         found = scope_target_count(values)
+        base = found["used"] if found else 5
+        # The counts each round will actually REQUIRE (D6): a
+        # scope-stated number pins every round to it; otherwise
+        # the rounds escalate. Stated as the rounds themselves,
+        # so a pinned "8" reads "8 in every round" and an
+        # escalating build reads "5, 6, 7 across rounds" — the
+        # maker sees the real requirement before anything runs.
+        if found:
+            per_round = [base] * max(units, 1)
+        else:
+            per_round = [min(base + i, TARGET_COUNT_MAX)
+                         for i in range(max(units, 1))]
+        if len(set(per_round)) == 1:
+            per_round_text = f"{per_round[0]} in every round"
+        else:
+            per_round_text = (", ".join(str(c) for c in per_round)
+                              + " across rounds")
         numbers.append({
             "label": "Targets per round",
-            "value": found["used"] if found else 5,
+            "value": per_round_text,
             "source": "scope" if found else "default",
             "note": (f"your scope says {found['stated']}"
                      if found and found["stated"] != found["used"]

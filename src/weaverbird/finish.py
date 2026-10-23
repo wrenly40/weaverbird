@@ -141,6 +141,26 @@ def _test_evidence(report: dict) -> dict:
     return evidence
 
 
+def _world_collectible_counts(project: Path) -> list[int]:
+    """The collectibles each built round actually places, read
+    from game/world/world.json — [] when no world with placed
+    collectibles is on disk (nothing to reconcile against)."""
+    world_path = (project / skeleton_module.GAME_DIR_NAME
+                  / "world" / "world.json")
+    if not world_path.exists():
+        return []
+    try:
+        data = json.loads(world_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    counts = []
+    for unit in data.get("units", []) if isinstance(data, dict) else []:
+        placed = unit.get("collectibles")
+        if isinstance(placed, list):
+            counts.append(len(placed))
+    return counts
+
+
 def scope_number_reconciliation(project_dir) -> dict | None:
     """Reconcile the scope's stated numbers with the built config
     (0.10.0, finding F7).
@@ -200,6 +220,38 @@ def scope_number_reconciliation(project_dir) -> dict | None:
                     "but this kind of game has no per-round target "
                     "count in its built config — nothing to "
                     "reconcile it against.",
+        }
+    # The config field alone is not the game (D6): the world is
+    # what the player must actually collect, and its per-round
+    # counts can drift from the config (rounds used to escalate
+    # past a scope-pinned number while this check passed on the
+    # config alone). When a world with collectible positions is
+    # on disk, reconcile against THOSE counts.
+    world_counts = _world_collectible_counts(project)
+    if world_counts and built in (stated, used):
+        counts_text = ", ".join(str(c) for c in world_counts)
+        if all(c == used for c in world_counts):
+            return {
+                "status": "match", "stated": stated, "built": built,
+                "world_counts": world_counts,
+                "line": f"Scope numbers reconciled: the scope says "
+                        f"{stated} targets per round, the built "
+                        f"config uses {built}, and the world places "
+                        f"exactly {used} collectibles in every one "
+                        f"of its {len(world_counts)} rounds.",
+            }
+        return {
+            "status": "mismatch", "stated": stated, "built": built,
+            "world_counts": world_counts,
+            "line": f"Scope numbers MISMATCH: the scope says "
+                    f"{stated} targets per round "
+                    f"(“{found['matched']}” in the "
+                    f"{found['field']}) and the built config uses "
+                    f"{built}, but the world actually places "
+                    f"{counts_text} collectibles across its "
+                    f"{len(world_counts)} rounds — rounds that "
+                    f"place more than {used} require more than "
+                    "the scope states.",
         }
     if built == stated:
         return {
