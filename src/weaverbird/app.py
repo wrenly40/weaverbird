@@ -430,6 +430,70 @@ changed. Every step can also be run on its own.</p>
 {outcome_html}</div>"""
 
 
+def _build_summary_card(server, project: dict) -> str:
+    """The Build summary card (0.10.0): what WILL be built,
+    derived from the scope before any run — the composition, the
+    key numbers with their source ("from your scope" vs
+    "default"), the style lock and the planned asset kinds. This
+    is where a scope-stated number shows up pre-build, so an F7
+    surprise surfaces before generation, not after."""
+    try:
+        summary = generate_module.build_summary(project["path"])
+    except Exception:
+        return ""
+    if not summary.get("scope_present"):
+        return ""
+    comp = summary.get("composition") or {}
+    if summary.get("bespoke"):
+        comp_line = ("Bespoke mechanics — the scope's core loop "
+                     "cannot be composed from the factory's "
+                     "primitives, so a model-written module "
+                     "implements it.")
+    elif comp:
+        comp_line = (
+            f"{_esc(comp.get('dimension', '2d'))} · movement: "
+            f"{_esc(comp.get('movement', ''))} · objective: "
+            f"{_esc(', '.join(comp.get('objectives') or []))} · "
+            f"fail: {_esc(', '.join(comp.get('fail') or []))} · "
+            f"structure: {_esc(comp.get('structure', ''))} · "
+            f"interactions: "
+            f"{_esc(', '.join(comp.get('interactions') or []))}")
+    else:
+        comp_line = ""
+    preset_line = ""
+    if summary.get("preset"):
+        preset_line = (f"<p style='margin-top:6px'>Preset: "
+                       f"<b>{_esc(summary['preset'])}</b> "
+                       f"<span class='hint'>— "
+                       f"{_esc(summary.get('reason', ''))}</span></p>")
+    rows = ""
+    for number in summary.get("numbers", []):
+        source = ("from your scope" if number.get("source") == "scope"
+                  else "default")
+        note = (f" <span class='hint'>({_esc(number['note'])})</span>"
+                if number.get("note") else "")
+        rows += (f"<tr><td>{_esc(number['label'])}</td>"
+                 f"<td><b>{_esc(number['value'])}</b>{note}</td>"
+                 f"<td class='hint'>{source}</td></tr>")
+    palette = summary.get("palette", {})
+    style_line = _esc(summary.get("style") or "not chosen yet")
+    kinds = summary.get("asset_kinds") or []
+    kinds_line = (f"<p class='hint' style='margin-top:8px'>Planned "
+                  f"asset kinds (from the world's entities): "
+                  f"{_esc(', '.join(kinds))}.</p>" if kinds else "")
+    firm_line = ""
+    if not summary.get("complete"):
+        firm_line = ('<p class="hint" style="margin-top:8px">The '
+                     'scope is not complete yet — this summary '
+                     'firms up as the scope fills in.</p>')
+    return f"""
+<div class="card" style="margin-top:20px"><h3>Build summary — what will be built</h3>
+<p style="margin-top:8px">{comp_line}</p>{preset_line}
+<table style="margin-top:10px"><tr><th>Number</th><th>Value</th><th>Source</th></tr>{rows}</table>
+<p class="hint" style="margin-top:8px">Style lock: {style_line} · Palette accent {_esc(palette.get('accent_hex', ''))}, target {_esc(palette.get('target_hex', ''))}</p>
+{kinds_line}{firm_line}</div>"""
+
+
 def render_project(server, name: str, notice: str = "",
                    notice_kind: str = "ok",
                    job_id: str | None = None) -> str:
@@ -652,6 +716,7 @@ Scripted players are deterministic bots; the model playtester plays from screens
   <form method="post" action="/project/{quoted}/finish-report"><button class="btn ghost" type="submit">Write finish report</button></form>
 </div>
 {gate_html}
+{_build_summary_card(server, project)}
 {plan_card}
 {generation_card}
 {test_card}

@@ -404,6 +404,63 @@ def _scope_int(values: dict, fields: tuple, pattern: str):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Scope-stated target counts (0.10.0, finding F7)
+#
+# The scope's Win condition often states the win target outright —
+# "Collect 10 stars each round" — while generation quietly used
+# its default of 5, and nothing ever compared the two. Now the
+# number is parsed, used, and recorded, so the finish check can
+# reconcile what the scope said against what was built.
+#
+# The patterns are deliberately conservative — a target count is
+# claimed ONLY from:
+#   * a collecting verb followed by a number: "collect 10",
+#     "gather 7", "grab 3", "pick up 5";
+#   * a number followed by a collectible noun: "10 stars",
+#     "7 targets", "500 points to win", "3 orbs".
+# Anything else (a bare number, "3 rounds", "100%") makes no claim
+# here; finish.py reports numeric-but-unmatched win text plainly
+# rather than guessing.
+
+TARGET_COUNT_FIELDS = ("Win condition", "Lose / fail condition")
+_TARGET_VERB_RE = re.compile(
+    r"\b(?:collect|gather|grab|pick\s+up)\s+(\d{1,4})\b", re.IGNORECASE)
+_TARGET_NOUN_RE = re.compile(
+    r"\b(\d{1,4})\s+(?:stars?|targets?|points?|orbs?|coins?|gems?"
+    r"|items?|crystals?)\b", re.IGNORECASE)
+# The world gate's own range for targets per round: a scope number
+# outside it is clamped, and the clamping is recorded, never silent.
+TARGET_COUNT_MIN = 1
+TARGET_COUNT_MAX = 12
+
+
+def scope_target_count(values: dict) -> dict | None:
+    """The target count the scope states, or None when it states
+    none (in the conservative patterns above).
+
+    Returns {"stated": the number as written, "used": the number
+    generation applies (stated clamped to the world gate's range),
+    "field": the scope field it came from, "matched": the exact
+    text that matched}."""
+    for field in TARGET_COUNT_FIELDS:
+        text = str(values.get(field, "") or "")
+        if not text:
+            continue
+        for pattern in (_TARGET_VERB_RE, _TARGET_NOUN_RE):
+            match = pattern.search(text)
+            if match:
+                stated = int(match.group(1))
+                return {
+                    "stated": stated,
+                    "used": min(max(stated, TARGET_COUNT_MIN),
+                                TARGET_COUNT_MAX),
+                    "field": field,
+                    "matched": match.group(0),
+                }
+    return None
+
+
 def _hex_of(rgb) -> str:
     return "#%02X%02X%02X" % tuple(int(round(c * 255)) for c in rgb)
 
@@ -835,6 +892,7 @@ def deterministic_config(archetype: str, values: dict, palette: dict,
             "player_speed": 330.0,
             "hazard_speed": 1.4,
         })
+        _apply_scope_target_count(config, values)
     elif archetype == "arena_3d":
         # The same arena tuning, in 3D units (metres, metres per
         # second), plus the seed the world worker lays the ground
@@ -850,6 +908,7 @@ def deterministic_config(archetype: str, values: dict, palette: dict,
             "hazard_speed": 1.4,
             "world_seed": seed,
         })
+        _apply_scope_target_count(config, values)
     elif archetype == "platformer":
         lives = _scope_int(
             values,
@@ -880,6 +939,27 @@ def deterministic_config(archetype: str, values: dict, palette: dict,
         config["puzzles"] = puzzles
         extras["puzzle_solutions"] = [p["solution"] for p in puzzles]
     return config, extras
+
+
+def _apply_scope_target_count(config: dict, values: dict) -> None:
+    """A scope-stated target count beats the default (F7): when
+    the Win/Lose text states one, targets_per_round IS that
+    number (clamped to the world gate's range), and the
+    derivation is recorded in the config — it lands in
+    game_config.json and the generation report, where the finish
+    check reconciles it."""
+    found = scope_target_count(values)
+    if found is None:
+        return
+    config["targets_per_round"] = found["used"]
+    config["scope_numbers"] = {
+        "targets_per_round": {
+            "stated": found["stated"],
+            "used": found["used"],
+            "field": found["field"],
+            "matched": found["matched"],
+        }
+    }
 
 
 def units_delivered(archetype: str, config: dict) -> int:
@@ -917,9 +997,13 @@ def brain_proposal(project, archetype: str, config: dict,
         reason = status["reason"] if status else "no settings file found"
         return config, False, f"no usable mid-tier model ({reason})"
     bounds = BOUNDS[archetype]
+    # A scope-stated target count is the maker's spec, not a feel
+    # knob: the brain tunes around it, never over it (F7).
+    pinned = {"targets_per_round"} if "scope_numbers" in config else set()
     wanted = {key: {"current": config.get(key), "min": lo, "max": hi}
-              for key, (lo, hi) in bounds.items() if key in config
-              or key == "move_budget_multiplier"}
+              for key, (lo, hi) in bounds.items()
+              if key not in pinned
+              and (key in config or key == "move_budget_multiplier")}
     prompt = (
         "Game archetype: " + archetype + "\n"
         "Scope in brief: " + "; ".join(
@@ -943,7 +1027,7 @@ def brain_proposal(project, archetype: str, config: dict,
     tuned = dict(config)
     applied = []
     for key, (lo, hi) in bounds.items():
-        if key not in answers:
+        if key in pinned or key not in answers:
             continue
         try:
             value = float(answers[key])
@@ -968,6 +1052,112 @@ def brain_proposal(project, archetype: str, config: dict,
     if result.warning:
         note += " " + result.warning
     return tuned, True, note
+
+
+# ---------------------------------------------------------------------------
+# The build summary — what WILL be built, before anything runs
+#
+# The project page shows this ahead of the first run (0.10.0): the
+# composition generation derives from the scope, and the key
+# numbers it will use, each flagged "from your scope" or "default"
+# — so a scope-stated number (F7) is visible before generation,
+# not discovered after it. Everything here is derived from the
+# scope plus the same defaults deterministic_config uses; nothing
+# is built and nothing is spent.
+
+_UNIT_WORDS = {"platformer": "levels", "crate_pusher": "puzzles"}
+
+
+def build_summary(project_dir) -> dict:
+    """The pre-build summary for a project (see the note above).
+
+    Tolerant of a missing or partial scope: the composition is
+    still derived from whatever text exists (the same derivation
+    generation will run), and `complete` says how firm it is."""
+    from . import world as world_module
+
+    project = Path(project_dir)
+    values: dict = {}
+    parsed = None
+    scope_file = scope_module.scope_path_for(project)
+    if scope_file.exists():
+        try:
+            parsed = scope_module.load_scope(scope_file)
+        except scope_module.ScopeError:
+            parsed = None
+    if parsed is not None:
+        values = _values(parsed)
+    derived = derive_composition(values)
+    preset = derived["preset"]
+    units = content_units(values)
+    palette = _palette(values)
+    minutes = skeleton_module._session_minutes(
+        values.get("Session length (one sitting)", ""))
+    round_seconds = skeleton_module._round_seconds(minutes)
+
+    numbers: list[dict] = []
+    unit_word = _UNIT_WORDS.get(preset or "", "rounds")
+    numbers.append({
+        "label": f"Content units ({unit_word})", "value": units,
+        "source": "scope" if _INT_RE.search(
+            values.get("Content counts (levels / waves / rooms / "
+                       "items, as applicable)", "") or "") else "default",
+    })
+    if preset in ("arena_collector", "arena_3d"):
+        found = scope_target_count(values)
+        numbers.append({
+            "label": "Targets per round",
+            "value": found["used"] if found else 5,
+            "source": "scope" if found else "default",
+            "note": (f"your scope says {found['stated']}"
+                     if found and found["stated"] != found["used"]
+                     else ""),
+        })
+        numbers.append({
+            "label": "Round time limit", "value": f"{round_seconds}s",
+            "source": "scope" if minutes else "default", "note": "",
+        })
+        numbers.append({
+            "label": "Hazards",
+            "value": ("2 patrols in round 1, +1 per round, up to 4, "
+                      "plus obstacle blocks" if preset == "arena_3d"
+                      else "2 in round 1, +1 per round, up to 5"),
+            "source": "default", "note": "",
+        })
+    elif preset == "platformer":
+        lives = _scope_int(
+            values,
+            ("Lose / fail condition",
+             "Difficulty target (who it is for, how hard)"),
+            r"(\d+)\s*(?:lives|life)")
+        numbers.append({
+            "label": "Lives", "value": lives or 3,
+            "source": "scope" if lives else "default", "note": "",
+        })
+        numbers.append({
+            "label": "Hazards", "value": "spike pits in every level",
+            "source": "default", "note": "",
+        })
+    composition = derived["composition"] or {}
+    return {
+        "scope_present": parsed is not None,
+        "complete": bool(parsed and parsed.is_complete),
+        "approved": bool(parsed and parsed.is_approved),
+        "title": values.get("Title (working)", ""),
+        "preset": preset,
+        "bespoke": bool(derived["bespoke"]),
+        "reason": derived["reason"],
+        "composition": derived["composition"],
+        "dimension": composition.get("dimension", "2d"),
+        "units": units,
+        "unit_word": unit_word,
+        "numbers": numbers,
+        "palette": palette,
+        "style": values.get(
+            "Style sample chosen (id / link to approved sample)", ""),
+        "asset_kinds": list(
+            world_module.ENTITY_KINDS.get(preset or "", [])),
+    }
 
 
 # ---------------------------------------------------------------------------

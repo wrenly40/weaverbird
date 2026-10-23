@@ -141,6 +141,91 @@ def _test_evidence(report: dict) -> dict:
     return evidence
 
 
+def scope_number_reconciliation(project_dir) -> dict | None:
+    """Reconcile the scope's stated numbers with the built config
+    (0.10.0, finding F7).
+
+    Returns None when the scope states no number at all — no
+    claim, no complaint. Otherwise {"status", "stated", "built",
+    "line"}: "match" (the built targets_per_round is the scope's
+    number, clamping explained when it applied), "mismatch" (the
+    built config disagrees with the scope — the built game is not
+    the scoped game), "unparseable" (the Win/Lose text carries a
+    number none of the conservative patterns in
+    generate.scope_target_count could read — reported plainly
+    rather than silently passed), or "not_applicable" (a number
+    was stated but this kind of game has no per-round target
+    count to reconcile against).
+    """
+    import re as _re
+
+    from . import generate as generate_module
+
+    project = Path(project_dir)
+    facts = _facts(project)
+    values = facts["values"]
+    built = None
+    config_path = (project / skeleton_module.GAME_DIR_NAME
+                   / "game_config.json")
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            config = None
+        if isinstance(config, dict) \
+                and isinstance(config.get("targets_per_round"),
+                               (int, float)):
+            built = int(config["targets_per_round"])
+    found = generate_module.scope_target_count(values)
+    if found is None:
+        stated_text = " ".join(
+            str(values.get(name, "") or "")
+            for name in generate_module.TARGET_COUNT_FIELDS)
+        if _re.search(r"\d", stated_text):
+            return {
+                "status": "unparseable", "stated": None, "built": built,
+                "line": "The scope's Win/Lose text states a number "
+                        "the factory could not read as a target "
+                        "count, so it cannot confirm the built game "
+                        "matches the scoped numbers. The text says: "
+                        f"“{stated_text.strip()}”.",
+            }
+        return None
+    stated, used = found["stated"], found["used"]
+    if built is None:
+        return {
+            "status": "not_applicable", "stated": stated, "built": None,
+            "line": f"The scope states a target count "
+                    f"(“{found['matched']}” in the {found['field']}), "
+                    "but this kind of game has no per-round target "
+                    "count in its built config — nothing to "
+                    "reconcile it against.",
+        }
+    if built == stated:
+        return {
+            "status": "match", "stated": stated, "built": built,
+            "line": f"Scope numbers reconciled: the scope says "
+                    f"{stated} targets per round and the built "
+                    f"config uses {built}.",
+        }
+    if built == used:
+        return {
+            "status": "match", "stated": stated, "built": built,
+            "line": f"Scope numbers reconciled: the scope says "
+                    f"{stated} targets per round; that is outside "
+                    f"the playable range, so it was clamped to "
+                    f"{used} — and the built config uses {built}.",
+        }
+    return {
+        "status": "mismatch", "stated": stated, "built": built,
+        "line": f"Scope numbers MISMATCH: the scope says {stated} "
+                f"targets per round (“{found['matched']}” in the "
+                f"{found['field']}) but the built config uses "
+                f"{built} — the game that was built is not the "
+                "game the scope describes.",
+    }
+
+
 def _skeleton_runs_ok(report: dict) -> bool:
     validation = report.get("validation", {})
     return bool(validation.get("passed")) and bool(validation.get("runs"))
@@ -280,8 +365,19 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
     # report on record confirms that content actually runs.
     generation = _load_stage_report(project, "generation_report.json")
     assets = _load_stage_report(project, "assets_report.json")
-    if tev.get("content_counts_delivered"):
-        marks["content_counts_delivered"] = "Test report: content counts delivered."
+    # Scope-number reconciliation (F7): a stated number the built
+    # config disagrees with — or one the factory could not read —
+    # blocks this item with the plain reason, whatever the other
+    # evidence says. Silence here is how the scope and the game
+    # drifted apart unnoticed before 0.10.0.
+    recon = scope_number_reconciliation(project)
+    if recon and recon["status"] in ("mismatch", "unparseable"):
+        reasons["content_counts_delivered"] = recon["line"]
+    elif tev.get("content_counts_delivered"):
+        note = "Test report: content counts delivered."
+        if recon and recon["status"] == "match":
+            note += " " + recon["line"]
+        marks["content_counts_delivered"] = note
     elif from_test and generation:
         delivered = generation.get("units_delivered")
         requested = generation.get("units_requested")
@@ -299,12 +395,15 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
             unit_word = {"platformer": "levels",
                          "crate_pusher": "puzzles"}.get(
                              generation.get("archetype"), "rounds/waves")
-            marks["content_counts_delivered"] = (
+            note = (
                 f"Generation report: {delivered} {unit_word} delivered "
                 f"against the scope's count of {requested} "
                 f"({generation.get('archetype', 'unknown archetype')}), "
                 "and the test report confirms the game runs."
             )
+            if recon and recon["status"] == "match":
+                note += " " + recon["line"]
+            marks["content_counts_delivered"] = note
         else:
             reasons["content_counts_delivered"] = (
                 f"The generation report records {delivered} content "
@@ -537,6 +636,10 @@ def build_finish_report(project_dir, settings_path=None,
                "Tuning is deterministic — " +
                str(generation_report.get("brain_note", "no model used")) + ".")
         )
+        recon = scope_number_reconciliation(project)
+        if recon:
+            lines.append("")
+            lines.append(f"Scope numbers: {recon['line']}")
     assets_report = _load_stage_report(project, "assets_report.json")
     if assets_report:
         lines.append("")
