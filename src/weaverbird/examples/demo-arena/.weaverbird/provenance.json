@@ -1,0 +1,347 @@
+{
+  "records": [
+    {
+      "asset": "game/.gitignore",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/README.md",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/project.godot",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scenes/game.tscn",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scenes/game_over.tscn",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scenes/main_menu.tscn",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scenes/settings.tscn",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scenes/win.tscn",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/game_over.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/input_setup.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/main_menu.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/pause_input.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/run_info.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/settings.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/settings_store.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/ui_theme.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/scripts/win.gd",
+      "source": "code",
+      "provider": "",
+      "note": "weaverbird skeleton template",
+      "recorded_at": "2026-10-23T16:08:22+00:00"
+    },
+    {
+      "asset": "game/assets/audio/click.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/collect.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/hurt.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/jump.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/lose.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/music.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/push.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/audio/win.wav",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "procedurally synthesised audio (stdlib wave, no samples)",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/background.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "background sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/crate.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "crate sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/exit_door.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "exit_door sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/hazard.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "hazard sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/pad.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "pad sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/platform_tile.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "platform_tile sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/player.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "player sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/spikes.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "spikes sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/target.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "target sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/assets/wall.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "wall sprite drawn from the style-lock palette by the deterministic SVG generator",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/icon.svg",
+      "source": "code",
+      "provider": "weaverbird-assets",
+      "note": "game icon generated from the palette with the arena_collector motif",
+      "recorded_at": "2026-10-23T16:08:23+00:00"
+    },
+    {
+      "asset": "game/game_config.json",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/scripts/asset_loader.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/scripts/game.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/scripts/marker.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/scripts/player.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/smoke/smoke.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/breaker.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/competent_lose.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/competent_win.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/first_time.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/model_bridge.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/tests/savecheck.gd",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    },
+    {
+      "asset": "game/world/world.json",
+      "source": "code",
+      "provider": "weaverbird-build",
+      "note": "weaverbird arena_collector generator",
+      "recorded_at": "2026-10-23T16:08:46+00:00"
+    }
+  ]
+}

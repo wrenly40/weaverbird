@@ -1,0 +1,76 @@
+{
+  "stage": "finished",
+  "history": [
+    {
+      "stage": "scope",
+      "at": "2026-10-23T16:08:07+00:00",
+      "note": "Pipeline created."
+    },
+    {
+      "stage": "skeleton",
+      "at": "2026-10-23T16:08:22+00:00",
+      "note": "Orchestrator: the skeleton worker completed."
+    },
+    {
+      "stage": "build",
+      "at": "2026-10-23T16:08:22+00:00",
+      "note": "Orchestrator: the world worker completed."
+    },
+    {
+      "stage": "playtest",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Orchestrator: the testing worker completed."
+    },
+    {
+      "stage": "finished",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Orchestrator: the finish worker completed."
+    }
+  ],
+  "definition_of_done": {
+    "scenario_tests_pass": true,
+    "no_crashes_in_full_playthroughs": true,
+    "performance_targets_met": true,
+    "menus_save_settings_complete": true,
+    "game_winnable_and_losable": true,
+    "content_counts_delivered": true,
+    "icon_and_polish_gate_passed": true
+  },
+  "dod_evidence": {
+    "scenario_tests_pass": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Test report: all scenario runs passed."
+    },
+    "no_crashes_in_full_playthroughs": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Test report: full playthroughs completed with no crashes."
+    },
+    "performance_targets_met": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Test report: the competent win run averaged 144.6 FPS against the target of 30 FPS; the game scene loaded in 0.329s."
+    },
+    "menus_save_settings_complete": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "The generated game contains the menu, settings, save and pause systems (main menu, pause, saved settings and run stats (user:// JSON), settings screen); the flow smoke exercised them."
+    },
+    "game_winnable_and_losable": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Test report: the scripted competent player won through the game's real logic in 15.52s and a deliberate losing run reached the game-over screen \u2014 win and lose are both proven."
+    },
+    "content_counts_delivered": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Generation report: 3 rounds/waves delivered against the scope's count of 3 (arena_collector), and the test report confirms the game runs. Scope numbers reconciled: the scope says 6 targets per round and the built config uses 6."
+    },
+    "icon_and_polish_gate_passed": {
+      "by": "weaverbird",
+      "at": "2026-10-23T16:09:57+00:00",
+      "note": "Asset generation produced a real icon for this game (game/icon.svg, drawn from the style-lock palette with the archetype's motif \u2014 not the skeleton placeholder), and the test report's runs are all clean, so the first run is polish-checked."
+    }
+  }
+}

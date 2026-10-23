@@ -21,4 +21,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-weaverbird = ["templates/*", "assets/*", "web/*", "skeleton_templates/*", "skeleton_templates/*/*", "game_templates/*/*"]
+weaverbird = ["templates/*", "assets/*", "web/*", "skeleton_templates/*", "skeleton_templates/*/*", "game_templates/*/*", "examples/*", "examples/*/*", "examples/*/*/*", "examples/*/*/*/*", "examples/*/*/*/*/*", "examples/*/*/*/*/*/*"]

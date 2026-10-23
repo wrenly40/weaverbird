@@ -1,0 +1,16 @@
+{
+  "worker": "world",
+  "ran_at": "2026-10-23T16:08:22+00:00",
+  "inputs_hash": "e08ffd82ba214ccba0a2b708",
+  "ok": true,
+  "artifacts": [
+    "game/world/world.json"
+  ],
+  "metrics": {
+    "units": 3,
+    "entity_kinds": 3
+  },
+  "issues": [],
+  "summary": "World written: 3 unit(s), entity kinds player, collectible, hazard; its gate passes.",
+  "attempt": 0
+}

@@ -1,0 +1,16 @@
+{
+  "worker": "skeleton",
+  "ran_at": "2026-10-23T16:08:22+00:00",
+  "inputs_hash": "097c93d3ce31824409debd39",
+  "ok": true,
+  "artifacts": [
+    "game/project.godot",
+    ".weaverbird/skeleton_report.json"
+  ],
+  "metrics": {
+    "files": 22
+  },
+  "issues": [],
+  "summary": "Skeleton built and validated (4.7.2.stable.official.ed1daf0bf).",
+  "attempt": 0
+}

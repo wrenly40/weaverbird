@@ -1,0 +1,17 @@
+{
+  "worker": "finish",
+  "ran_at": "2026-10-23T16:09:57+00:00",
+  "inputs_hash": "7278ef1f99f0453334e4b281",
+  "ok": true,
+  "artifacts": [
+    "FINISH_REPORT.md",
+    ".weaverbird/state.json"
+  ],
+  "metrics": {
+    "marked": 7,
+    "open": 0
+  },
+  "issues": [],
+  "summary": "Finish check: 7/7 definition-of-done items evidenced; report at FINISH_REPORT.md.",
+  "attempt": 0
+}

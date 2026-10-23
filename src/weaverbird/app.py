@@ -42,6 +42,7 @@ import yaml
 from . import __version__, template_text
 from . import assets_gen as assets_module
 from . import balance as balance_module
+from . import demo as demo_module
 from . import brain as brain_module
 from . import feedback as feedback_module
 from . import finish as finish_module
@@ -261,10 +262,18 @@ def render_dashboard(server) -> str:
 {_stage_pips(facts['stage'])}
 <div class="meta"><span>Stage: <b>{_esc(STAGE_LABELS.get(facts['stage'], facts['stage']))}</b></span><span><b>{facts['ledger']['tokens']}</b> tokens</span></div>
 </div>"""
+    demo_form = (
+        '<form class="action" method="post" action="/demo">'
+        '<button class="btn ghost" type="submit">Open the demo '
+        'project</button></form>'
+        if demo_module.demo_available() else "")
     if not cards:
         cards = ('<div class="empty">No projects in this workspace '
-                 'yet — start your first game.<br><br>'
-                 '<a class="btn" href="/new">New project</a>'
+                 'yet — start your first game, or open the bundled '
+                 'demo: a finished game the factory built, to look '
+                 'around in.<br><br>'
+                 '<a class="btn" href="/new">New project</a> '
+                 + demo_form +
                  '<p class="hint" style="margin-top:14px">From a '
                  'terminal, <code>weaverbird init &lt;dir&gt;</code> '
                  'inside this workspace does the same thing.</p></div>')
@@ -311,7 +320,7 @@ def render_dashboard(server) -> str:
 
     body = f"""
 <div class="top"><div><h1>Projects</h1><div class="sub">Every game in this workspace, where it is, and what it has cost.</div></div>
-<div><a class="btn" href="/new">New project</a></div></div>
+<div><a class="btn" href="/new">New project</a> {demo_form}</div></div>
 <div class="grid">{cards}</div>
 {_jobs_strip(server)}
 <div class="row">
@@ -1751,6 +1760,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if parts == ["new"]:
                 return self._post_new_project()
+            if parts == ["demo"]:
+                return self._post_demo()
             if parts == ["settings"]:
                 return self._post_settings()
             if parts == ["settings", "create"]:
@@ -1855,6 +1866,24 @@ class _Handler(BaseHTTPRequestHandler):
         if values["prompt"].strip():
             return self._redirect(f"/project/{quoted}/scope")
         return self._redirect(f"/project/{quoted}")
+
+    def _post_demo(self) -> None:
+        """Install the bundled demo project into the workspace
+        and land on its project page (303, like every POST that
+        leads to a page). An existing folder of the demo's name
+        is never overwritten: when it holds a scope — the demo
+        already opened, or a project of the maker's own with
+        that name — we land on it instead."""
+        try:
+            installed = demo_module.install_demo(self.app.workspace)
+        except demo_module.DemoError as exc:
+            existing = self.app.workspace / demo_module.DEMO_NAME
+            if (existing / "SCOPE.md").is_file():
+                return self._redirect(
+                    f"/project/{demo_module.DEMO_NAME}")
+            return self._fail_page(str(exc), 400)
+        return self._redirect(
+            f"/project/{urllib.parse.quote(installed['name'])}")
 
     # -- job-backed actions ------------------------------------------------
     def _redirect(self, location: str) -> None:

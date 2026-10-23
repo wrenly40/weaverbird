@@ -1,0 +1,246 @@
+{
+  "preset": "arena_collector",
+  "composition": {
+    "dimension": "2d",
+    "movement": "top_down",
+    "objectives": [
+      "collect"
+    ],
+    "fail": [
+      "timer",
+      "hazard_contact"
+    ],
+    "structure": "rounds",
+    "interactions": [
+      "avoid",
+      "collect"
+    ]
+  },
+  "bespoke": false,
+  "entity_kinds": [
+    "player",
+    "collectible",
+    "hazard"
+  ],
+  "units": [
+    {
+      "index": 0,
+      "kind": "round",
+      "round": 1,
+      "targets_per_round": 6,
+      "round_seconds": 75,
+      "arena": [
+        1152,
+        648
+      ],
+      "spawn": [
+        576,
+        470
+      ],
+      "collectibles": [
+        [
+          85,
+          500
+        ],
+        [
+          274,
+          261
+        ],
+        [
+          477,
+          159
+        ],
+        [
+          681,
+          173
+        ],
+        [
+          874,
+          335
+        ],
+        [
+          1066,
+          451
+        ]
+      ],
+      "hazards": [
+        {
+          "pos": [
+            400,
+            330
+          ],
+          "range": 170
+        },
+        {
+          "pos": [
+            740,
+            452
+          ],
+          "range": 140
+        }
+      ],
+      "layout": {
+        "pattern": "zigzag",
+        "seed": 2028044504,
+        "fallbacks": []
+      }
+    },
+    {
+      "index": 1,
+      "kind": "round",
+      "round": 2,
+      "targets_per_round": 6,
+      "round_seconds": 75,
+      "arena": [
+        1152,
+        648
+      ],
+      "spawn": [
+        576,
+        470
+      ],
+      "collectibles": [
+        [
+          663,
+          181
+        ],
+        [
+          785,
+          184
+        ],
+        [
+          847,
+          263
+        ],
+        [
+          828,
+          333
+        ],
+        [
+          694,
+          363
+        ],
+        [
+          639,
+          284
+        ],
+        [
+          582,
+          237
+        ]
+      ],
+      "hazards": [
+        {
+          "pos": [
+            400,
+            330
+          ],
+          "range": 170
+        },
+        {
+          "pos": [
+            740,
+            452
+          ],
+          "range": 140
+        },
+        {
+          "pos": [
+            300,
+            200
+          ],
+          "range": 130
+        }
+      ],
+      "layout": {
+        "pattern": "ring",
+        "seed": 2028044504,
+        "fallbacks": []
+      }
+    },
+    {
+      "index": 2,
+      "kind": "round",
+      "round": 3,
+      "targets_per_round": 6,
+      "round_seconds": 75,
+      "arena": [
+        1152,
+        648
+      ],
+      "spawn": [
+        576,
+        470
+      ],
+      "collectibles": [
+        [
+          962,
+          444
+        ],
+        [
+          890,
+          356
+        ],
+        [
+          748,
+          301
+        ],
+        [
+          638,
+          211
+        ],
+        [
+          491,
+          217
+        ],
+        [
+          368,
+          263
+        ],
+        [
+          308,
+          386
+        ],
+        [
+          190,
+          446
+        ]
+      ],
+      "hazards": [
+        {
+          "pos": [
+            400,
+            330
+          ],
+          "range": 170
+        },
+        {
+          "pos": [
+            740,
+            452
+          ],
+          "range": 140
+        },
+        {
+          "pos": [
+            300,
+            200
+          ],
+          "range": 130
+        },
+        {
+          "pos": [
+            850,
+            240
+          ],
+          "range": 120
+        }
+      ],
+      "layout": {
+        "pattern": "arc",
+        "seed": 2028044504,
+        "fallbacks": []
+      }
+    }
+  ]
+}

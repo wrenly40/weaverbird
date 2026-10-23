@@ -1,0 +1,15 @@
+{
+  "worker": "scope",
+  "ran_at": "2026-10-23T16:08:07+00:00",
+  "inputs_hash": "3f7099f9c77fdd8aaee09d4b",
+  "ok": true,
+  "artifacts": [
+    "SCOPE.md"
+  ],
+  "metrics": {
+    "filled_fields": 24
+  },
+  "issues": [],
+  "summary": "Scope complete and approved \u2014 its gate passes.",
+  "attempt": 0
+}

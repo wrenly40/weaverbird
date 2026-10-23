@@ -1,0 +1,61 @@
+# Game Factory — connector registry (draft)
+# Each connector declares: capabilities, auth, what it may do alone, what always needs user approval.
+# Rules for all connectors: never widen own permissions; missing connector = degrade gracefully, never block the factory.
+
+- id: github
+  kind: version_control
+  auth: oauth_or_token_in_vault
+  can_do_alone: [create_private_repo, commit_per_iteration, tag_known_good, branch_experiments, rollback_to_tag]
+  needs_approval: [make_repo_public, create_release, delete_repo]
+  fallback_without: local git only (commits, tags, rollback all still work)
+
+- id: itch
+  kind: storefront
+  auth: api_key_in_vault  # butler CLI
+  can_do_alone: [create_draft_page, upload_build, upload_patch]
+  needs_approval: [publish, change_price, post_devlog]
+  fallback_without: factory prepares upload-ready package + checklist
+
+- id: steam
+  kind: storefront
+  auth: steamworks_account_in_vault
+  can_do_alone: [prepare_store_page_draft, upload_build_steampipe, fill_content_survey_from_provenance_log]
+  needs_approval: [pay_direct_fee, submit_for_review, set_release_date, publish, change_price]
+  user_only: [create_partner_account, tax_and_bank_interview, sign_agreements]
+  fallback_without: factory prepares package + full manual checklist
+
+- id: google_play
+  kind: storefront
+  auth: play_console_in_vault
+  can_do_alone: [prepare_listing_draft, upload_aab_to_internal_track, fill_iarc_questionnaire_draft]
+  needs_approval: [promote_to_production, change_price, submit_rating_questionnaire]
+  user_only: [create_developer_account, identity_verification]
+  notes: release keystore is vaulted by the factory; losing it ends updates for that app identity.
+
+- id: apple_signing
+  kind: signing_service
+  auth: developer_id_in_vault
+  can_do_alone: [sign_build, submit_notarisation, staple_ticket]
+  needs_approval: []
+  user_only: [join_apple_developer_program]
+  fallback_without: unsigned macOS build with a clear Gatekeeper warning in the run report
+
+- id: llm_provider
+  kind: model
+  auth: bring_your_own_key_in_vault   # cloud providers and local (e.g. Ollama) are both this connector kind
+  can_do_alone: [run_within_global_budget]
+  needs_approval: [exceed_global_budget, switch_frontier_provider]
+  notes: every call is logged to the per-game cost ledger; provenance of AI-made assets is recorded at creation.
+
+- id: asset_provider
+  kind: asset_generation
+  auth: bring_your_own_key_in_vault
+  can_do_alone: [generate_within_scope_provenance_policy]
+  needs_approval: [use_a_source_outside_the_scope_policy]
+  notes: outputs land with a provenance record — no record, asset is not used.
+
+- id: feedback_sources
+  kind: feedback
+  auth: per-store, read via the storefront connectors
+  can_do_alone: [read_comments_and_reviews, cluster_and_rank, draft_replies]
+  needs_approval: [post_reply, post_patch_announcement]

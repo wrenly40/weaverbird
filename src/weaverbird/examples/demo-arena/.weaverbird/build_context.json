@@ -1,0 +1,80 @@
+{
+  "values": {
+    "Title (working)": "Demo Arena",
+    "One-line pitch": "A tiny arena collector: gather the stars, dodge the hazards, beat the clock.",
+    "Dimension": "2D",
+    "Genre / archetype": "Arena collector",
+    "Core verb (what the player does most)": "Collect stars and dodge hazards",
+    "Win condition": "Collect 6 stars each round to clear the round; clear all 3 rounds to win",
+    "Lose / fail condition": "Touch a hazard, or let the round timer run out",
+    "Session length (one sitting)": "About 5 minutes",
+    "Scope class": "Micro",
+    "Content counts (levels / waves / rooms / items, as applicable)": "3 rounds",
+    "Difficulty target (who it is for, how hard)": "Casual \u2014 gentle for a first-time player",
+    "Must-have features (max 3)": "Rounds with rising hazards; a pause menu; a saved best score",
+    "Explicitly out of scope": "Multiplayer; anything beyond the arena",
+    "Style sample chosen (id / link to approved sample)": "soft-pastel",
+    "Palette": "accent #9B8CF2, target #7FD6A4, hazard #F28B8B, platform #B8A99A, crate #D9B98A",
+    "Proportions / outline / shading rules": "Soft rounded shapes, no outlines, flat pastel fills (follows the soft-pastel sample)",
+    "Audio mood (music + SFX character)": "Light marimba plucks; soft collect chimes",
+    "UI look (follows the style sample)": "Rounded panels, violet accent, generous spacing",
+    "Allowed sources": "code-drawn first, AI-generated allowed",
+    "AI disclosure stance for stores (follows the allowed sources)": "Disclose AI-generated content wherever a store asks",
+    "Forbidden sources / content": "Stock libraries; other games' assets",
+    "Platforms (Windows / macOS / Linux / Web / Android / iOS)": "Windows / macOS / Linux",
+    "Target storefronts, in order (itch / Steam / Play / other)": "itch",
+    "Price intent (free / paid + rough price / decide at approval gate)": "free"
+  },
+  "preset": "arena_collector",
+  "composition": {
+    "dimension": "2d",
+    "movement": "top_down",
+    "objectives": [
+      "collect"
+    ],
+    "fail": [
+      "timer",
+      "hazard_contact"
+    ],
+    "structure": "rounds",
+    "interactions": [
+      "avoid",
+      "collect"
+    ]
+  },
+  "bespoke": false,
+  "reason": "derived from the scope \u2014 no platform or puzzle signal in the scope \u2014 the arena collector is the default",
+  "palette": {
+    "accent_hex": "#9B8CF2",
+    "target_hex": "#7FD6A4",
+    "hazard_hex": "#F28B8B",
+    "platform_hex": "#B8A99A",
+    "crate_hex": "#D9B98A"
+  },
+  "units": 3,
+  "config": {
+    "archetype": "arena_collector",
+    "accent_hex": "#9B8CF2",
+    "target_hex": "#7FD6A4",
+    "hazard_hex": "#F28B8B",
+    "platform_hex": "#B8A99A",
+    "crate_hex": "#D9B98A",
+    "objective_hint": "Collect every glowing target before the time runs out. Avoid the red hazards!",
+    "rounds": 3,
+    "targets_per_round": 6,
+    "round_seconds": 75,
+    "player_speed": 330.0,
+    "hazard_speed": 1.4,
+    "world_seed": 2028044504,
+    "scope_numbers": {
+      "targets_per_round": {
+        "stated": 6,
+        "used": 6,
+        "field": "Win condition",
+        "matched": "Collect 6"
+      }
+    }
+  },
+  "brain_used": false,
+  "brain_note": "no usable mid-tier model (no settings file found)"
+}

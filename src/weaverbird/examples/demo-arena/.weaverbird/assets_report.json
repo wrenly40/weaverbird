@@ -1,0 +1,72 @@
+{
+  "stage": "assets",
+  "generated_at": "2026-10-23T16:08:23+00:00",
+  "archetype": "arena_collector",
+  "composition": {
+    "dimension": "2d",
+    "movement": "top_down",
+    "objectives": [
+      "collect"
+    ],
+    "fail": [
+      "timer",
+      "hazard_contact"
+    ],
+    "structure": "rounds",
+    "interactions": [
+      "avoid",
+      "collect"
+    ]
+  },
+  "preset": "arena_collector",
+  "dimension": "2d",
+  "requests": {
+    "sprites": [
+      "background",
+      "hazard",
+      "player",
+      "spikes",
+      "target"
+    ],
+    "audio": [
+      "click",
+      "collect",
+      "hurt",
+      "lose",
+      "music",
+      "win"
+    ],
+    "based_on": "world",
+    "materials": []
+  },
+  "palette": {
+    "accent_hex": "#9B8CF2",
+    "target_hex": "#7FD6A4",
+    "hazard_hex": "#F28B8B",
+    "platform_hex": "#B8A99A",
+    "crate_hex": "#D9B98A"
+  },
+  "files": [
+    "game/assets/audio/click.wav",
+    "game/assets/audio/collect.wav",
+    "game/assets/audio/hurt.wav",
+    "game/assets/audio/jump.wav",
+    "game/assets/audio/lose.wav",
+    "game/assets/audio/music.wav",
+    "game/assets/audio/push.wav",
+    "game/assets/audio/win.wav",
+    "game/assets/background.svg",
+    "game/assets/crate.svg",
+    "game/assets/exit_door.svg",
+    "game/assets/hazard.svg",
+    "game/assets/pad.svg",
+    "game/assets/platform_tile.svg",
+    "game/assets/player.svg",
+    "game/assets/spikes.svg",
+    "game/assets/target.svg",
+    "game/assets/wall.svg",
+    "game/icon.svg"
+  ],
+  "icon": "game/icon.svg",
+  "icon_generated": true
+}

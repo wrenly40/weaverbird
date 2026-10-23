@@ -1,0 +1,41 @@
+{
+  "archetype": "arena_collector",
+  "accent_hex": "#9B8CF2",
+  "target_hex": "#7FD6A4",
+  "hazard_hex": "#F28B8B",
+  "platform_hex": "#B8A99A",
+  "crate_hex": "#D9B98A",
+  "objective_hint": "Collect every glowing target before the time runs out. Avoid the red hazards!",
+  "rounds": 3,
+  "targets_per_round": 6,
+  "round_seconds": 75,
+  "player_speed": 330.0,
+  "hazard_speed": 1.4,
+  "world_seed": 2028044504,
+  "scope_numbers": {
+    "targets_per_round": {
+      "stated": 6,
+      "used": 6,
+      "field": "Win condition",
+      "matched": "Collect 6"
+    }
+  },
+  "composition": {
+    "dimension": "2d",
+    "movement": "top_down",
+    "objectives": [
+      "collect"
+    ],
+    "fail": [
+      "timer",
+      "hazard_contact"
+    ],
+    "structure": "rounds",
+    "interactions": [
+      "avoid",
+      "collect"
+    ]
+  },
+  "preset": "arena_collector",
+  "dimension": "2d"
+}

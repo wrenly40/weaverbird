@@ -1,0 +1,16 @@
+{
+  "worker": "assembly",
+  "ran_at": "2026-10-23T16:08:46+00:00",
+  "inputs_hash": "5d121a3a987c667439462a8c",
+  "ok": true,
+  "artifacts": [
+    "game/game_config.json",
+    ".weaverbird/generation_report.json"
+  ],
+  "metrics": {
+    "units": 3
+  },
+  "issues": [],
+  "summary": "Game assembled: 3 content unit(s), Godot validation passed, tagged known-good/build.",
+  "attempt": 0
+}

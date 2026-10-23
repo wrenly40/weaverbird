@@ -122,6 +122,22 @@ def cmd_identity(args) -> int:
     return 0
 
 
+def cmd_demo(args) -> int:
+    from . import demo as demo_module
+    workspace = Path(args.workspace) if args.workspace else Path.cwd()
+    try:
+        installed = demo_module.install_demo(workspace, name=args.name)
+    except demo_module.DemoError as exc:
+        return _fail(str(exc))
+    print(f"Installed the demo project: {installed['files']} files "
+          f"copied to {installed['path']} — a finished game (arena "
+          "collector, 3 rounds) with its scope, test report and "
+          "finish report, at the finished stage.")
+    print("Look around in the app, re-run its tests, or export it "
+          f"with 'weaverbird export {installed['path']}'.")
+    return 0
+
+
 def cmd_init(args) -> int:
     target = Path(args.dir)
     try:
@@ -1131,6 +1147,14 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--force", action="store_true",
                       help="Scaffold even if the directory is not empty.")
 
+    demo_cmd = sub.add_parser(
+        "demo", help="Install the bundled demo project (a finished "
+                     "game) into the workspace.")
+    demo_cmd.add_argument("--name", default="demo-arena",
+                          help="Folder name in the workspace "
+                               "(default: demo-arena). An existing "
+                               "folder is never overwritten.")
+
     scope = sub.add_parser("scope", help="Work with a project's scope file.")
     scope_sub = scope.add_subparsers(dest="scope_command")
     for name, help_text in (
@@ -1417,6 +1441,7 @@ _HANDLERS = {
     ("doctor", None): cmd_doctor,
     ("identity", None): cmd_identity,
     ("init", None): cmd_init,
+    ("demo", None): cmd_demo,
     ("scope", "check"): cmd_scope_check,
     ("scope", "questions"): cmd_scope_questions,
     ("scope", "approve"): cmd_scope_approve,
@@ -1506,6 +1531,7 @@ Project commands (scripting) — the same work the app does, as
 commands, for scripts and terminals:
   weaverbird doctor                     check the setup
   weaverbird init <dir>                 start a new game project
+  weaverbird demo                       install the bundled demo project (a finished game)
   weaverbird scope ...                  the scope file and the interview
   weaverbird brain check                the bring-your-own-key ladder
   weaverbird workers list               every independent worker + its contract

@@ -85,25 +85,49 @@ class JobManagerTests(unittest.TestCase):
         self.assertIsNone(failed["result"])
 
     def test_cancel_lands_between_steps(self):
+        # Deterministic (0.10.0 — this test used to race real
+        # timing and flaked on pristine trees): the runner parks
+        # AT a step boundary, on an event the test controls; the
+        # test cancels while it is parked there, then releases
+        # it. The very next reporter call must raise, the job
+        # lands cancelled, and no later step ever runs. No sleeps
+        # anywhere in the sequence.
+        parked = threading.Event()
+        release = threading.Event()
+        reported = []
+
         def stepping(ctx):
-            for i in range(500):
-                ctx.reporter(f"step {i}", done=i, total=500)
-                time.sleep(0.01)
+            for i in range(10):
+                if i == 3:
+                    parked.set()
+                    release.wait(timeout=30)
+                ctx.reporter(f"step {i}", done=i, total=10)
+                reported.append(i)
             return "ran to the end"
 
         job = self.manager.submit("proj-a", self.workspace / "proj-a",
                                   "run-tests", runner=stepping)
-        deadline = time.monotonic() + 10
-        while self.manager.get(job["id"])["status"] != "running":
-            self.assertLess(time.monotonic(), deadline)
-            time.sleep(0.01)
+        self.assertTrue(parked.wait(timeout=30),
+                        "the runner never reached the step boundary")
+        # The runner is inside the action, so the manager has
+        # already marked the job running (it does so before
+        # calling the runner) — this cancel lands on a running
+        # job, between steps by construction.
+        self.assertEqual(self.manager.get(job["id"])["status"],
+                         "running")
         self.manager.cancel(job["id"])
+        release.set()
         landed = wait_job(self.manager, job["id"])
         self.assertEqual(landed["status"], "cancelled")
         self.assertEqual(landed["result"],
                          jobs.CANCELLED_BETWEEN_STEPS)
+        # Steps before the boundary ran; the boundary step's
+        # reporter call raised instead of recording, and nothing
+        # after it ran at all.
+        self.assertEqual(reported, [0, 1, 2])
         texts = [e["text"] for e in landed["events"]]
         self.assertTrue(any("Cancel requested" in t for t in texts))
+        self.assertFalse(any("step 3" in t for t in texts))
 
     def test_cancel_queued_job_never_runs(self):
         release = threading.Event()

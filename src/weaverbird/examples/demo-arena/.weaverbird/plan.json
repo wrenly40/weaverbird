@@ -1,0 +1,223 @@
+{
+  "target": "finished",
+  "built_at": "2026-10-23T16:08:07+00:00",
+  "stage": "scope",
+  "steps": [
+    {
+      "worker": "scope",
+      "title": "Scope gate",
+      "reason": "the build does not start until the scope is complete and approved",
+      "inputs": [],
+      "outputs": [
+        "SCOPE.md"
+      ],
+      "depends_on": [],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Scope complete and approved \u2014 its gate passes."
+    },
+    {
+      "worker": "skeleton",
+      "title": "Skeleton builder",
+      "reason": "the grey-box shell every later worker builds on",
+      "inputs": [],
+      "outputs": [
+        "game/project.godot",
+        ".weaverbird/skeleton_report.json"
+      ],
+      "depends_on": [
+        "scope"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Skeleton built and validated (4.7.2.stable.official.ed1daf0bf)."
+    },
+    {
+      "worker": "world",
+      "title": "World worker",
+      "reason": "the world's data \u2014 layouts, rounds, puzzles \u2014 as game/world/world.json",
+      "inputs": [
+        "game/project.godot"
+      ],
+      "outputs": [
+        "game/world/world.json"
+      ],
+      "depends_on": [
+        "skeleton"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "World written: 3 unit(s), entity kinds player, collectible, hazard; its gate passes."
+    },
+    {
+      "worker": "mechanics",
+      "title": "Mechanics worker",
+      "reason": "the player + game logic scripts that interpret the world data",
+      "inputs": [
+        "game/world/world.json"
+      ],
+      "outputs": [
+        "game/scripts/game.gd"
+      ],
+      "depends_on": [
+        "world"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Mechanics written: 11 script(s) interpreting the world data."
+    },
+    {
+      "worker": "assets",
+      "title": "Asset generation",
+      "reason": "sprites, icon and audio from the composition + world requests and the style-lock palette",
+      "inputs": [
+        "game/project.godot",
+        "game/world/world.json"
+      ],
+      "outputs": [
+        "game/assets/",
+        ".weaverbird/assets_report.json",
+        "game/icon.svg"
+      ],
+      "depends_on": [
+        "skeleton"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Assets generated: 19 files (requests from world), every one in the provenance log."
+    },
+    {
+      "worker": "assembly",
+      "title": "Assembly worker",
+      "reason": "wire shell + mechanics + world + assets into the runnable game and validate it in Godot",
+      "inputs": [
+        "game/world/world.json",
+        "game/scripts/game.gd",
+        ".weaverbird/assets_report.json"
+      ],
+      "outputs": [
+        "game/game_config.json",
+        ".weaverbird/generation_report.json"
+      ],
+      "depends_on": [
+        "world",
+        "mechanics",
+        "assets"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Game assembled: 3 content unit(s), Godot validation passed, tagged known-good/build."
+    },
+    {
+      "worker": "testing",
+      "title": "Headless test stage",
+      "reason": "the headless suite with the scripted players",
+      "inputs": [
+        "game/game_config.json",
+        "game/world/world.json",
+        "game/scripts/game.gd",
+        ".weaverbird/assets_report.json"
+      ],
+      "outputs": [
+        ".weaverbird/test_report.json"
+      ],
+      "depends_on": [
+        "assembly"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Test suite: PASS \u2014 win and lose proven."
+    },
+    {
+      "worker": "finish",
+      "title": "Finish check + report",
+      "reason": "mark the definition of done from the evidence and write the finish report",
+      "inputs": [
+        ".weaverbird/test_report.json",
+        ".weaverbird/generation_report.json",
+        ".weaverbird/assets_report.json"
+      ],
+      "outputs": [
+        "FINISH_REPORT.md"
+      ],
+      "depends_on": [
+        "testing"
+      ],
+      "skip_if_inputs_unchanged": true,
+      "status": "done",
+      "summary": "Finish check: 7/7 definition-of-done items evidenced; report at FINISH_REPORT.md."
+    }
+  ],
+  "events": [
+    {
+      "at": "2026-10-23T16:08:07+00:00",
+      "text": "Running scope \u2014 the build does not start until the scope is complete and approved"
+    },
+    {
+      "at": "2026-10-23T16:08:07+00:00",
+      "text": "Done scope \u2014 Scope complete and approved \u2014 its gate passes."
+    },
+    {
+      "at": "2026-10-23T16:08:07+00:00",
+      "text": "Running skeleton \u2014 the grey-box shell every later worker builds on"
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Done skeleton \u2014 Skeleton built and validated (4.7.2.stable.official.ed1daf0bf)."
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Running world \u2014 the world's data \u2014 layouts, rounds, puzzles \u2014 as game/world/world.json"
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Done world \u2014 World written: 3 unit(s), entity kinds player, collectible, hazard; its gate passes."
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Running mechanics \u2014 the player + game logic scripts that interpret the world data"
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Done mechanics \u2014 Mechanics written: 11 script(s) interpreting the world data."
+    },
+    {
+      "at": "2026-10-23T16:08:22+00:00",
+      "text": "Running assets \u2014 sprites, icon and audio from the composition + world requests and the style-lock palette"
+    },
+    {
+      "at": "2026-10-23T16:08:23+00:00",
+      "text": "Done assets \u2014 Assets generated: 19 files (requests from world), every one in the provenance log."
+    },
+    {
+      "at": "2026-10-23T16:08:23+00:00",
+      "text": "Running assembly \u2014 wire shell + mechanics + world + assets into the runnable game and validate it in Godot"
+    },
+    {
+      "at": "2026-10-23T16:08:46+00:00",
+      "text": "Done assembly \u2014 Game assembled: 3 content unit(s), Godot validation passed, tagged known-good/build."
+    },
+    {
+      "at": "2026-10-23T16:08:46+00:00",
+      "text": "Running testing \u2014 the headless suite with the scripted players"
+    },
+    {
+      "at": "2026-10-23T16:09:57+00:00",
+      "text": "Done testing \u2014 Test suite: PASS \u2014 win and lose proven."
+    },
+    {
+      "at": "2026-10-23T16:09:57+00:00",
+      "text": "Running finish \u2014 mark the definition of done from the evidence and write the finish report"
+    },
+    {
+      "at": "2026-10-23T16:09:57+00:00",
+      "text": "Done finish \u2014 Finish check: 7/7 definition-of-done items evidenced; report at FINISH_REPORT.md."
+    },
+    {
+      "at": "2026-10-23T16:09:57+00:00",
+      "text": "Plan complete \u2014 target finished reached"
+    }
+  ],
+  "outcome": "done",
+  "escalation": null
+}

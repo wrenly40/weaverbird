@@ -1,0 +1,278 @@
+{
+  "stage": "headless_test",
+  "ran_at": "2026-10-23T16:09:57+00:00",
+  "godot_version": "4.7.2.stable.official.ed1daf0bf",
+  "archetype": "arena_collector",
+  "scripted_players": true,
+  "runs": [
+    {
+      "name": "import",
+      "kind": "base",
+      "ok": true,
+      "errors": [],
+      "duration_s": 4.51,
+      "details": {}
+    },
+    {
+      "name": "main scene",
+      "kind": "base",
+      "ok": true,
+      "errors": [],
+      "duration_s": 0.56,
+      "details": {}
+    },
+    {
+      "name": "game scene",
+      "kind": "base",
+      "ok": true,
+      "errors": [],
+      "duration_s": 0.67,
+      "details": {}
+    },
+    {
+      "name": "competent win",
+      "kind": "scripted",
+      "player": "competent",
+      "mode": "win",
+      "ok": true,
+      "errors": [],
+      "duration_s": 16.5,
+      "details": {
+        "deaths": 0,
+        "findings": [],
+        "fps_avg": 144.6,
+        "load_ms": 329,
+        "reason": "",
+        "time_s": 15.52,
+        "units": [
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 7.3,
+            "unit": 1
+          },
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 2.88,
+            "unit": 2
+          },
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 5.3,
+            "unit": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "competent lose",
+      "kind": "scripted",
+      "player": "competent",
+      "mode": "lose",
+      "ok": true,
+      "errors": [],
+      "duration_s": 1.8,
+      "details": {
+        "deaths": 1,
+        "findings": [],
+        "reason": "",
+        "time_s": 0.83
+      }
+    },
+    {
+      "name": "breaker",
+      "kind": "scripted",
+      "player": "breaker",
+      "mode": "fuzz",
+      "ok": true,
+      "errors": [],
+      "duration_s": 31.08,
+      "details": {
+        "deaths": 0,
+        "findings": [
+          "pause overlay opened and closed under fuzz input"
+        ],
+        "reason": "",
+        "time_s": 30.0
+      }
+    },
+    {
+      "name": "first-time",
+      "kind": "scripted",
+      "player": "first_time",
+      "mode": "explore",
+      "ok": true,
+      "errors": [],
+      "duration_s": 16.28,
+      "details": {
+        "deaths": 1,
+        "findings": [],
+        "finished": false,
+        "first_objective_s": 0.98,
+        "outcome": "lose",
+        "reason": "",
+        "time_s": 15.25,
+        "units": [
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 8.12,
+            "unit": 1
+          },
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 4.04,
+            "unit": 2
+          },
+          {
+            "completed": false,
+            "deaths": 1,
+            "time_s": 3.08,
+            "unit": 3
+          }
+        ]
+      }
+    }
+  ],
+  "scenarios_pass": true,
+  "no_crashes": true,
+  "winnable": true,
+  "losable": true,
+  "win_proven": true,
+  "lose_proven": true,
+  "performance": {
+    "avg_fps": 144.6,
+    "load_time_s": 0.329,
+    "target_fps": 30,
+    "ok": true
+  },
+  "playtesters": {
+    "competent": {
+      "win": {
+        "deaths": 0,
+        "findings": [],
+        "fps_avg": 144.6,
+        "load_ms": 329,
+        "reason": "",
+        "time_s": 15.52,
+        "units": [
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 7.3,
+            "unit": 1
+          },
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 2.88,
+            "unit": 2
+          },
+          {
+            "completed": true,
+            "deaths": 0,
+            "time_s": 5.3,
+            "unit": 3
+          }
+        ]
+      },
+      "lose": {
+        "deaths": 1,
+        "findings": [],
+        "reason": "",
+        "time_s": 0.83
+      },
+      "ok": true
+    },
+    "breaker": {
+      "deaths": 0,
+      "findings": [
+        "pause overlay opened and closed under fuzz input"
+      ],
+      "reason": "",
+      "time_s": 30.0,
+      "ok": true
+    },
+    "first_time": {
+      "deaths": 1,
+      "findings": [],
+      "finished": false,
+      "first_objective_s": 0.98,
+      "outcome": "lose",
+      "reason": "",
+      "time_s": 15.25,
+      "units": [
+        {
+          "completed": true,
+          "deaths": 0,
+          "time_s": 8.12,
+          "unit": 1
+        },
+        {
+          "completed": true,
+          "deaths": 0,
+          "time_s": 4.04,
+          "unit": 2
+        },
+        {
+          "completed": false,
+          "deaths": 1,
+          "time_s": 3.08,
+          "unit": 3
+        }
+      ],
+      "ok": true
+    }
+  },
+  "units": [
+    {
+      "unit": 1,
+      "source": "competent",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 7.3
+    },
+    {
+      "unit": 1,
+      "source": "first_time",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 8.12
+    },
+    {
+      "unit": 2,
+      "source": "competent",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 2.88
+    },
+    {
+      "unit": 2,
+      "source": "first_time",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 4.04
+    },
+    {
+      "unit": 3,
+      "source": "competent",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 5.3
+    },
+    {
+      "unit": 3,
+      "source": "first_time",
+      "completed": false,
+      "deaths": 1,
+      "time_s": 3.08
+    }
+  ],
+  "warnings": [
+    "breaker: pause overlay opened and closed under fuzz input"
+  ],
+  "ok": true
+}
