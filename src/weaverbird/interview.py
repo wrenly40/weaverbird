@@ -145,12 +145,32 @@ def _load_scope(project_dir):
 
 _DIMENSION_RE = re.compile(r"\b([23])\s*d\b")
 _SCOPE_CLASS_RE = re.compile(r"\b(micro|small|medium)\b")
-_TELEMETRY_RE = re.compile(r"\b(yes|no)\b")
+_TELEMETRY_YES_RE = re.compile(r"\byes\b")
+# "None" is a complete, natural answer to "is telemetry allowed?"
+# (dogfood finding D1): it means no telemetry. Before 0.10.1 the
+# validator only accepted yes/no, so an explicit "None" was
+# dropped and the field re-asked forever, silently.
+_TELEMETRY_NO_RE = re.compile(r"\b(?:no|none|off|never)\b")
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b")
 
 
-def validate_value(field_name: str, raw) -> str | None:
-    value = scope_module._clean_value(str(raw if raw is not None else ""))
+def validate_value(field_name: str, raw, authoritative: bool = False) -> str | None:
+    """The canonical value to store for a field, or None when the
+    answer is not usable for it (the field is then re-asked).
+
+    ``authoritative`` marks a value the maker submitted as an
+    answer in an interview turn: it is taken as written (only
+    whitespace is tidied) and the template-placeholder filtering
+    in scope._clean_value does NOT apply — a maker's "None" is a
+    real answer, not an unspecified field. Non-authoritative
+    values (template defaults, prompt-extraction and brain
+    guesses) keep the placeholder filtering, where hint-shaped
+    text genuinely means "not specified"."""
+    text = str(raw if raw is not None else "")
+    if authoritative:
+        value = text.strip().rstrip(":").strip()
+    else:
+        value = scope_module._clean_value(text)
     if not value:
         return None
     lowered = value.lower()
@@ -161,8 +181,15 @@ def validate_value(field_name: str, raw) -> str | None:
         match = _SCOPE_CLASS_RE.search(lowered)
         return match.group(1).capitalize() if match else None
     if field_name == "Telemetry":
-        match = _TELEMETRY_RE.search(lowered)
-        return match.group(1) if match else None
+        yes = _TELEMETRY_YES_RE.search(lowered)
+        no = _TELEMETRY_NO_RE.search(lowered)
+        if yes and no:
+            return "yes" if yes.start() < no.start() else "no"
+        if yes:
+            return "yes"
+        if no:
+            return "no"
+        return None
     if field_name == STYLE_FIELD:
         sample = style_pick_from_text(value)
         if sample is not None:
@@ -426,11 +453,31 @@ def _apply_fields(project_dir, answers: dict) -> tuple[dict, list]:
     return applied, dropped
 
 
+def _why_hint(field_name: str) -> str:
+    """What a field needs, in one clause — used when an answer
+    could not be taken, so the maker hears why, not silence."""
+    hints = {
+        "Dimension": "it needs '2D' or '3D'",
+        "Scope class": "it needs Micro, Small or Medium",
+        "Telemetry": "it needs yes or no ('none' counts as no)",
+        PALETTE_FIELD: "it needs at least one hex colour, "
+                       "like #6C4CF1",
+        STYLE_FIELD: "it needs a style sample's name or number, "
+                     "or a link to an approved sample",
+    }
+    return hints.get(field_name, "")
+
+
 def _deterministic_apply(project_dir, parsed,
-                         text: str) -> tuple[dict, list, list]:
+                         text: str) -> tuple[dict, list, list, list]:
     """Parse one message without a model: 'Field: value' lines
     first, then plain lines for the pending group. Returns
-    (applied, dropped, ignored lines).
+    (applied, dropped, ignored lines, uncaptured lines).
+
+    Every value here was submitted by the maker as an answer, so
+    validation is authoritative (see validate_value): an answer
+    that reads like a placeholder word — "None" for Telemetry —
+    still fills its field.
 
     With no more lines than the group has open fields, plain
     lines are walked across the fields in order — a line lands
@@ -442,12 +489,16 @@ def _deterministic_apply(project_dir, parsed,
     field i, validation still applied, an unusable line is
     dropped rather than walked onward) and the surplus lines
     are returned as ignored, for the interviewer to quote back.
+    Lines no open field accepts at all come back as uncaptured,
+    so the interviewer can say so instead of silently re-asking
+    (D1: a maker answering "None" was looped with no explanation).
     """
     scope_file = _scope_file(project_dir)
     empty = {f.name: f for f in parsed.missing_fields}
     answers: dict = {}
     dropped: list[str] = []
     ignored: list[str] = []
+    uncaptured: list[str] = []
     plain_lines: list[str] = []
     for raw_line in str(text).splitlines():
         line = raw_line.strip()
@@ -462,7 +513,8 @@ def _deterministic_apply(project_dir, parsed,
                     named = name
                     break
         if named is not None:
-            canonical = validate_value(named, match.group(2))
+            canonical = validate_value(named, match.group(2),
+                                       authoritative=True)
             if canonical is None:
                 dropped.append(named)
             else:
@@ -475,21 +527,26 @@ def _deterministic_apply(project_dir, parsed,
     if len(plain_lines) > len(remaining):
         ignored.extend(plain_lines[len(remaining):])
         for line, name in zip(plain_lines[:len(remaining)], remaining):
-            canonical = validate_value(name, line)
+            canonical = validate_value(name, line, authoritative=True)
             if canonical is None:
                 dropped.append(name)
             else:
                 answers[name] = canonical
     else:
         for line in plain_lines:
+            captured = False
             for name in list(remaining):
-                canonical = validate_value(name, line)
+                canonical = validate_value(name, line,
+                                           authoritative=True)
                 if canonical is not None:
                     answers[name] = canonical
                     remaining.remove(name)
+                    captured = True
                     break
-            # A line no open field accepts is kept in the
-            # transcript and simply not captured.
+            if not captured:
+                # Kept in the transcript AND reported back as
+                # uncaptured — never a silent no-op.
+                uncaptured.append(line)
     applied: dict = {}
     for name, canonical in answers.items():
         if name == STYLE_FIELD:
@@ -499,7 +556,7 @@ def _deterministic_apply(project_dir, parsed,
                 continue
         scope_module.set_field_value(scope_file, name, canonical)
         applied[name] = canonical
-    return applied, dropped, ignored
+    return applied, dropped, ignored, uncaptured
 
 
 _BRAIN_SYSTEM = (
@@ -710,6 +767,7 @@ def respond(project_dir, text: str, settings_path=None,
     applied: dict = {}
     dropped: list[str] = []
     ignored: list[str] = []
+    uncaptured: list[str] = []
     next_message = ""
     brain_used = False
     if text:
@@ -726,6 +784,7 @@ def respond(project_dir, text: str, settings_path=None,
             out["applied"] = applied
             out["dropped"] = dropped
             out["ignored"] = ignored
+            out["uncaptured"] = uncaptured
             out["brain_used"] = brain_used
             if extra:
                 out.update(extra)
@@ -808,8 +867,8 @@ def respond(project_dir, text: str, settings_path=None,
                 brain_used = True
             else:
                 parsed = _load_scope(project)
-                applied, dropped, ignored = _deterministic_apply(
-                    project, parsed, text)
+                applied, dropped, ignored, uncaptured = \
+                    _deterministic_apply(project, parsed, text)
         if reporter is not None:
             reporter(f"Interview turn recorded "
                      f"({len(applied)} field(s) captured)")
@@ -820,10 +879,32 @@ def respond(project_dir, text: str, settings_path=None,
                     f"{name}: {value}"
                     for name, value in applied.items())))
         if dropped:
+            whys = "; ".join(
+                f"{name} — {_why_hint(name)}" if _why_hint(name)
+                else name
+                for name in sorted(set(dropped)))
             bits.append(
-                "I could not use the answer for: "
-                + ", ".join(sorted(set(dropped)))
-                + " — I will ask about those again below.")
+                "I could not use the answer for: " + whys
+                + ". I will ask about those again below.")
+        if uncaptured and not applied:
+            # The turn changed nothing at all. Say so plainly,
+            # with the reason — a silent re-ask here is what
+            # looped makers forever on answers like "None" (D1).
+            asking = ", ".join(
+                f.name for f in parsed.missing_fields) or "nothing"
+            bits.append(
+                "I could not take "
+                + "; ".join(f'"{line}"' for line in uncaptured)
+                + " as an answer to what I am asking just now ("
+                + asking + "), so nothing was captured from that "
+                "message. One answer per line works, or "
+                "'Field: value' to answer a field by name.")
+        elif uncaptured:
+            bits.append(
+                "I could not place "
+                + "; ".join(f'"{line}"' for line in uncaptured)
+                + " — no question I am asking takes it, so I set "
+                "it aside uncaptured.")
         if ignored:
             bits.append(
                 "I had more answers than questions in that group, "
@@ -844,12 +925,15 @@ def respond(project_dir, text: str, settings_path=None,
                 "fields": sorted(applied),
             })
         parsed = _load_scope(project)
-        _maybe_present(session, project, parsed, force=bool(applied))
+        _maybe_present(session, project, parsed,
+                       force=bool(applied or dropped or uncaptured
+                                  or ignored))
         _save_session(project, session)
     out = public_state(project, load_session(project) or session)
     out["applied"] = applied
     out["dropped"] = dropped
     out["ignored"] = ignored
+    out["uncaptured"] = uncaptured
     out["brain_used"] = brain_used
     return out
 

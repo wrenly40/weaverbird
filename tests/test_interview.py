@@ -196,6 +196,73 @@ class DeterministicInterviewTests(unittest.TestCase):
         self.assertTrue(parsed.is_approved)
 
 
+class AuthoritativeAnswerTests(unittest.TestCase):
+    """Dogfood finding D1: an answer the maker submits is
+    authoritative. "None" for Telemetry is a complete answer
+    (no telemetry), not an unspecified field — before 0.10.1 it
+    was dropped by validation and the group re-asked forever,
+    silently."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = make_project(self.tmp)
+
+    def _drive_to_telemetry(self):
+        state_dict = interview.start(self.project)
+        for answer in ANSWERS[:-1]:
+            state_dict = interview.respond(self.project, answer)
+        self.assertEqual(state_dict["pending_fields"], ["Telemetry"])
+        self.assertEqual(state_dict["missing_count"], 1)
+        return state_dict
+
+    def test_none_completes_telemetry_in_one_turn(self):
+        self._drive_to_telemetry()
+        out = interview.respond(self.project, "None")
+        self.assertEqual(out["applied"].get("Telemetry"), "no")
+        self.assertTrue(out["complete"])
+        values = {f.name: f.value for f in
+                  scope.load_scope(self.project / "SCOPE.md").fields}
+        self.assertEqual(values["Telemetry"], "no")
+        reflections = [t["text"] for t in out["turns"]
+                       if t.get("kind") == "reflection"]
+        self.assertTrue(
+            any("Telemetry: no" in text for text in reflections),
+            reflections)
+
+    def test_telemetry_none_by_field_line(self):
+        interview.start(self.project)
+        out = interview.respond(self.project, "Telemetry: None")
+        self.assertEqual(out["applied"].get("Telemetry"), "no")
+
+    def test_placeholder_filter_applies_only_to_guesses(self):
+        # A guess-shaped value ("2D / 3D" is the template's hint
+        # text) is still filtered for non-authoritative values…
+        self.assertIsNone(interview.validate_value(
+            "Genre / archetype", "2D / 3D"))
+        # …but the same words submitted as the maker's answer
+        # are taken as written.
+        self.assertEqual(
+            interview.validate_value("Genre / archetype", "2D / 3D",
+                                     authoritative=True),
+            "2D / 3D")
+
+    def test_a_turn_that_captures_nothing_says_so(self):
+        self._drive_to_telemetry()
+        out = interview.respond(self.project, "banana")
+        self.assertEqual(out["applied"], {})
+        self.assertEqual(out["uncaptured"], ["banana"])
+        self.assertFalse(out["complete"])
+        reflections = [t["text"] for t in out["turns"]
+                       if t.get("kind") == "reflection"]
+        self.assertTrue(
+            any("nothing was captured" in text
+                and "Telemetry" in text for text in reflections),
+            reflections)
+        # And the field is re-asked, with the explanation above
+        # it — not silently looped.
+        self.assertEqual(out["pending_fields"], ["Telemetry"])
+
+
 class BrainInterviewTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
