@@ -82,7 +82,166 @@ _HINTS = {
         "Gather the stars and reach the glowing door. Mind the spikes!",
     "crate_pusher":
         "Push every crate onto a glowing pad. E undoes a step.",
+    "bespoke":
+        "Follow the on-screen objective.",
 }
+
+
+# ---------------------------------------------------------------------------
+# Composition — the archetype-independent decision layer (0.7.0)
+#
+# A game is described by composing primitives, not by naming an
+# archetype: how the player moves, what the objective is, how the
+# run can fail, how the content is structured, and which
+# interactions exist. The three historical archetypes are PRESETS —
+# named compositions kept for convenience — and generation is
+# driven by the composition. A scope whose core verb no primitive
+# combination can express is "bespoke": a brain-written mechanics
+# module behind the documented module contract (mechanics.py),
+# never a silent fallback to an unrelated preset.
+
+PRESETS: dict[str, dict] = {
+    "arena_collector": {
+        "movement": "top_down",
+        "objectives": ["collect"],
+        "fail": ["timer", "hazard_contact"],
+        "structure": "rounds",
+        "interactions": ["avoid", "collect"],
+    },
+    "platformer": {
+        "movement": "platform",
+        "objectives": ["collect", "reach_exit"],
+        "fail": ["hazard_contact", "lives"],
+        "structure": "levels",
+        "interactions": ["avoid", "collect"],
+    },
+    "crate_pusher": {
+        "movement": "grid",
+        "objectives": ["push_to_targets"],
+        "fail": ["move_budget"],
+        "structure": "levels",
+        "interactions": ["push"],
+    },
+}
+
+_PRESET_RE = re.compile(
+    r"preset\s*[:=]\s*(arena_collector|platformer|crate_pusher|arena|crate)",
+    re.IGNORECASE,
+)
+_COMPOSITION_RE = re.compile(r"composition\s*[:=]\s*([a-z_]+)", re.IGNORECASE)
+
+# Positive evidence that a scope's core loop cannot be expressed by
+# composing the current primitives. The matcher is deliberately
+# conservative: bespoke requires one of these signals AND no
+# primitive signal at all, so an ordinary scope (or a vague one)
+# keeps the historical default instead of demanding a brain.
+_BESPOKE_SIGNALS = (
+    "negotiat", "dialogue", "conversation", "romance", "dating sim",
+    "interrogat", "detective", "city build", "city-build",
+    "farming sim", "trade empire", "compose music", "dance battle",
+    "courtroom", "debate",
+)
+_PRIMITIVE_SIGNALS = (
+    "platform", "jump", "side-scroll", "side scroll", "sidescroll",
+    "puzzle", "sokoban", "crate", "push", "collect", "gather",
+    "arena", "surviv", "reach", "race", "shoot", "dodge", "avoid",
+    "run and", "runner", "wave",
+)
+
+
+def composition_for_preset(name: str) -> dict:
+    """The composition a named preset stands for (a fresh copy)."""
+    preset = _normalise_archetype(name)
+    comp = PRESETS[preset]
+    return {
+        "movement": comp["movement"],
+        "objectives": list(comp["objectives"]),
+        "fail": list(comp["fail"]),
+        "structure": comp["structure"],
+        "interactions": list(comp["interactions"]),
+    }
+
+
+def preset_for_composition(composition: dict | None) -> str | None:
+    """The preset a composition matches exactly, or None."""
+    if not isinstance(composition, dict):
+        return None
+    for name in ARCHETYPES:
+        comp = PRESETS[name]
+        if (composition.get("movement") == comp["movement"]
+                and list(composition.get("objectives") or []) == comp["objectives"]
+                and composition.get("structure") == comp["structure"]):
+            return name
+    return None
+
+
+def _scope_text(values: dict) -> str:
+    return " ".join(
+        str(values.get(name, ""))
+        for name in ("Genre / archetype",
+                     "Core verb (what the player does most)",
+                     "Win condition", "Lose / fail condition")
+    ).lower()
+
+
+def bespoke_reason(values: dict) -> str | None:
+    """Why this scope needs bespoke mechanics, or None.
+
+    Conservative by design (see _BESPOKE_SIGNALS): a bespoke signal
+    with no primitive signal anywhere in the genre/verb/win/lose
+    text. Anything else composes — or falls back to the arena
+    preset exactly as detection always has.
+    """
+    text = _scope_text(values)
+    hits = [signal for signal in _BESPOKE_SIGNALS if signal in text]
+    if not hits:
+        return None
+    if any(signal in text for signal in _PRIMITIVE_SIGNALS):
+        return None
+    return (f"the scope's core loop ({hits[0]!r}) cannot be composed "
+            "from the movement/objective/fail primitives")
+
+
+def derive_composition(values: dict, override: str | None = None) -> dict:
+    """The build's decision record: {composition, preset, bespoke,
+    reason}.
+
+    An explicit override, an ``archetype:``/``preset:`` note, or a
+    ``composition: <preset-name>`` note in the scope wins; bespoke
+    detection comes next; otherwise the historical archetype
+    detection picks the preset whose composition the scope
+    describes. The derivation is recorded in the generation
+    report and in game_config.json.
+    """
+    if override:
+        preset = _normalise_archetype(override)
+        return {"composition": composition_for_preset(preset),
+                "preset": preset, "bespoke": False,
+                "reason": f"explicit override ({override!r})"}
+    for value in values.values():
+        match = _PRESET_RE.search(value or "") or \
+            _ARCHETYPE_RE.search(value or "")
+        if match:
+            preset = _normalise_archetype(match.group(1))
+            return {"composition": composition_for_preset(preset),
+                    "preset": preset, "bespoke": False,
+                    "reason": f"the scope names the preset "
+                              f"({match.group(1)!r})"}
+        match = _COMPOSITION_RE.search(value or "")
+        if match and match.group(1).lower() in PRESETS:
+            preset = match.group(1).lower()
+            return {"composition": composition_for_preset(preset),
+                    "preset": preset, "bespoke": False,
+                    "reason": f"the scope names the composition "
+                              f"({preset!r})"}
+    why_bespoke = bespoke_reason(values)
+    if why_bespoke:
+        return {"composition": None, "preset": None, "bespoke": True,
+                "reason": why_bespoke}
+    preset, why = detect_archetype(values)
+    return {"composition": composition_for_preset(preset),
+            "preset": preset, "bespoke": False,
+            "reason": f"derived from the scope — {why}"}
 
 
 class GenerationError(Exception):
@@ -762,16 +921,16 @@ def _write_report(project_dir, report: dict) -> None:
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
-def build_game(project_dir, archetype: str | None = None, godot_path=None,
-               validate: bool = True, settings_path=None,
-               use_brain: bool = True, reporter=None) -> dict:
-    """Generate the real game for a project. Returns the report.
-
-    Requires the skeleton to exist (``game/project.godot``) and the
-    scope to be complete and approved. On success the game is
-    validated in Godot, committed and tagged ``known-good/build``.
-    Raises GenerationError with a plain reason otherwise (the
-    report is still written when validation fails).
+def prepare_build(project_dir, archetype: str | None = None,
+                  settings_path=None, use_brain: bool = True,
+                  reporter=None) -> dict:
+    """The shared start of the world/mechanics/assembly steps:
+    scope gates, the composition derivation, the palette, and the
+    (deterministic, optionally brain-tuned) config. Returns the
+    build context the three steps consume; the world worker
+    persists it (build_context_path) so the mechanics and
+    assembly workers re-run alone without re-deriving — or
+    re-spending — anything.
     """
     project = Path(project_dir)
     game_dir = project / GAME_DIR_NAME
@@ -798,49 +957,147 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
         )
 
     values = _values(parsed)
-    chosen, why = detect_archetype(values, override=archetype)
+    derived = derive_composition(values, override=archetype)
     palette = _palette(values)
     units = content_units(values)
-    config, _extras = deterministic_config(chosen, values, palette, units)
-    if reporter is not None:
-        reporter(f"Archetype: {chosen} ({why}); {units} content "
-                 "unit(s) from the scope")
-
-    brain_used = False
-    brain_note = "brain not attempted"
-    if use_brain:
-        config, brain_used, brain_note = brain_proposal(
-            project, chosen, config, values, settings_path=settings_path)
+    if derived["bespoke"]:
+        config = {"archetype": "bespoke", **palette,
+                  "objective_hint": _HINTS["bespoke"]}
+        brain_used, brain_note = False, "bespoke mechanics — no preset tuning"
         if reporter is not None:
-            reporter(f"Tuning: {'proposed by the model' if brain_used else 'deterministic'} "
-                     f"— {brain_note}")
+            reporter(f"Bespoke mechanics: {derived['reason']}; "
+                     f"{units} content unit(s) requested")
+    else:
+        chosen = derived["preset"]
+        config, _extras = deterministic_config(chosen, values, palette, units)
+        if reporter is not None:
+            reporter(f"Composition: {chosen} preset ({derived['reason']}); "
+                     f"{units} content unit(s) from the scope")
+        brain_used = False
+        brain_note = "brain not attempted"
+        if use_brain:
+            config, brain_used, brain_note = brain_proposal(
+                project, chosen, config, values, settings_path=settings_path)
+            if reporter is not None:
+                reporter(f"Tuning: {'proposed by the model' if brain_used else 'deterministic'} "
+                         f"— {brain_note}")
+    return {
+        "values": values,
+        "preset": derived["preset"],
+        "composition": derived["composition"],
+        "bespoke": derived["bespoke"],
+        "reason": derived["reason"],
+        "palette": palette,
+        "units": units,
+        "config": config,
+        "brain_used": brain_used,
+        "brain_note": brain_note,
+    }
 
-    written: list[str] = []
-    file_map = _archetype_files(chosen)
-    for rel, parts in sorted(file_map.items()):
-        dest = game_dir / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(_template_text(*parts), encoding="utf-8")
-        written.append(f"{GAME_DIR_NAME}/{rel}")
+
+def build_context_path(project_dir) -> Path:
+    return Path(project_dir) / ".weaverbird" / "build_context.json"
+
+
+def save_build_context(project_dir, ctx: dict) -> None:
+    path = build_context_path(project_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(ctx, indent=2) + "\n", encoding="utf-8")
+
+
+def load_build_context(project_dir) -> dict | None:
+    path = build_context_path(project_dir)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) and "config" in data else None
+
+
+def run_world_step(project_dir, ctx: dict, attempt: int = 0):
+    """The world worker's core: build + write + gate the world
+    data. Returns (world_data, issues). On a retry (attempt > 0)
+    the platformer levels are regenerated with a shifted seed —
+    the one worker that genuinely self-corrects from its gate
+    issues."""
+    from . import world as world_module
+
+    project = Path(project_dir)
+    if attempt > 0 and ctx.get("preset") == "platformer":
+        import zlib
+        seed = zlib.crc32(
+            ctx["values"].get("Title (working)", "").encode("utf-8")) \
+            + ctx["units"] + attempt * 7919
+        rng = random.Random(seed)
+        ctx["config"]["levels"] = [
+            _platformer_level(rng, i) for i in range(ctx["units"])]
+    if ctx.get("bespoke"):
+        world_data = world_module.bespoke_world(ctx)
+    else:
+        world_data = world_module.world_from_config(
+            ctx["preset"], ctx["config"], ctx["composition"])
+    world_module.write_world(project, world_data)
+    issues = world_module.validate_world(world_data)
+    return world_data, issues
+
+
+def run_mechanics_step(project_dir, ctx: dict, world_data: dict):
+    """The mechanics worker's core: write the scripts that
+    interpret the world data. Returns (written, issues)."""
+    from . import mechanics as mechanics_module
+
+    project = Path(project_dir)
+    written = mechanics_module.write_mechanics(project, ctx)
+    issues = mechanics_module.check_coverage(world_data, ctx)
+    return written, issues
+
+
+def run_assembly_step(project_dir, ctx: dict, world_data: dict,
+                      written: list, godot_path=None,
+                      validate: bool = True, reporter=None) -> dict:
+    """The assembly worker's core: wire shell + mechanics + world
+    + assets into the runnable game — write game_config.json, run
+    the full Godot validation suite, commit and tag
+    known-good/build. Returns the generation report."""
+    from . import world as world_module
+
+    project = Path(project_dir)
+    game_dir = project / GAME_DIR_NAME
+    config = dict(ctx["config"])
+    config["composition"] = ctx.get("composition")
+    config["preset"] = ctx.get("preset")
+    written = list(written)
     config_rel = f"{GAME_DIR_NAME}/game_config.json"
     (game_dir / "game_config.json").write_text(
         json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    written.append(config_rel)
+    if config_rel not in written:
+        written.append(config_rel)
+    world_rel = f"{GAME_DIR_NAME}/world/world.json"
+    if world_rel not in written:
+        written.append(world_rel)
     written.sort()
+    chosen = ctx.get("preset") or "bespoke"
     if reporter is not None:
-        reporter(f"Wrote the {chosen} game ({len(written)} files)")
+        reporter(f"Assembled the {chosen} game ({len(written)} files)")
 
     report = {
         "stage": "build",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "archetype": chosen,
-        "archetype_reason": why,
-        "brain_used": brain_used,
-        "brain_note": brain_note,
+        "archetype_reason": ctx["reason"],
+        "preset": ctx.get("preset"),
+        "composition": ctx.get("composition"),
+        "bespoke": bool(ctx.get("bespoke")),
+        "world_manifest": world_module.world_manifest(world_data),
+        "brain_used": ctx.get("brain_used", False),
+        "brain_note": ctx.get("brain_note", ""),
         "config": {k: v for k, v in config.items()
                    if k not in ("levels", "puzzles")},
-        "units_delivered": units_delivered(chosen, config),
-        "units_requested": units,
+        "units_delivered": (1 if ctx.get("bespoke") else
+                            units_delivered(chosen, ctx["config"])),
+        "units_requested": ctx["units"],
         "files": written,
         "validation": {"ran": False, "passed": False},
         "known_good_tag": None,
@@ -855,7 +1112,7 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
         provenance_module.add_record(
             project, rel, "code", provider=PROVENANCE_PROVIDER,
             note=f"weaverbird {chosen} generator")
-    if not brain_used:
+    if not ctx.get("brain_used"):
         ledger_module.add_entry(project, "build", "cheap", 0, 0.0)
     _write_report(project, report)
 
@@ -882,6 +1139,38 @@ def build_game(project_dir, archetype: str | None = None, godot_path=None,
         reporter("Committed and tagged known-good/build")
     _write_report(project, report)
     return report
+
+
+def build_game(project_dir, archetype: str | None = None, godot_path=None,
+               validate: bool = True, settings_path=None,
+               use_brain: bool = True, reporter=None) -> dict:
+    """Generate the real game for a project. Returns the report.
+
+    The composition of the three generation workers — world,
+    mechanics, assembly — run in order, exactly as the
+    orchestrator runs them; this entry point (and the CLI's
+    `build game`) keeps its historical behaviour. On success the
+    game is validated in Godot, committed and tagged
+    ``known-good/build``.
+    """
+    project = Path(project_dir)
+    ctx = prepare_build(project, archetype=archetype,
+                        settings_path=settings_path, use_brain=use_brain,
+                        reporter=reporter)
+    save_build_context(project, ctx)
+    world_data, issues = run_world_step(project, ctx)
+    if issues:
+        raise GenerationError(
+            "The world worker's gate failed: "
+            + "; ".join(i["detail"] for i in issues))
+    written, issues = run_mechanics_step(project, ctx, world_data)
+    if issues:
+        raise GenerationError(
+            "The mechanics worker's gate failed: "
+            + "; ".join(i["detail"] for i in issues))
+    return run_assembly_step(project, ctx, world_data, written,
+                             godot_path=godot_path, validate=validate,
+                             reporter=reporter)
 
 
 # ---------------------------------------------------------------------------

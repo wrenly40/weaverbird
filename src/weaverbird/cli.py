@@ -41,9 +41,11 @@ from . import provenance as provenance_module
 from . import repair as repair_module
 from . import scope as scope_module
 from . import settings as settings_module
+from . import orchestrator as orchestrator_module
 from . import skeleton as skeleton_module
 from . import state as state_module
 from . import vcs as vcs_module
+from . import workers as workers_module
 
 
 # --------------------------------------------------------------------------
@@ -996,17 +998,58 @@ def cmd_jobs(argv) -> int:
     return 0
 
 
+def cmd_workers_list(args) -> int:
+    lines = ["Workers — every factory step, independently runnable:"]
+    for name, spec in workers_module.WORKERS.items():
+        deps = ", ".join(spec.depends_on) or "—"
+        lines.append(f"  {name:<15} {spec.title}")
+        lines.append(f"  {'':<15} inputs: {', '.join(spec.inputs) or '—'}")
+        lines.append(f"  {'':<15} outputs: {', '.join(spec.outputs) or '—'}")
+        lines.append(f"  {'':<15} depends on: {deps}")
+    return _ok("\n".join(lines))
+
+
+def cmd_orchestrate(args) -> int:
+    try:
+        if args.plan_only:
+            data = orchestrator_module.plan(
+                args.dir, target=args.to, reactive=args.reactive)
+            lines = [f"Plan for {args.dir} → {data['target']}:"]
+            for step in data["steps"]:
+                lines.append(f"  {step['worker']:<15} {step['status']:<8} "
+                             f"{step['reason']}")
+            return _ok("\n".join(lines))
+        data = orchestrator_module.run(
+            args.dir, target=args.to, reactive=args.reactive,
+            force=args.force,
+            reporter=jobs_module.print_reporter)
+    except orchestrator_module.OrchestratorError as exc:
+        return _fail(str(exc))
+    for step in data["steps"]:
+        mark = {"done": "✓", "skipped": "–", "failed": "✗",
+                "blocked": "!"}.get(step["status"], "?")
+        note = f" ({step['note']})" if step.get("note") else ""
+        lines = f"{mark} {step['worker']}{note}"
+        print(lines)
+    if data.get("outcome") == "done":
+        return _ok(f"Plan complete — target {data['target']} reached. "
+                   f"Plan: {orchestrator_module.plan_path_for(args.dir)}")
+    escalation = data.get("escalation") or {}
+    details = "; ".join(i.get("detail", "")
+                        for i in escalation.get("issues", []))
+    return _fail(f"Plan stopped ({data.get('outcome')}): owner "
+                 f"{escalation.get('worker', '?')} — {details}")
+
+
 def register_all_stage_handlers() -> None:
     """Register every built stage handler with the pipeline.
 
-    Used by `pipeline advance` and the app, so advancing a stage
-    runs the real stage work (skeleton, assets, build, tests)
-    through the normal gate machinery.
+    Used by `pipeline advance` and the app. Since 0.7.0 the
+    handlers delegate to the worker adapters (workers.py), so
+    advancing a stage runs exactly the worker the orchestrator
+    would run — the surfaces cannot diverge.
     """
-    skeleton_module.register_stage_handlers()
-    assets_module.register_stage_handlers()
-    generate_module.register_stage_handlers()
-    testing_module.register_stage_handlers()
+    workers_module.register_stage_handlers()
 
 
 def cmd_pipeline_advance(args) -> int:
@@ -1151,6 +1194,28 @@ def build_parser() -> argparse.ArgumentParser:
     plist.add_argument("dir")
     pdis = prov_sub.add_parser("disclosure", help="Print an AI-content disclosure draft.")
     pdis.add_argument("dir")
+
+    workers_cmd = sub.add_parser(
+        "workers", help="The independent workers and their contracts.")
+    workers_sub = workers_cmd.add_subparsers(dest="workers_command")
+    workers_sub.add_parser(
+        "list", help="Every registered worker with its inputs, "
+                     "outputs and dependencies.")
+
+    orch = sub.add_parser(
+        "orchestrate", help="Run the orchestrator's plan for a project: "
+                            "the workers in order, skipping any whose "
+                            "inputs are unchanged.")
+    orch.add_argument("dir")
+    orch.add_argument("--to", default="finished",
+                      help="Target stage (default: finished).")
+    orch.add_argument("--force", action="store_true",
+                      help="Run every step even if its inputs are unchanged.")
+    orch.add_argument("--reactive", default=None,
+                      help="A reactive plan instead: feedback, patch, "
+                           "balance, repair, model-playtest.")
+    orch.add_argument("--plan-only", action="store_true",
+                      help="Print the plan without running it.")
 
     pipeline = sub.add_parser("pipeline", help="Inspect or advance a project's pipeline.")
     pipeline_sub = pipeline.add_subparsers(dest="pipeline_command")
@@ -1332,6 +1397,8 @@ _HANDLERS = {
     ("provenance", "add"): cmd_provenance_add,
     ("provenance", "list"): cmd_provenance_list,
     ("provenance", "disclosure"): cmd_provenance_disclosure,
+    ("workers", "list"): cmd_workers_list,
+    ("orchestrate", None): cmd_orchestrate,
     ("pipeline", "status"): cmd_pipeline_status,
     ("pipeline", "advance"): cmd_pipeline_advance,
     ("skeleton", "build"): cmd_skeleton_build,
@@ -1363,6 +1430,7 @@ _SUBCOMMAND_ATTRS = {
     "connectors": "connectors_command",
     "ledger": "ledger_command",
     "provenance": "provenance_command",
+    "workers": "workers_command",
     "pipeline": "pipeline_command",
     "skeleton": "skeleton_command",
     "assets": "assets_command",
@@ -1401,6 +1469,8 @@ commands, for scripts and terminals:
   weaverbird init <dir>                 start a new game project
   weaverbird scope ...                  the scope file and the interview
   weaverbird brain check                the bring-your-own-key ladder
+  weaverbird workers list               every independent worker + its contract
+  weaverbird orchestrate <dir>          run the plan: workers in order, unchanged ones skipped
   weaverbird skeleton build <dir>       build the grey-box skeleton
   weaverbird assets generate <dir>      sprites, icon and audio
   weaverbird assets list|regenerate     the asset studio, as commands

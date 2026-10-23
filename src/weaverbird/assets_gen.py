@@ -326,11 +326,80 @@ def load_report(project_dir):
         return None
 
 
+# Which sprites each entity kind needs, and which sounds the
+# movement/fail kinds imply — the asset requests are derived
+# from the composition and the world manifest (0.7.0), not from
+# an archetype name.
+_ENTITY_SPRITES = {
+    "player": ["player"],
+    "collectible": ["target"],
+    "hazard": ["hazard", "spikes"],
+    "platform": ["platform_tile"],
+    "exit": ["exit_door"],
+    "crate": ["crate"],
+    "pad": ["pad"],
+    "wall": ["wall"],
+}
+_MOVEMENT_AUDIO = {"platform": ["jump"], "grid": ["push"]}
+_FAIL_AUDIO = {"hazard_contact": ["hurt"], "timer": ["hurt"],
+               "lives": ["hurt"], "move_budget": ["push"]}
+
+
+def asset_requests(project: Path, values: dict) -> dict:
+    """The assets this game needs, derived from its composition
+    and — when the world worker has run — the entity kinds
+    actually present in game/world/world.json:
+    {sprites, audio, based_on, bespoke}.
+
+    Preset games additionally keep the factory's shared asset
+    set (their templates opportunistically load any of it, as
+    they always have); bespoke games get exactly their requests
+    — there is no preset set to fall back on.
+    """
+    from . import world as world_module
+
+    derived = generate_module.derive_composition(
+        values, override=None)
+    bespoke = bool(derived["bespoke"])
+    world_data = world_module.load_world(project)
+    kinds: list[str] = []
+    based_on = "composition"
+    if world_data and world_data.get("entity_kinds"):
+        kinds = list(world_data["entity_kinds"])
+        based_on = "world"
+    elif derived["composition"]:
+        preset = derived["preset"]
+        kinds = list(world_module.ENTITY_KINDS.get(preset, []))
+    sprites = {"background"}
+    for kind in kinds:
+        sprites.update(_ENTITY_SPRITES.get(kind, []))
+    if bespoke:
+        sprites.update(["player", "target"])
+    audio = {"click", "collect", "win", "lose", "music"}
+    composition = derived["composition"] or {}
+    audio.update(_MOVEMENT_AUDIO.get(composition.get("movement"), []))
+    for fail in composition.get("fail") or []:
+        audio.update(_FAIL_AUDIO.get(fail, []))
+    if bespoke:
+        audio.update(["hurt"])
+    return {
+        "sprites": sorted(sprites),
+        "audio": sorted(audio),
+        "based_on": based_on,
+        "bespoke": bespoke,
+        "composition": derived["composition"],
+        "preset": derived["preset"],
+    }
+
+
 def _preflight(project: Path,
                archetype: str | None = None) -> tuple[dict, str, dict]:
     """(palette, archetype, scope values) for a project whose
     skeleton game exists — the shared start of every asset
-    operation."""
+    operation. The 'archetype' returned is the composition's
+    preset name (kept for the icon motif and the report's
+    history); asset selection itself goes through
+    asset_requests()."""
     game_dir = project / GAME_DIR_NAME
     if not (game_dir / "project.godot").exists():
         raise AssetsError(
@@ -343,12 +412,16 @@ def _preflight(project: Path,
         raise AssetsError(f"No scope file found at {scope_file}.")
     parsed = scope_module.load_scope(scope_file)
     values = {f.name: f.value for f in parsed.fields}
-    chosen, _why = generate_module.detect_archetype(
-        values, override=archetype)
+    if archetype:
+        chosen = generate_module._normalise_archetype(archetype)
+    else:
+        derived = generate_module.derive_composition(values)
+        chosen = derived["preset"] or "arena_collector"
     return generate_module._palette(values), chosen, values
 
 
-def _producers(palette: dict, archetype: str) -> dict:
+def _producers(palette: dict, archetype: str,
+               requests: dict | None = None) -> dict:
     """Every generated asset, by name: {name: (relative path,
     produce() -> bytes, provenance note, kind)}.
 
@@ -361,8 +434,11 @@ def _producers(palette: dict, archetype: str) -> dict:
     current generators are the built-in set; a future mechanics
     layer registers its own producers the same way.)
     """
+    bespoke = bool(requests and requests.get("bespoke"))
     producers: dict[str, tuple[str, object, str, str]] = {}
     for name, maker in _SPRITES.items():
+        if bespoke and name not in requests["sprites"]:
+            continue
         producers[name] = (
             f"{GAME_DIR_NAME}/assets/{name}.svg",
             (lambda maker=maker: maker(palette).encode("utf-8")),
@@ -377,6 +453,8 @@ def _producers(palette: dict, archetype: str) -> dict:
         "icon")
     for filename, samples in _audio_files().items():
         stem = filename.rsplit(".", 1)[0]
+        if bespoke and stem not in requests["audio"]:
+            continue
         producers[stem] = (
             f"{GAME_DIR_NAME}/assets/audio/{filename}",
             (lambda samples=samples: _wav_bytes(samples)),
@@ -405,7 +483,8 @@ def generate_assets(project_dir, archetype: str | None = None,
     assets_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
 
-    producers = _producers(palette, chosen)
+    requests = asset_requests(project, values)
+    producers = _producers(palette, chosen, requests)
     if reporter is not None:
         reporter(f"Generating assets for the {chosen} game — palette "
                  f"{palette['accent_hex']} / {palette['target_hex']} "
@@ -433,6 +512,11 @@ def generate_assets(project_dir, archetype: str | None = None,
         "stage": "assets",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "archetype": chosen,
+        "composition": requests["composition"],
+        "preset": requests["preset"],
+        "requests": {"sprites": requests["sprites"],
+                     "audio": requests["audio"],
+                     "based_on": requests["based_on"]},
         "palette": palette,
         "files": written,
         "icon": f"{GAME_DIR_NAME}/icon.svg",
@@ -449,8 +533,10 @@ def generate_assets(project_dir, archetype: str | None = None,
 
 def asset_names(project_dir) -> list[str]:
     """The names `regenerate_asset` accepts, sorted."""
-    palette, chosen, _values = _preflight(Path(project_dir))
-    return sorted(_producers(palette, chosen))
+    project = Path(project_dir)
+    palette, chosen, values = _preflight(project)
+    return sorted(_producers(palette, chosen,
+                             asset_requests(project, values)))
 
 
 def list_assets(project_dir) -> list[dict]:
@@ -467,8 +553,9 @@ def list_assets(project_dir) -> list[dict]:
     ships is hidden from the studio.
     """
     project = Path(project_dir)
-    palette, chosen, _values = _preflight(project)
-    producers = _producers(palette, chosen)
+    palette, chosen, values = _preflight(project)
+    producers = _producers(palette, chosen,
+                           asset_requests(project, values))
     records: dict[str, dict] = {}
     try:
         for record in provenance_module.list_records(project):
@@ -538,8 +625,9 @@ def regenerate_asset(project_dir, name: str, reporter=None) -> dict:
     (a new record for that asset; the rest of the log is
     untouched). Zero tokens. Returns {name, path, size}."""
     project = Path(project_dir)
-    palette, chosen, _values = _preflight(project)
-    producers = _producers(palette, chosen)
+    palette, chosen, values = _preflight(project)
+    producers = _producers(palette, chosen,
+                           asset_requests(project, values))
     if name not in producers:
         raise AssetsError(
             f"Unknown asset {name!r}. The generated assets are: "

@@ -80,6 +80,25 @@ func _load_config() -> void:
     target_color = Color.html(str(cfg.get("target_hex", "#40CC73")))
     crate_color = Color.html(str(cfg.get("crate_hex", "#9E6B38")))
     puzzles = cfg.get("puzzles", [])
+    # The world worker's data wins when present: puzzle geometry
+    # (grids, solutions) lives in world/world.json, written as
+    # data — never baked into code. The move budget stays tuning:
+    # it is overlaid from game_config.json, which is the file the
+    # patch and repair loops adjust.
+    var world_path := "res://world/world.json"
+    if FileAccess.file_exists(world_path):
+        var wparsed: Variant = JSON.parse_string(
+            FileAccess.get_file_as_string(world_path))
+        if typeof(wparsed) == TYPE_DICTIONARY:
+            var units: Array = wparsed.get("units", [])
+            if not units.is_empty():
+                puzzles = units
+    var cfg_puzzles: Array = cfg.get("puzzles", [])
+    for i in puzzles.size():
+        if i < cfg_puzzles.size() and \
+                typeof(cfg_puzzles[i]) == TYPE_DICTIONARY and \
+                cfg_puzzles[i].has("budget"):
+            puzzles[i]["budget"] = cfg_puzzles[i]["budget"]
     if puzzles.is_empty():
         puzzles = [_fallback_puzzle()]
 

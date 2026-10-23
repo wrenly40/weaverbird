@@ -50,6 +50,14 @@ attached.
   - the ledger (`.weaverbird/ledger.jsonl`) — what it has cost,
   - the provenance log (`.weaverbird/provenance.json`) — how its
     assets were made.
+- Since 0.7.0, two more: the worker run records
+  (`.weaverbird/workers/<name>.json` — what each independent worker
+  last did, and the hash of the inputs it did it from) and the
+  orchestrator's plan (`.weaverbird/plan.json` — the worker DAG
+  for the project and what happened when it ran). The stages below
+  are, since 0.7.0, executed by the workers in the "Workers and
+  the orchestrator" section; the stage list remains the journey,
+  the workers are how each step is owned and run.
 - Global settings hold the budgets and model choices for the whole
   factory. Connectors are how anything external is reached.
 
@@ -132,6 +140,15 @@ attached.
   in `.weaverbird/assets_report.json`; the ledger entry is
   zero-token. Games load the assets when present and fall back to
   code-drawn shapes when they are not.
+- Built in v0.7: asset generation is a worker, and what it
+  generates is selected by the game's composition and world
+  manifest, not by an archetype name — the entity kinds present
+  in `game/world/world.json` decide the sprites, the movement
+  and fail kinds decide the sounds. Preset games keep the
+  factory's shared asset set (their templates load it
+  opportunistically, as before); bespoke games get exactly
+  their derived requests. The assets report records the
+  requests and what they were based on (world or composition).
 - Future: model-provided art through connectors with the user's own
   keys, richer palettes per archetype, 3D assets. It plugs into:
   provenance, connectors (asset providers), ledger.
@@ -163,9 +180,45 @@ attached.
   (`game/tests/`, the competent win player doubling as the flow
   smoke), validates with the skeleton's discipline (import, menu,
   game, win flow), then commits and tags `known-good/build`.
-- Future: code generation beyond the archetype cores (model-written
-  diffs only for what makes a game different), more archetypes and
-  static checks. It plugs into: pipeline state, vcs, ledger, brain.
+- Built in v0.7: the build stage is three independent workers,
+  and generation is composition-based (archetype independence).
+  The decision layer is a **composition** — movement (top_down /
+  platform / grid) × objectives (collect / reach_exit /
+  push_to_targets) × fail conditions (timer / hazard_contact /
+  lives / move_budget) × structure (single / levels / rounds) ×
+  interactions — derived deterministically from the scope with
+  the derivation recorded in `game_config.json` and the
+  generation report. The three archetypes are **presets**: named
+  compositions, chosen by the historical detection, an
+  `archetype:`/`preset:` scope note, or a `--archetype` flag.
+  The **world worker** (`world.py`) produces the world's data —
+  per-unit layouts written as `game/world/world.json` — and
+  gates it before anything downstream runs (platformer
+  reachability invariants checked on the data, crate solvability
+  through the solver, arena bounds). The **mechanics worker**
+  (`mechanics.py`) writes the player/game-logic scripts, which
+  interpret the world data at runtime (the generated games load
+  `world/world.json`; layouts are not baked into code), and
+  gates on every entity kind in the world having a handler in
+  its rule set. The **assembly worker** wires shell + mechanics
+  + world + assets into the runnable game, writes
+  `game_config.json`, runs the Godot validation suite, and
+  commits + tags `known-good/build`. A scope whose core loop no
+  composition can express takes the **bespoke path**: with a
+  brain configured, the frontier/mid tier writes one GDScript
+  module implementing `docs/MODULE_CONTRACT.md`
+  (`setup(game, config)`, `bridge_state()` exposing objective
+  positions for the testers, win/lose signalled through the
+  shell host), assembled and tested like any other mechanics;
+  without a brain the orchestrator stops at the plan with a
+  plain explanation. The bespoke matcher is conservative —
+  bespoke needs positive evidence (a negotiation/dialogue/
+  detective-style core loop) and no primitive signal at all — so
+  ordinary scopes keep composing. `weaverbird build game`
+  remains, running the three workers in order.
+- Future: more composition primitives, richer bespoke modules,
+  static checks beyond the gates. It plugs into: pipeline
+  state, vcs, ledger, brain.
 
 ### 5. Headless testing
 - Inputs: the built project.
@@ -389,8 +442,8 @@ action is a job:
   next start — marked, never silently resumed. `worker` names
   the step that ran the action (skeleton, assets, build,
   testing, finish, repair, patch, feedback, balance,
-  model-playtest); the orchestrator planned for Pass 5 keys its
-  plan view off that field.
+  model-playtest); since 0.7.0 the orchestrator's plan view
+  keys off that field, exactly as planned.
 - Execution is a small thread pool (max 2 concurrent). Jobs for
   the same project serialise behind a per-project lock — two
   Godot stages on one project would corrupt each other — while
@@ -413,6 +466,119 @@ action is a job:
   escalates when the global settings say so.
 - Checkpoints come from the stages themselves: pipeline state
   on disk, a git commit per stage, tags on known-good states.
+- Since 0.7.0 the runner also carries the orchestrator: the
+  `orchestrate` action runs a whole plan as one job (its events
+  are the plan's events), and `run-worker` runs a single worker
+  — the job record's `worker` field then names that worker
+  itself.
+
+## Workers and the orchestrator
+
+Built in 0.7.0 (`src/weaverbird/workers.py`,
+`src/weaverbird/orchestrator.py`, `src/weaverbird/world.py`,
+`src/weaverbird/mechanics.py`). The user's directive for this
+pass: every different step of making a game is an independent
+worker — asset creation independent from world creation
+independent from player/mechanics management — coordinated by
+an orchestrator, with no step left as a monolith or a special
+case.
+
+### The worker contract
+
+A worker is a registry entry (code, like the asset generator
+registry) with:
+
+- `name`, `title`;
+- `inputs` — the artifact paths it reads (relative to the
+  project), plus its relevant config slice (per-worker scope
+  fields, hashed with the inputs);
+- `outputs` — the artifact paths it writes;
+- `depends_on` — the workers that must have run before it;
+- `run(project_dir, ctx) -> WorkerResult` — an adapter that
+  calls the same library entry point the CLI and the app call
+  (adapters never fork logic) and translates the module's
+  report into {ok, artifacts, metrics, issues, summary}.
+  Issues are {kind, detail, owner}: the owner is the worker a
+  failure routes back to.
+
+`ctx` carries the reporter, the settings path, the inputs
+hash, the attempt number, and — on a retry — the issue digest
+of the previous attempt.
+
+Every run writes `.weaverbird/workers/<name>.json`:
+{worker, ran_at, inputs_hash, ok, artifacts, metrics, issues,
+summary, job_id?}. The inputs hash is a hash of the declared
+input files' contents plus the config slice; it is what makes
+skipping sound.
+
+| Worker | Owns | Inputs (declared) | Outputs |
+| --- | --- | --- | --- |
+| scope | the scope gate: complete + approved | the scope file (completeness slice) | SCOPE.md |
+| skeleton | the grey-box shell | scope title/pitch/session/counts slice | game/project.godot, skeleton report |
+| world | the world's data + its gate | project.godot, scope design slice | game/world/world.json |
+| mechanics | player + game logic, rule coverage gate | world.json, scope verb slice | game/scripts/game.gd (+ the game's scripts/tests) |
+| assets | sprites, icon, audio from composition + world requests | project.godot, world.json, palette slice | game/assets/, assets report, icon |
+| assembly | wiring + Godot validation + known-good tag | world.json, game scripts, assets report, palette slice | game_config.json, generation report |
+| testing | the headless suite + scripted players | game config, world, scripts, assets report | test report |
+| model-playtest | the model-driven playtester | test report | model playtest record |
+| balance | per-unit analysis (applying stays with patch) | test report, game config | balance report |
+| repair | bounded self-repair | test report | REPAIR_REPORT.md |
+| feedback | fetch + triage | feedback inbox | feedback store |
+| patch | the gated patch loop | feedback store | game/VERSION, CHANGELOG.md |
+| finish | finish check + report | test/generation/assets reports | FINISH_REPORT.md |
+
+`weaverbird workers list` prints the registry.
+
+### The orchestrator
+
+The orchestrator owns no creative logic and writes no game
+files. `plan(project_dir)` builds `.weaverbird/plan.json`: the
+ordered DAG from the project's current state to a target
+(default `finished` — scope → skeleton → world → mechanics →
+assets → assembly → testing → finish; model-playtest optional;
+feedback/patch/balance/repair appear as reactive plans when
+invoked), each step with its reason, expected inputs/outputs,
+status, and whether it may skip.
+
+`run(...)` executes the plan — through the job runner from the
+app (`weaverbird orchestrate <dir> [--to STAGE] [--force]`
+synchronously from the CLI):
+
+- **Skip semantics.** A step whose run record matches the
+  current inputs hash and says ok is recorded as *skipped
+  (inputs unchanged)* and does not run. Touching an input
+  un-skips exactly the workers that declare it; dependents
+  follow because their own inputs changed as a consequence.
+  Non-deterministic or externally-fed workers (feedback,
+  patch, repair, model-playtest) declare `can_skip=False` and
+  always run when planned.
+- **Failure routing.** A gate failure's issues go to their
+  owning worker for ONE bounded retry, with the issue digest
+  in its context. The world worker genuinely self-corrects —
+  a failing platformer level is regenerated with a different
+  seed; other workers re-run once with the digest recorded,
+  and no worker retries more than once per plan run. Still
+  failing → the plan stops and the plan record escalates with
+  the owner and the issues.
+- **Known-blocked steps never start.** Bespoke mechanics
+  without a usable brain is the standing case: the plan stops
+  at the plan, with the plain explanation, instead of burning
+  a run.
+- **State stays truthful.** As steps complete the orchestrator
+  advances the pipeline state (never backwards, and `finished`
+  only when the definition-of-done checklist is actually
+  true), so the app's stepper reflects worker reality.
+  Pipeline advance delegates to the same worker adapters, so
+  CLI `pipeline advance`, the app's actions and the
+  orchestrator can never diverge.
+- **Budgets** are the brain's own caps (global settings);
+  brain-using workers (bespoke mechanics, model playtest,
+  triage refinement) spend through them exactly as before.
+- The app's project view shows the plan as a Plan card: the
+  DAG as a vertical worker list with per-worker status (done /
+  skipped / failed / pending, the last-run summary, and the
+  inputs-unchanged note), a Run plan button (a job), and a
+  per-worker Run button (a job).
 
 ## The balance lab
 

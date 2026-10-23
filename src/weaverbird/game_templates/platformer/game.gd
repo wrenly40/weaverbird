@@ -94,6 +94,16 @@ func _load_config() -> void:
     jump_strength = clampf(float(cfg.get("jump_strength", 540.0)), 300.0, 800.0)
     gravity = clampf(float(cfg.get("gravity", 1400.0)), 700.0, 2400.0)
     levels = cfg.get("levels", [])
+    # The world worker's data wins when present: levels live in
+    # world/world.json, written as data — never baked into code.
+    var world_path := "res://world/world.json"
+    if FileAccess.file_exists(world_path):
+        var wparsed: Variant = JSON.parse_string(
+            FileAccess.get_file_as_string(world_path))
+        if typeof(wparsed) == TYPE_DICTIONARY:
+            var units: Array = wparsed.get("units", [])
+            if not units.is_empty():
+                levels = units
     if levels.is_empty():
         levels = [_fallback_level()]
 

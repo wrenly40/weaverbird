@@ -267,7 +267,9 @@ class JobManager:
             "project": project_name,
             "project_path": str(project_path),
             "action": action,
-            "worker": ACTION_WORKERS.get(action),
+            "worker": (params or {}).get("worker")
+                      if action == "run-worker"
+                      else ACTION_WORKERS.get(action),
             "label": label,
             "status": "queued",
             "created": _now(),
@@ -590,6 +592,50 @@ def _run_balance_compare(ctx: JobContext) -> str:
     return f"Compare finished. {report['verdict']}"
 
 
+def _run_orchestrate(ctx: JobContext) -> str:
+    from . import orchestrator as orchestrator_module
+    plan = orchestrator_module.run(
+        ctx.project_dir,
+        target=str(ctx.params.get("target", "finished")),
+        reactive=ctx.params.get("reactive"),
+        force=bool(ctx.params.get("force")),
+        settings_path=ctx.settings_path, reporter=ctx.reporter,
+        job_id=ctx.job["id"],
+        include_model_playtest=bool(
+            ctx.params.get("model_playtest")))
+    if plan.get("outcome") == "done":
+        ran = [s["worker"] for s in plan["steps"]
+               if s["status"] == "done"]
+        skipped = [s["worker"] for s in plan["steps"]
+                   if s["status"] == "skipped"]
+        bits = []
+        if ran:
+            bits.append("ran " + ", ".join(ran))
+        if skipped:
+            bits.append("skipped (inputs unchanged) "
+                        + ", ".join(skipped))
+        return "Plan complete" + (": " + "; ".join(bits) if bits else ".")
+    escalation = plan.get("escalation") or {}
+    raise RuntimeError(
+        f"Plan stopped ({plan.get('outcome')}): owner "
+        f"{escalation.get('worker', '?')} — "
+        + "; ".join(i.get("detail", "") for i in
+                    escalation.get("issues", [])))
+
+
+def _run_worker(ctx: JobContext) -> str:
+    from . import workers as workers_module
+    name = str(ctx.params.get("worker", ""))
+    outcome = workers_module.run_worker(
+        name, ctx.project_dir, reporter=ctx.reporter,
+        settings_path=ctx.settings_path, job_id=ctx.job["id"],
+        params=ctx.params.get("worker_params")
+        if isinstance(ctx.params.get("worker_params"), dict) else {})
+    if not outcome["ok"]:
+        raise RuntimeError(outcome["summary"])
+    return f"Worker {name}: {outcome['summary']}"
+
+
 def _run_assets_regenerate(ctx: JobContext) -> str:
     from . import assets_gen as assets_module
     name = str(ctx.params.get("asset", ""))
@@ -608,7 +654,9 @@ ACTION_WORKERS = {
     "build-skeleton": "skeleton",
     "generate-assets": "assets",
     "assets-regenerate": "assets",
-    "build-game": "build",
+    "build-game": "assembly",
+    "orchestrate": "orchestrator",
+    "run-worker": "worker",
     "run-tests": "testing",
     "finish-check": "finish",
     "finish-report": "finish",
@@ -636,4 +684,6 @@ ACTIONS = {
     "balance-apply": ("Balance lab: apply suggestion", _run_balance_apply),
     "balance-compare": ("Balance lab: compare", _run_balance_compare),
     "assets-regenerate": ("Regenerate asset", _run_assets_regenerate),
+    "orchestrate": ("Run plan (orchestrator)", _run_orchestrate),
+    "run-worker": ("Run one worker", _run_worker),
 }

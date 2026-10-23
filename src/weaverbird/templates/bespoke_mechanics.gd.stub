@@ -1,0 +1,44 @@
+extends Node2D
+
+## Bespoke mechanics module — the contract stub.
+##
+## A brain writing bespoke mechanics for Weaverbird implements
+## THIS interface (full contract: docs/MODULE_CONTRACT.md). The
+## factory's host (scripts/game.gd) creates this node, calls
+## setup() once, and forwards bridge_state()/bridge_actions()
+## to the testers. The module owns its gameplay completely; the
+## host owns the shell (menus, pause, HUD hint, win/lose scenes).
+
+var _game: Node = null
+var _config: Dictionary = {}
+
+
+## Called once by the host. `game` is the host node: signal the
+## end of the run ONLY through game.signal_win(collected, total,
+## message) and game.signal_lose(reason). `config` is the game's
+## game_config.json (palette hexes, objective hint).
+func setup(game: Node, config: Dictionary) -> void:
+    _game = game
+    _config = config
+
+
+## The facts the testers and the model playtester may see —
+## honestly exposed, the same facts a player has. MUST include:
+##   "player_pos": [x, y]      — where the player is
+##   "objective_pos": [x, y]   — where the current objective is
+##   "hint": "..."             — the on-screen objective line
+## Plus any counts that matter (collected, lives, time left...).
+func bridge_state() -> Dictionary:
+    return {
+        "player_pos": [0, 0],
+        "objective_pos": [0, 0],
+        "hint": str(_config.get("objective_hint", "")),
+    }
+
+
+## The actions the model playtester may choose from, a subset of:
+## start, wait, move_left, move_right, move_up, move_down, jump,
+## interact, pause.
+func bridge_actions() -> Array:
+    return ["start", "wait", "move_left", "move_right", "move_up",
+            "move_down"]

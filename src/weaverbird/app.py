@@ -51,9 +51,11 @@ from . import ledger as ledger_module
 from . import provenance as provenance_module
 from . import scope as scope_module
 from . import settings as settings_module
+from . import orchestrator as orchestrator_module
 from . import skeleton as skeleton_module
 from . import state as state_module
 from . import vcs as vcs_module
+from . import workers as workers_module
 
 STAGE_LABELS = {
     "scope": "Scope", "skeleton": "Skeleton", "assets": "Assets",
@@ -317,6 +319,64 @@ def render_dashboard(server) -> str:
     return _layout("Projects", "projects", body, foot)
 
 
+def _plan_card(server, project: dict, quoted: str) -> str:
+    """The Plan card: the orchestrator's DAG as a vertical worker
+    list — per-worker status from the run records (done / skipped
+    when inputs are unchanged / failed / pending), the last-run
+    summary, a Run plan button and a Run button per worker."""
+    path = project["path"]
+    try:
+        data = orchestrator_module.plan(path, persist=False)
+    except Exception:
+        return ""
+    stored = orchestrator_module.load_plan(path) or {}
+    stored_steps = {s.get("worker"): s for s in stored.get("steps", [])}
+    rows = ""
+    for step in data["steps"]:
+        worker_name = step["worker"]
+        record = workers_module.load_record(path, worker_name)
+        stored_step = stored_steps.get(worker_name, {})
+        if stored_step.get("status") == "skipped":
+            status, cls, box = "skipped — inputs unchanged", " open", "–"
+            summary = "Skipped on the last plan run: its inputs " \
+                      "had not changed."
+        elif step["status"] == "done":
+            status, cls, box = "done", "", "✓"
+            summary = (record or {}).get("summary", "")
+        elif step["status"] == "stale":
+            status, cls, box = "inputs changed — will re-run", " open", "–"
+            summary = (record or {}).get("summary", "")
+        elif step["status"] == "failed":
+            status, cls, box = "failed", " open", "✗"
+            summary = (record or {}).get("summary", "")
+        else:
+            status, cls, box = "pending", " open", "–"
+            summary = step.get("reason", "")
+        rows += (
+            f'<div class="check"><div class="box{cls}">{box}</div>'
+            f'<div style="flex:1">{_esc(step["title"])} '
+            f'<span class="hint">({status})</span>'
+            f'<small>{_esc(summary)}</small></div>'
+            f'<form class="action" method="post" '
+            f'action="/project/{quoted}/worker/{_esc(worker_name)}">'
+            f'<button class="btn ghost" type="submit">Run</button>'
+            f'</form></div>')
+    outcome = stored.get("outcome")
+    outcome_html = ""
+    if outcome:
+        outcome_html = (f'<p class="hint" style="margin-top:8px">'
+                        f'Last plan run: {_esc(outcome)}.</p>')
+    return f"""
+<div class="card" style="margin-top:20px"><h3>Plan — the workers</h3>
+<p class="hint" style="margin:6px 0 10px">The orchestrator runs each
+independent worker in order and skips any whose inputs have not
+changed. Every step can also be run on its own.</p>
+{rows}
+<form class="action" method="post" action="/project/{quoted}/run-plan" style="margin-top:12px">
+<button class="btn" type="submit">Run plan</button></form>
+{outcome_html}</div>"""
+
+
 def render_project(server, name: str, notice: str = "",
                    notice_kind: str = "ok",
                    job_id: str | None = None) -> str:
@@ -514,6 +574,8 @@ Scripted players are deterministic bots; the model playtester plays from screens
 {comp_line}{player_line("Breaker", players.get("breaker", {}))}{player_line("First-time player", players.get("first_time", {}))}{model_line}
 {repair_button}{model_button}</div>"""
 
+    plan_card = _plan_card(server, project, quoted)
+
     reasons = state_module.gate_reasons(path, state) if state else []
     gate_html = ""
     if reasons:
@@ -537,6 +599,7 @@ Scripted players are deterministic bots; the model playtester plays from screens
   <form method="post" action="/project/{quoted}/finish-report"><button class="btn ghost" type="submit">Write finish report</button></form>
 </div>
 {gate_html}
+{plan_card}
 {generation_card}
 {test_card}
 {_job_history_card(server, name)}
@@ -1306,6 +1369,12 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._post_feedback(name, parts)
                 if action == "patch" and len(parts) == 4:
                     return self._post_patch_start(name, parts[3])
+                if action == "run-plan":
+                    return self._post_job_action(name, "orchestrate")
+                if action == "worker" and len(parts) == 4:
+                    return self._post_job_action(
+                        name, "run-worker",
+                        params={"worker": urllib.parse.unquote(parts[3])})
                 if action == "repair":
                     return self._post_job_action(name, "repair")
                 if action == "model-playtest":
@@ -1456,10 +1525,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _post_advance(self, name: str) -> None:
         project = self.app.project_by_name(name)
-        skeleton_module.register_stage_handlers()
-        assets_module.register_stage_handlers()
-        generate_module.register_stage_handlers()
-        testing_module.register_stage_handlers()
+        # Stage handlers delegate to the worker adapters, so the
+        # app, the CLI and the orchestrator run the same steps.
+        workers_module.register_stage_handlers()
         try:
             state = state_module.advance(project["path"])
         except state_module.PipelineError as exc:

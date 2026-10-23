@@ -81,6 +81,16 @@ func _load_config() -> void:
     accent = Color.html(str(cfg.get("accent_hex", "#6C4CF1")))
     target_color = Color.html(str(cfg.get("target_hex", "#40CC73")))
     rounds_total = clampi(int(cfg.get("rounds", 3)), 1, 20)
+    # The world worker's data wins when present: the rounds live
+    # in world/world.json, written as data — never baked into code.
+    var world_path := "res://world/world.json"
+    if FileAccess.file_exists(world_path):
+        var wparsed: Variant = JSON.parse_string(
+            FileAccess.get_file_as_string(world_path))
+        if typeof(wparsed) == TYPE_DICTIONARY:
+            var units: Array = wparsed.get("units", [])
+            if not units.is_empty():
+                rounds_total = clampi(units.size(), 1, 20)
     targets_per_round = clampi(int(cfg.get("targets_per_round", 5)), 1, 12)
     round_seconds = clampf(float(cfg.get("round_seconds", 60.0)), 15.0, 300.0)
     player_speed = clampf(float(cfg.get("player_speed", 330.0)), 150.0, 600.0)

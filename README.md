@@ -28,8 +28,14 @@ version; failing test runs can repair themselves within strict
 bounds; and a model-driven playtester — your own vision model,
 playing through a bridge inside the game — joins the scripted
 players, filing its confusions straight back into the feedback
-queue. Publishing stays last, on purpose: the store connectors are
-still to come.
+queue. v0.6 put every app action on a background job runner and
+added the balance lab and the asset studio. This release (v0.7)
+rebuilds the factory's insides around the user's direction: every
+step is an independent worker coordinated by an orchestrator, and
+generation composes primitives instead of picking an archetype —
+the archetypes survive as presets, and scopes no composition can
+express take a bespoke, brain-written mechanics path. Publishing
+stays last, on purpose: the store connectors are still to come.
 
 ## Quickstart
 
@@ -155,11 +161,72 @@ does: the pipeline will not leave the scope stage until the scope file
 is complete and approved, and a game cannot be called finished until
 every item on the definition-of-done checklist is true.
 
+Since v0.7 the work inside those stages is done by independent
+workers — one per step, each runnable on its own — coordinated by an
+orchestrator that plans the steps, skips the ones whose inputs have
+not changed, and routes failures back to the worker that owns them.
+See "New in v0.7" below.
+
 See `docs/PLATFORM.md` for the full platform map — what each stage
 takes in, what it produces, and what is built now versus later — and
 `docs/DESIGN.md` for the full design.
 
 ## What works today
+
+New in v0.7:
+
+- Every step is an independent worker (`src/weaverbird/workers.py`).
+  Scope gate, skeleton, world, mechanics, assets, assembly,
+  testing, model-playtest, balance, repair, feedback, patch and
+  finish each sit behind one contract: declared inputs, declared
+  outputs, named dependencies, and a run that returns a result
+  with artifacts, metrics and issues (each issue naming the
+  worker that owns it). `weaverbird workers list` shows the
+  registry. Every run writes a record to
+  `.weaverbird/workers/<name>.json`, including a hash of the
+  worker's inputs. The old build stage is split in three: the
+  **world worker** writes the world's data (layouts, rounds,
+  puzzles) to `game/world/world.json` and gates it (platformer
+  reachability invariants, crate solvability through the solver,
+  arena bounds) before anything downstream runs; the
+  **mechanics worker** writes the player and game-logic scripts
+  that interpret that data at runtime, and gates on every entity
+  kind in the world having a handler; the **assembly worker**
+  wires shell + mechanics + world + assets into the runnable
+  game, validates it in Godot and tags it known-good. Asset
+  generation now takes its requests from the composition and the
+  world manifest — the entity kinds present decide the sprites,
+  the movement and fail kinds decide the sounds.
+- The orchestrator (`src/weaverbird/orchestrator.py`,
+  `weaverbird orchestrate <dir> [--to STAGE] [--force]`, and the
+  app's Plan card). It plans the worker DAG for a project
+  (`.weaverbird/plan.json`), runs it through the job runner
+  from the app or synchronously from the CLI, and skips any
+  worker whose inputs have not changed since its last good run
+  — touching an input re-runs exactly its dependents. When a
+  gate fails, the issues go back to the owning worker for one
+  bounded retry (the world worker genuinely self-corrects: a
+  failing platformer level is regenerated with a different
+  seed); still failing, the plan stops and escalates with the
+  owner and the issues. Pipeline advance runs through the same
+  worker adapters, so the CLI, the app and the orchestrator
+  cannot diverge.
+- Generation is composition-based, and the factory is archetype
+  independent. A game is described by composing primitives —
+  movement (top-down, platform, grid), objectives (collect,
+  reach the exit, push to targets, survive), fail conditions,
+  structure (levels, rounds) and interactions — derived
+  deterministically from the scope, with the derivation recorded
+  in `game_config.json`. The three archetypes are now **presets**:
+  named compositions you can pick with a `preset:` note in the
+  scope. When a scope's core loop cannot be composed from the
+  primitives at all (the matcher is deliberately conservative),
+  the build is **bespoke**: with a brain configured, a model
+  writes one GDScript module against the documented contract in
+  `docs/MODULE_CONTRACT.md`, hosted by a factory shell and held
+  to the same assembly validation and test stage as any other
+  game. Without a brain, the orchestrator stops at the plan and
+  says plainly what it cannot compose yet.
 
 New in v0.6:
 
@@ -463,13 +530,9 @@ pipeline runs — not things left out of scope:
 - The multi-turn scope interview conversation (today the prompt is
   extracted once and the remaining questions are printed; a
   conversational interview with style samples comes next).
-- More archetypes beyond the first three, generated game code
-  beyond the archetype cores (model-written diffs for what makes a
-  game different), and the iterate loop around them. Next pass:
-  an archetype-independent mechanics layer — independent
-  workers (world, player/mechanics, assets) coordinated by an
-  orchestrator over the job runner, with the archetypes demoted
-  to presets.
+- More composition primitives (new movement, objective and fail
+  kinds compose into new kinds of game without new templates),
+  richer bespoke mechanics, and the iterate loop around them.
 - Store connectors that upload and publish (itch first), signing and
   notarisation. Publishing comes last, by the user's direction.
 

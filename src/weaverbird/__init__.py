@@ -20,12 +20,23 @@ metrics from the scripted players, deterministic flags,
 suggestions routed through the patch gates, checkpointed A/B
 compare), and the asset studio (per-asset regeneration from the
 generator registry, palette editor writing back to the scope).
+Since 0.7.0: every step is an independent worker behind one
+contract (workers.py — scope, skeleton, world, mechanics,
+assets, assembly, testing, model-playtest, balance, repair,
+feedback, patch, finish), coordinated by an orchestrator
+(orchestrator.py) that plans the DAG, skips workers whose inputs
+are unchanged, and routes gate failures back to their owner.
+Generation is composition-based — movement × objective × fail ×
+structure × interactions — with the three archetypes kept as
+named presets, and a bespoke path where a brain-written module
+behind a documented contract provides mechanics no composition
+can express.
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
