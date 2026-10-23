@@ -43,6 +43,7 @@ from . import __version__, template_text
 from . import assets_gen as assets_module
 from . import balance as balance_module
 from . import demo as demo_module
+from . import exports as exports_module
 from . import brain as brain_module
 from . import feedback as feedback_module
 from . import finish as finish_module
@@ -503,6 +504,54 @@ def _build_summary_card(server, project: dict) -> str:
 {kinds_line}{firm_line}</div>"""
 
 
+def _exports_card(server, project: dict, quoted: str,
+                  state: dict | None) -> str:
+    """The Exports card (0.10.0): finished projects only. Target
+    checkboxes (all on by default) and a Run exports job; after
+    a run, the artifact list with sizes and download links, and
+    blocked targets with their reason shown here — not just in
+    the report file. Exports are local files only."""
+    if not state or state.get("stage") != "finished":
+        return ""
+    record = exports_module.load_record(project["path"])
+    rows = ""
+    if record:
+        for entry in record.get("targets", []):
+            target = _esc(entry.get("target", ""))
+            if entry.get("status") == "exported":
+                filename = _esc(str(entry.get("artifact", ""))
+                                .rsplit("/", 1)[-1])
+                size = entry.get("size", 0)
+                rows += (
+                    f'<div class="check"><div class="box">✓</div>'
+                    f'<div>{target}<small><a href="/project/{quoted}'
+                    f'/export-file/{filename}">{filename}</a> · '
+                    f'{size} bytes · {_esc(entry.get("note", ""))}'
+                    "</small></div></div>")
+            else:
+                rows += (
+                    f'<div class="check"><div class="box open">–</div>'
+                    f'<div>{target}<small>Blocked: '
+                    f'{_esc(entry.get("reason", ""))}</small>'
+                    "</div></div>")
+        rows = (f'<p class="hint" style="margin-top:8px">Last run: '
+                f'{_esc(record.get("ran_at", ""))} · game version '
+                f'{_esc(record.get("version", ""))}. Full record in '
+                "EXPORT_REPORT.md in the project folder.</p>" + rows)
+    boxes = ""
+    for target in exports_module.TARGETS:
+        boxes += (f'<label style="margin-right:14px">'
+                  f'<input type="checkbox" name="target_{target}" '
+                  f'checked> {_esc(target)}</label>')
+    return f"""
+<div class="card" style="margin-top:20px"><h3>Exports — local files</h3>
+<p class="hint" style="margin-top:6px">Exports produce zip files in the project's exports/ folder. Nothing is uploaded anywhere — publishing to stores is not part of this release. Desktop builds are unsigned; signing and notarisation are your own step. Android and iOS are not exported (they need SDK and keystore setup).</p>
+{rows}
+<form method="post" action="/project/{quoted}/run-exports" style="margin-top:12px">
+{boxes}
+<button class="btn" type="submit">Run exports</button></form></div>"""
+
+
 def render_project(server, name: str, notice: str = "",
                    notice_kind: str = "ok",
                    job_id: str | None = None) -> str:
@@ -729,6 +778,7 @@ Scripted players are deterministic bots; the model playtester plays from screens
 {plan_card}
 {generation_card}
 {test_card}
+{_exports_card(server, project, quoted, state)}
 {_job_history_card(server, name)}
 <div class="row">
   <div class="card"><h3>Definition of done</h3>{dod_html}</div>
@@ -1715,6 +1765,9 @@ class _Handler(BaseHTTPRequestHandler):
                         self.app, name, job_id=job_id))
                 if len(parts) >= 4 and parts[2] == "asset-file":
                     return self._get_asset_file(name, parts[3:])
+                if len(parts) == 4 and parts[2] == "export-file":
+                    return self._get_export_file(
+                        name, urllib.parse.unquote(parts[3]))
             return self._fail_page("That page does not exist here.", 404)
         except AppError as exc:
             return self._fail_page(str(exc), 404)
@@ -1738,6 +1791,21 @@ class _Handler(BaseHTTPRequestHandler):
         content_type = content_types.get(candidate.suffix.lower(),
                                          "application/octet-stream")
         return self._send_bytes(candidate.read_bytes(), content_type)
+
+    def _get_export_file(self, name: str, filename: str) -> None:
+        """Serve one export artifact, read-only, confined to the
+        project's exports/ folder — the same traversal
+        protection as the asset route; anything outside it (or
+        missing) is a 404."""
+        project = self.app.project_by_name(name)
+        root = (project["path"] / exports_module.EXPORTS_DIR_NAME).resolve()
+        candidate = (root / filename).resolve()
+        if not candidate.is_relative_to(root) \
+                or candidate.parent != root \
+                or not candidate.is_file():
+            return self._fail_page("That export does not exist here.", 404)
+        return self._send_bytes(candidate.read_bytes(),
+                                "application/zip")
 
     def _get_style_sample(self, name: str, sample_id: str) -> None:
         """Serve one generated style sample card, confined to the
@@ -1808,6 +1876,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._post_job_action(name, "build-game")
                 if action == "run-tests":
                     return self._post_job_action(name, "run-tests")
+                if action == "run-exports":
+                    return self._post_run_exports(name)
                 if action == "finish-check":
                     return self._post_job_action(name, "finish-check")
                 if action == "finish-report":
@@ -1913,6 +1983,16 @@ class _Handler(BaseHTTPRequestHandler):
             "assets": f"/project/{quoted}/assets",
         }.get(view, f"/project/{quoted}")
         return self._redirect(f"{page}?job={job['id']}")
+
+    def _post_run_exports(self, name: str) -> None:
+        form = self._form()
+        targets = [t for t in exports_module.TARGETS
+                   if form.get(f"target_{t}")]
+        if not targets:
+            return self._fail_page(
+                "Pick at least one export target.", 400)
+        return self._post_job_action(name, "run-exports",
+                                     params={"targets": targets})
 
     def _post_balance(self, name: str, sub: str) -> None:
         form = self._form()

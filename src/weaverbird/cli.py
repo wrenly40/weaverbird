@@ -138,6 +138,38 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_export(args) -> int:
+    from . import exports as exports_module
+    from . import workers as workers_module
+    targets = None
+    if args.targets:
+        targets = [t.strip() for t in args.targets.split(",")
+                   if t.strip()]
+        unknown = [t for t in targets if t not in exports_module.TARGETS]
+        if unknown:
+            return _fail(f"Unknown target(s): {', '.join(unknown)}. "
+                         f"Known: {', '.join(exports_module.TARGETS)}.")
+    try:
+        outcome = workers_module.run_worker(
+            "export", Path(args.dir), params={"targets": targets},
+            reporter=lambda text, done=None, total=None: print(text))
+    except workers_module.WorkerError as exc:
+        return _fail(str(exc))
+    if not outcome["ok"]:
+        return _fail(outcome["summary"])
+    report = exports_module.load_record(args.dir) or {}
+    for entry in report.get("targets", []):
+        if entry.get("status") == "exported":
+            print(f"✓ {entry['target']}: {entry['artifact']} "
+                  f"({entry['size']} bytes)")
+        else:
+            print(f"– {entry['target']}: blocked — {entry['reason']}")
+    print(f"Report: {Path(args.dir) / exports_module.REPORT_NAME}")
+    exported = [e for e in report.get("targets", [])
+                if e.get("status") == "exported"]
+    return 0 if exported else 1
+
+
 def cmd_init(args) -> int:
     target = Path(args.dir)
     try:
@@ -1155,6 +1187,16 @@ def build_parser() -> argparse.ArgumentParser:
                                "(default: demo-arena). An existing "
                                "folder is never overwritten.")
 
+    export_cmd = sub.add_parser(
+        "export", help="Export a finished game to local zip files "
+                       "(linux, windows, macos, source). Local "
+                       "files only — nothing is published.")
+    export_cmd.add_argument("dir", help="The finished project folder.")
+    export_cmd.add_argument(
+        "--targets", default=None,
+        help="Comma-separated subset of linux,windows,macos,source "
+             "(default: all four).")
+
     scope = sub.add_parser("scope", help="Work with a project's scope file.")
     scope_sub = scope.add_subparsers(dest="scope_command")
     for name, help_text in (
@@ -1442,6 +1484,7 @@ _HANDLERS = {
     ("identity", None): cmd_identity,
     ("init", None): cmd_init,
     ("demo", None): cmd_demo,
+    ("export", None): cmd_export,
     ("scope", "check"): cmd_scope_check,
     ("scope", "questions"): cmd_scope_questions,
     ("scope", "approve"): cmd_scope_approve,
@@ -1532,6 +1575,7 @@ commands, for scripts and terminals:
   weaverbird doctor                     check the setup
   weaverbird init <dir>                 start a new game project
   weaverbird demo                       install the bundled demo project (a finished game)
+  weaverbird export <dir>               export a finished game to local zips (no publishing)
   weaverbird scope ...                  the scope file and the interview
   weaverbird brain check                the bring-your-own-key ladder
   weaverbird workers list               every independent worker + its contract

@@ -205,6 +205,42 @@ takes in, what it produces, and what is built now versus later — and
 
 ## What works today
 
+New in v0.10:
+
+- Exports (`weaverbird export <dir>`, and the Exports card on a
+  finished project's page in the app). A registered **export
+  worker** packages a finished game as local zip files in the
+  project's `exports/` folder — Linux, Windows and macOS builds
+  via Godot's headless export, plus a zip of the game source.
+  It ensures the project's `export_presets.cfg` covers the
+  desktop targets (adding only what is missing, never editing a
+  maker's own presets), runs each export, verifies every
+  artifact, and writes `EXPORT_REPORT.md` with each target's
+  status, size and sha256. A target that cannot run — no Godot,
+  no export templates, a Godot error — is reported **blocked**
+  with the exact reason, never silently skipped. Desktop builds
+  are unsigned: signing and notarisation stay the maker's own
+  step. Android and iOS are not exported (they need SDK and
+  keystore setup). **Exports produce local files only;
+  publishing to stores is not part of this release.**
+- Scope numbers are reconciled. When the scope's win condition
+  states a count ("Collect 10 stars"), generation uses it
+  instead of the default, records the derivation, and the
+  finish report checks the built numbers against the scope's.
+  The project page shows a **Build summary** before anything
+  runs — the composition, the key numbers flagged "from your
+  scope" or "default", the style lock and the planned asset
+  kinds — so a surprise surfaces before the build, not after.
+- World layouts vary. Collectibles are placed by deterministic
+  patterns (ring, arc, scattered, clusters, zigzag) chosen from
+  a per-project seed and recorded in `world.json`; the world
+  gate still checks every placement, and a pattern that fails
+  falls back to the next, on the record.
+- A bundled demo project: `weaverbird demo` (or the dashboard
+  button) installs a small finished game — scope, source,
+  reports — into the workspace, ready to look around, re-test
+  and export.
+
 New in v0.8:
 
 - The scope interview is a conversation (`src/weaverbird/interview.py`).

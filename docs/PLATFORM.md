@@ -668,6 +668,59 @@ synchronously from the CLI):
   inputs-unchanged note), a Run plan button (a job), and a
   per-worker Run button (a job).
 
+## Exports (v0.10)
+
+Built in 0.10.0 (`src/weaverbird/exports.py`), as a registered
+worker like every other step. The **export** worker's declared
+inputs are the finished game project (`game/`, its finish
+evidence); its outputs are the `exports/` artifacts,
+`EXPORT_REPORT.md` (project root, next to `FINISH_REPORT.md`)
+and its worker run record. It runs only on a project at the
+finished stage, and its gate is that every requested target
+ends as either a real artifact or a concrete named blocker —
+never a silent skip, never a fake success.
+
+- **Targets:** `linux`, `windows`, `macos`, `source`. Android
+  and iOS are explicitly out — they need SDK and keystore
+  setup the factory does not perform, and the report says so.
+- **Presets:** the worker ensures `game/export_presets.cfg`
+  covers the desktop targets. A missing file is written whole;
+  an existing file gains only the presets it lacks, matched by
+  platform — a maker's presets are used untouched. Two Godot
+  realities the worker handles: the macOS preset needs a bundle
+  identifier (`com.weaverbird.<slug>`, editable, recorded in
+  the report) and the universal architecture, and a universal
+  macOS export requires `textures/vram_compression/
+  import_etc2_astc=true` in `project.godot` — added when
+  missing, and recorded in the report when it is.
+- **Run:** Godot headless `--export-release` per target via
+  `godot.find_godot` (the same route as every other stage).
+  Output is captured; on failure the target is blocked with
+  Godot's own error line quoted. Each artifact is verified to
+  exist with a plausible size, packaged as
+  `<slug>-<version>-<target>.zip` (version from `game/VERSION`,
+  else 0.1.0) and recorded with size and sha256. The macOS zip
+  is the `.app` as Godot exports it; the source zip excludes
+  `exports/`, `.godot/`, `build/` and `.git`.
+- **Prerequisite honesty:** with no Godot binary or no matching
+  export templates, `source` still succeeds and each desktop
+  target reports blocked, naming the exact missing piece and
+  the folder the templates belong in.
+- **Unsigned:** Windows and macOS builds are unsigned —
+  signing and notarisation are the maker's own step, stated
+  per target in the report.
+- **Surfaces:** the app's project page gains an Exports card
+  once a project is finished (target checkboxes, a Run exports
+  job, artifacts with sizes and download links served from
+  `exports/` only, blocked reasons shown inline), and
+  `weaverbird export <dir> [--targets ...]` prints the
+  per-target outcomes and the report path, exiting non-zero
+  only when every requested target was blocked or failed.
+
+Exports produce local files only. Publishing to stores is not
+part of this release: no uploads, no connector changes, nothing
+leaves the machine.
+
 ## The balance lab
 
 Built in 0.6.0 (`src/weaverbird/balance.py`), on top of stage 5

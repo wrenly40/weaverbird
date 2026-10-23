@@ -12,8 +12,8 @@ a frozen page. Now every project action in the app is a **job**:
   restarts and the CLI can read it (`weaverbird jobs`). ``worker``
   names the step that ran the action (skeleton, assets, build,
   testing, finish, repair, patch, feedback, balance,
-  model-playtest) — the Pass 5 orchestrator keys its plan view
-  off it.
+  model-playtest, export) — the Pass 5 orchestrator keys its
+  plan view off it.
 - Execution happens on a small thread pool (max 2 concurrent).
   Jobs for the SAME project serialise behind a per-project lock:
   two Godot stages running on one project at once would corrupt
@@ -623,6 +623,18 @@ def _run_orchestrate(ctx: JobContext) -> str:
                     escalation.get("issues", [])))
 
 
+def _run_exports(ctx: JobContext) -> str:
+    from . import workers as workers_module
+    targets = ctx.params.get("targets") or None
+    outcome = workers_module.run_worker(
+        "export", ctx.project_dir, reporter=ctx.reporter,
+        settings_path=ctx.settings_path, job_id=ctx.job["id"],
+        params={"targets": targets})
+    if not outcome["ok"]:
+        raise RuntimeError(outcome["summary"])
+    return outcome["summary"]
+
+
 def _run_worker(ctx: JobContext) -> str:
     from . import workers as workers_module
     name = str(ctx.params.get("worker", ""))
@@ -666,6 +678,7 @@ ACTION_WORKERS = {
     "orchestrate": "orchestrator",
     "run-worker": "worker",
     "run-tests": "testing",
+    "run-exports": "export",
     "finish-check": "finish",
     "finish-report": "finish",
     "repair": "repair",
@@ -683,6 +696,7 @@ ACTIONS = {
     "generate-assets": ("Generate assets", _run_generate_assets),
     "build-game": ("Build game", _run_build_game),
     "run-tests": ("Run tests", _run_run_tests),
+    "run-exports": ("Run exports", _run_exports),
     "finish-check": ("Finish check", _run_finish_check),
     "finish-report": ("Write finish report", _run_finish_report),
     "repair": ("Self-repair", _run_repair),

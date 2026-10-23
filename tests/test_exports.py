@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weaverbird import exports, state as state_module, workers  # noqa: E402
 
@@ -87,6 +88,9 @@ def _finished_project(directory: Path, stage: str = "finished") -> Path:
     (game / "game_config.json").write_text("{}", encoding="utf-8")
     (game / "scripts" / "game.gd").write_text("extends Node\n",
                                               encoding="utf-8")
+    from helpers import filled_scope_text
+    (project / "SCOPE.md").write_text(filled_scope_text(),
+                                      encoding="utf-8")
     (project / "FINISH_REPORT.md").write_text("# done\n",
                                               encoding="utf-8")
     saved = state_module.init_state(project)
@@ -269,6 +273,180 @@ class ExportsTest(unittest.TestCase):
         self.assertIn("exports/", spec.outputs)
         self.assertIn("finish", spec.depends_on)
         self.assertFalse(spec.can_skip)
+
+
+class ExportCliTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.stub = _write_stub(self.root)
+        self.home = _fake_home(self.root, with_templates=False)
+        self._env = dict(os.environ)
+        os.environ["WEAVERBIRD_GODOT"] = str(self.stub)
+        os.environ["HOME"] = str(self.home)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def _main(self, argv):
+        import contextlib
+        import io
+        from weaverbird import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(argv)
+        return code, out.getvalue()
+
+    def test_cli_export_prints_outcomes_and_report_path(self):
+        project = _finished_project(self.root)
+        code, text = self._main(["export", str(project)])
+        self.assertEqual(code, 0, text)
+        self.assertIn("✓ source:", text)
+        self.assertIn("– linux: blocked", text)
+        self.assertIn("EXPORT_REPORT.md", text)
+
+    def test_cli_export_all_blocked_exits_nonzero(self):
+        project = _finished_project(self.root)
+        code, text = self._main(
+            ["export", str(project), "--targets", "linux"])
+        self.assertEqual(code, 1, text)
+        self.assertIn("blocked", text)
+
+    def test_cli_export_refuses_an_unfinished_project(self):
+        project = _finished_project(self.root, stage="build")
+        code, text = self._main(["export", str(project)])
+        self.assertEqual(code, 1, text)
+
+    def test_cli_export_rejects_unknown_targets(self):
+        project = _finished_project(self.root)
+        code, text = self._main(
+            ["export", str(project), "--targets", "amiga"])
+        self.assertEqual(code, 1, text)
+        self.assertIn("Unknown target", text)
+
+
+class ExportAppTests(unittest.TestCase):
+    """The Exports card, the run-exports job and the download
+    route, over real HTTP against a throwaway workspace."""
+
+    def setUp(self):
+        import threading
+        from weaverbird import app as app_module
+        self._app_module = app_module
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.workspace = self.root / "ws"
+        self.workspace.mkdir()
+        self.stub = _write_stub(self.root)
+        self.home = _fake_home(self.root, with_templates=False)
+        self._env = dict(os.environ)
+        os.environ["WEAVERBIRD_GODOT"] = str(self.stub)
+        os.environ["HOME"] = str(self.home)
+        self.project = _finished_project(self.workspace)
+        self.server = app_module.create_server(self.workspace, port=0)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = self.server.url.rstrip("/")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.server.shutdown()
+        self.server.server_close()
+        os.environ.clear()
+        os.environ.update(self._env)
+        self._tmp.cleanup()
+
+    def _get(self, path):
+        import urllib.error
+        import urllib.request
+        try:
+            with urllib.request.urlopen(self.base + path,
+                                        timeout=15) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    def _post(self, path, fields):
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+
+        opener = urllib.request.build_opener(NoRedirect)
+        data = urllib.parse.urlencode(fields).encode()
+        request = urllib.request.Request(self.base + path, data=data)
+        try:
+            with opener.open(request, timeout=15) as response:
+                return response.status, response.headers, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers, exc.read()
+
+    def test_card_job_and_download(self):
+        import time
+        import urllib.parse
+        quoted = urllib.parse.quote(self.project.name)
+        status, body = self._get(f"/project/{quoted}")
+        self.assertEqual(status, 200)
+        page = body.decode("utf-8")
+        self.assertIn("Exports — local files", page)
+        self.assertIn('name="target_linux"', page)
+        # Run exports for every target, through the job runner:
+        # source exports; the desktop trio blocks on the fake
+        # home's missing templates.
+        status, headers, _ = self._post(
+            f"/project/{quoted}/run-exports",
+            {"target_linux": "on", "target_windows": "on",
+             "target_macos": "on", "target_source": "on"})
+        self.assertEqual(status, 303)
+        location = headers.get("Location", "")
+        self.assertIn("?job=", location)
+        job_id = location.rsplit("?job=", 1)[1]
+        deadline = time.time() + 30
+        job = None
+        while time.time() < deadline:
+            status, raw = self._get(f"/api/jobs/{job_id}")
+            job = json.loads(raw)
+            if job["status"] in ("done", "failed", "cancelled"):
+                break
+            time.sleep(0.2)
+        self.assertEqual(job["status"], "done", job)
+        self.assertEqual(job["worker"], "export")
+        # The card now lists the artifact with a download link
+        # and shows the blocked desktop reasons inline.
+        status, body = self._get(f"/project/{quoted}")
+        page = body.decode("utf-8")
+        artifact = "export-test-game-0.1.0-source.zip"
+        self.assertIn(f"/export-file/{artifact}", page)
+        self.assertIn("Blocked:", page)
+        # The download serves the real zip.
+        status, data = self._get(
+            f"/project/{quoted}/export-file/{artifact}")
+        self.assertEqual(status, 200)
+        self.assertEqual(data[:2], b"PK")
+        # Traversal attempts and unknown files are 404s.
+        status, _ = self._get(
+            f"/project/{quoted}/export-file/..%2F..%2FSCOPE.md")
+        self.assertEqual(status, 404)
+        status, _ = self._get(
+            f"/project/{quoted}/export-file/nope.zip")
+        self.assertEqual(status, 404)
+
+    def test_no_card_before_the_project_is_finished(self):
+        import shutil
+        unfinished = _finished_project(self.root, stage="build")
+        target = self.workspace / "unfinished-game"
+        shutil.copytree(unfinished, target)
+        status, body = self._get("/project/unfinished-game")
+        self.assertEqual(status, 200)
+        self.assertNotIn("Exports — local files",
+                         body.decode("utf-8"))
 
 
 if __name__ == "__main__":
