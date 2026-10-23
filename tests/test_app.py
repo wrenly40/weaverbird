@@ -399,6 +399,59 @@ class TestSettingsCreation(AppTestCase):
         self.assertIn('name="tokens_per_run"', page)
 
 
+class TestDashboardTitles(AppTestCase):
+    """0.9.0 (F2): a project card shows the scope's Title when
+    filled, else the display name recorded at creation, else the
+    folder slug — and a malformed SCOPE.md never breaks the
+    dashboard."""
+
+    def test_display_name_fallback_when_scope_title_empty(self):
+        (self.project / "SCOPE.md").write_text(template_scope_text(),
+                                               encoding="utf-8")
+        meta = self.project / ".weaverbird" / "project.json"
+        meta.parent.mkdir(parents=True, exist_ok=True)
+        meta.write_text(json.dumps(
+            {"display_name": "The Bee Game"}), encoding="utf-8")
+        status, page = get(self.base + "/")
+        self.assertEqual(status, 200)
+        self.assertIn("The Bee Game", page)
+
+    def test_scope_title_wins_over_display_name(self):
+        meta = self.project / ".weaverbird" / "project.json"
+        meta.write_text(json.dumps(
+            {"display_name": "Some Other Name"}), encoding="utf-8")
+        status, page = get(self.base + "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Filled in for the test", page)  # scope title
+        self.assertNotIn("Some Other Name", page)
+
+    def test_malformed_scope_shows_the_slug_not_a_500(self):
+        (self.project / "SCOPE.md").write_text(
+            "this is not a scope file at all\n", encoding="utf-8")
+        status, page = get(self.base + "/")
+        self.assertEqual(status, 200)
+        self.assertIn("bee-game", page)
+
+
+class TestNarrowShellCss(AppTestCase):
+    """0.9.0 (F8): the served stylesheet carries the narrow-shell
+    adaptation — sidebar to top bar, wrapping headers, single
+    column grids — inside the 900px media query only."""
+
+    def test_narrow_rules_are_served(self):
+        status, css = get(self.base + "/style.css")
+        self.assertEqual(status, 200)
+        narrow = css[css.rindex("@media (max-width: 900px)"):]
+        self.assertIn(".app { flex-direction:column; }", narrow)
+        self.assertIn(".side { width:auto; flex-direction:row;", narrow)
+        self.assertIn(".side .foot { display:none; }", narrow)
+        self.assertIn(".top { flex-wrap:wrap;", narrow)
+        self.assertIn(".grid, .grid.two, .row "
+                      "{ grid-template-columns:1fr; }", narrow)
+        self.assertIn("table { display:block; overflow-x:auto; }",
+                      narrow)
+
+
 class TestJobActionRedirects(AppTestCase):
     """Redirect-after-POST for every job action: a POST that starts
     a job must answer 303 to the GET page the button lives on,

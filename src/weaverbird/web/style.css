@@ -131,3 +131,34 @@ audio { width:100%; max-width:300px; }
 .fieldrow .dotmiss { color:#C9C4D6; font-weight:700; }
 .fieldval { color:#68707F; font-size:12.5px; line-height:1.4; word-break:break-word; }
 .fieldrow.done .fieldval { color:#232936; }
+
+/* ---- Narrow shell (max-width: 900px) — the sidebar becomes a
+   slim top bar (bird mark + horizontal links), header rows wrap
+   instead of clipping, grids go single-column, wide tables
+   scroll inside their card, and no page scrolls sideways at
+   phone widths. Desktop rules above are untouched. */
+@media (max-width: 900px) {
+  .app { flex-direction:column; }
+  .side { width:auto; flex-direction:row; align-items:center; gap:16px;
+    padding:10px 16px; box-shadow:0 4px 14px rgba(35,41,54,.06); }
+  .brand { padding:0; gap:9px; }
+  .brand .mark { width:30px; height:30px; border-radius:9px; }
+  .brand b { font-size:16px; }
+  .brand small { display:none; }
+  .nav { display:flex; gap:4px; margin-left:auto; }
+  .nav a { padding:8px 10px; }
+  .side .foot { display:none; }
+  .app.fitview .side { overflow:visible; }
+  .main { padding:22px 16px; }
+  .top { flex-wrap:wrap; align-items:flex-start; }
+  .grid, .grid.two, .row { grid-template-columns:1fr; }
+  .stepper { overflow-x:auto; padding:18px 14px; }
+  .step { min-width:84px; }
+  table { display:block; overflow-x:auto; }
+  .kv { grid-template-columns:1fr; }
+  .kv dt { margin-top:8px; }
+  .meta { flex-wrap:wrap; }
+  .msg .bubble { max-width:100%; }
+  .msgtext, code { overflow-wrap:anywhere; }
+  .app.fitview .scopepanel { max-height:38vh; }
+}

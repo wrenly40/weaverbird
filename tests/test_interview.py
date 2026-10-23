@@ -306,6 +306,216 @@ class CliInterviewTests(unittest.TestCase):
         self.assertTrue(parsed.is_complete)
 
 
+class SurplusAnswerTests(unittest.TestCase):
+    """0.9.0 (F4): a message with MORE answer lines than the
+    pending group has open fields applies the first lines
+    positionally, discards the extras, and says what was ignored
+    — answers can never silently shift onto the wrong fields."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = make_project(self.tmp)
+        interview.start(self.project)
+        # Identity group (2 fields) answered with one 2-line
+        # message: no surplus, the ordinary in-order fill.
+        interview.respond(
+            self.project, "Bubble Bounce\nBounce bubbles to the sky.")
+
+    def values(self):
+        return {f.name: f.value for f in
+                scope.load_scope(self.project / "SCOPE.md").fields}
+
+    def test_surplus_lines_apply_positionally_and_extras_are_quoted(self):
+        # The Shape group has eight fields; nine lines arrive.
+        # Line 1 sits in the Dimension slot but is not a dimension:
+        # positionally it is dropped, NOT walked onward to Genre
+        # (the old walk shifted it — and every answer after it —
+        # one field along). Line 9 is surplus and must be quoted
+        # back as ignored, never captured.
+        state = interview.respond(
+            self.project,
+            "Arena collector\n"        # Dimension slot: unusable
+            "Arena battler\n"           # Genre / archetype
+            "Bounce bubbles upward\n"   # Core verb
+            "Collect 10 bubbles\n"      # Win condition
+            "The timer runs out\n"      # Lose / fail condition
+            "About 5 minutes\n"         # Session length
+            "Micro\n"                   # Scope class
+            "3 rounds\n"                # Content counts
+            "This extra line stays unused")
+        values = self.values()
+        self.assertEqual(values["Genre / archetype"], "Arena battler")
+        self.assertEqual(
+            values["Core verb (what the player does most)"],
+            "Bounce bubbles upward")
+        self.assertEqual(values["Win condition"], "Collect 10 bubbles")
+        self.assertEqual(values["Lose / fail condition"],
+                         "The timer runs out")
+        self.assertEqual(values["Session length (one sitting)"],
+                         "About 5 minutes")
+        self.assertEqual(values["Scope class"], "Micro")
+        self.assertEqual(
+            values["Content counts (levels / waves / rooms / items, "
+                   "as applicable)"], "3 rounds")
+        # Dimension holds nothing — not line 1, not line 9.
+        self.assertIn("Dimension", state["missing"])
+        self.assertIn("Dimension", state["dropped"])
+        self.assertEqual(state["ignored"],
+                         ["This extra line stays unused"])
+        for value in values.values():
+            self.assertNotEqual(value, "This extra line stays unused")
+        # The interviewer's next message quotes the ignored line.
+        reflection = state["turns"][-2]
+        self.assertEqual(reflection["kind"], "reflection")
+        self.assertIn('"This extra line stays unused"',
+                      reflection["text"])
+        self.assertIn("aside", reflection["text"])
+
+    def test_fewer_lines_behave_as_before(self):
+        project = make_project(tempfile.mkdtemp())
+        interview.start(project)
+        state = interview.respond(project, "Solo Title\nOnly a pitch")
+        values = {f.name: f.value for f in
+                  scope.load_scope(project / "SCOPE.md").fields}
+        self.assertEqual(values["Title (working)"], "Solo Title")
+        self.assertEqual(values["One-line pitch"], "Only a pitch")
+        self.assertEqual(state["ignored"], [])
+        self.assertIn("Dimension", state["missing"])
+
+
+class StyleLockTests(unittest.TestCase):
+    """0.9.0 (F5): once a style sample is chosen the decision
+    locks — a further pick (stale page, double submit) is
+    refused politely and changes nothing; Change style re-opens
+    the choice as the pending turn, and only then do picks work
+    again."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = make_project(self.tmp)
+        interview.start(self.project)
+        for answer in ANSWERS[:13]:
+            interview.respond(self.project, answer)
+        state = interview.respond(self.project, "bright-chunky")
+        self.assertIn("bright-chunky", json.dumps(state["applied"]))
+
+    def values(self):
+        return {f.name: f.value for f in
+                scope.load_scope(self.project / "SCOPE.md").fields}
+
+    def test_choice_is_recorded_and_locks(self):
+        state = interview.respond(self.project, "")
+        self.assertEqual(state["style_chosen"], "bright-chunky")
+        self.assertFalse(state["style_reopen"])
+
+    def test_a_second_pick_is_refused_and_changes_nothing(self):
+        before = self.values()
+        state = interview.respond(self.project, "soft-pastel")
+        self.assertTrue(state.get("style_refused"))
+        self.assertEqual(state["applied"], {})
+        self.assertEqual(self.values(), before)
+        notes = [t for t in state["turns"] if t.get("kind") == "info"]
+        self.assertIn("already chosen and locked", notes[-1]["text"])
+
+    def test_ordinary_answers_still_work_after_the_lock(self):
+        # The next group's first answer mentions a style word but
+        # is not an exact pick — it must land as a normal answer.
+        state = interview.respond(self.project, "Bright chiptune")
+        self.assertFalse(state.get("style_refused"))
+        self.assertIn("Audio mood (music + SFX character)",
+                      state["applied"])
+
+    def test_change_style_reopens_and_a_new_pick_lands(self):
+        interview.respond(self.project, "soft-pastel")  # refused
+        state = interview.respond(self.project, "change-style")
+        self.assertTrue(state.get("style_reopened"))
+        self.assertTrue(state["style_reopen"])
+        samples_turns = [t for t in state["turns"]
+                         if t.get("kind") == "samples"]
+        self.assertEqual(samples_turns[-1]["fields"],
+                         [interview.STYLE_FIELD])
+        state = interview.respond(self.project, "soft-pastel")
+        self.assertFalse(state.get("style_refused"))
+        self.assertIn("soft-pastel",
+                      self.values()[interview.STYLE_FIELD])
+        self.assertIn("#9B8CF2", self.values()["Palette"])
+        self.assertEqual(state["style_chosen"], "soft-pastel")
+        self.assertFalse(state["style_reopen"])
+
+    def test_change_style_before_any_choice_is_a_polite_noop(self):
+        project = make_project(tempfile.mkdtemp())
+        interview.start(project)
+        state = interview.respond(project, "change-style")
+        self.assertFalse(state.get("style_reopened"))
+        self.assertEqual(state["applied"], {})
+        notes = [t for t in state["turns"] if t.get("kind") == "info"]
+        self.assertIn("No style has been chosen yet",
+                      notes[-1]["text"])
+        values = {f.name: f.value for f in
+                  scope.load_scope(project / "SCOPE.md").fields}
+        self.assertTrue(all(not v for v in values.values()))
+
+
+class PromptTidyingTests(unittest.TestCase):
+    """0.9.0 (F3): prompt marker captures are tidied only where
+    the capture was cut short by the next field marker, and the
+    recap never doubles sentence punctuation."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.project = Path(self.tmp) / "tidy-game"
+        self.project.mkdir(parents=True)
+        (self.project / "SCOPE.md").write_text(template_scope_text(),
+                                              encoding="utf-8")
+
+    def values_after_prompt(self, prompt):
+        scope.set_original_prompt(self.project / "SCOPE.md", prompt)
+        interview.start(self.project)
+        return {f.name: f.value for f in
+                scope.load_scope(self.project / "SCOPE.md").fields}
+
+    def test_marker_terminated_values_lose_the_sentence_stop(self):
+        values = self.values_after_prompt(
+            "My game. Title (working): Star Shepherd. "
+            "Genre / archetype: Arena collector, Dimension: 2D")
+        self.assertEqual(values["Title (working)"], "Star Shepherd")
+        self.assertEqual(values["Genre / archetype"], "Arena collector")
+        self.assertEqual(values["Dimension"], "2D")
+
+    def test_end_of_prompt_segment_keeps_its_punctuation(self):
+        values = self.values_after_prompt(
+            "Genre / archetype: Arena collector. "
+            "Title (working): Star Shepherd.")
+        self.assertEqual(values["Title (working)"], "Star Shepherd.")
+
+    def test_abbreviation_and_double_dot_are_never_stripped(self):
+        values = self.values_after_prompt(
+            "Title (working): Option A. Genre / archetype: Arena")
+        self.assertEqual(values["Title (working)"], "Option A.")
+        project = Path(self.tmp) / "tidy-two"
+        project.mkdir(parents=True)
+        (project / "SCOPE.md").write_text(template_scope_text(),
+                                          encoding="utf-8")
+        scope.set_original_prompt(
+            project / "SCOPE.md",
+            "Title (working): Wait.. Genre / archetype: Arena")
+        interview.start(project)
+        values = {f.name: f.value for f in
+                  scope.load_scope(project / "SCOPE.md").fields}
+        self.assertEqual(values["Title (working)"], "Wait..")
+
+    def test_recap_does_not_double_sentence_punctuation(self):
+        scope.set_original_prompt(
+            self.project / "SCOPE.md",
+            "One-line pitch: A herding game among the stars.")
+        state = interview.start(self.project)
+        recap = state["turns"][0]["text"]
+        self.assertIn("One-line pitch: A herding game among the "
+                      "stars.", recap)
+        self.assertNotIn("stars..", recap)
+        self.assertNotIn("stars.;", recap)
+
+
 class PromptFirstTests(unittest.TestCase):
     """The interview consumes the starting prompt BEFORE asking
     anything: deterministic 'Field: value' statements are applied
@@ -349,8 +559,13 @@ class PromptFirstTests(unittest.TestCase):
         self.assertTrue(
             recap["text"].startswith("From your prompt I filled in:"),
             recap["text"])
-        self.assertIn("Title (working): Given in the prompt.",
+        # The value was cut from mid-prompt prose ('Given in the
+        # prompt. One-line pitch: …'), so its sentence full stop
+        # is tidied off (0.9.0 F3) — the recap lists it cleanly.
+        self.assertIn("Title (working): Given in the prompt",
                       recap["text"])
+        self.assertNotIn("Given in the prompt..", recap["text"])
+        self.assertNotIn("Given in the prompt.;", recap["text"])
         self.assertIn("Dimension: 2D", recap["text"])
         asked = [name for turn in turns
                  if turn.get("kind") in ("question", "samples")
@@ -492,6 +707,42 @@ class AppChatTests(unittest.TestCase):
                       values["Style sample chosen "
                              "(id / link to approved sample)"])
         self.assertIn("#9B8CF2", values["Palette"])
+
+    def test_style_cards_lock_after_the_pick(self):
+        """0.9.0 (F5) at the app surface: after a pick, every
+        rendering of the samples locks — the chosen card shows
+        '✓ Chosen' with a Change style button, no card keeps a
+        live Pick button — a stale pick post is refused, and
+        Change style re-opens the choice."""
+        self.chat("")
+        for answer in ANSWERS[:13]:
+            self.chat(answer)
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn(">Pick ", page)  # live pick buttons pre-choice
+        self.chat("bright-chunky")
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn("✓ Chosen", page)
+        self.assertIn("Change style", page)
+        self.assertNotIn(">Pick ", page)
+        # A stale page's pick post is refused; the scope is unmoved.
+        self.chat("soft-pastel")
+        values = {f.name: f.value for f in
+                  scope.load_scope(self.project / "SCOPE.md").fields}
+        self.assertIn("bright-chunky", values[interview.STYLE_FIELD])
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn("already chosen and locked", page)
+        # Change style re-opens: pick buttons are live again and a
+        # new pick lands.
+        self.chat("change-style")
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn(">Pick ", page)
+        self.chat("soft-pastel")
+        values = {f.name: f.value for f in
+                  scope.load_scope(self.project / "SCOPE.md").fields}
+        self.assertIn("soft-pastel", values[interview.STYLE_FIELD])
+        _s, page = self.get(f"{self.base}/project/chat-game/scope")
+        self.assertIn("✓ Chosen", page)
+        self.assertNotIn(">Pick ", page)
 
     def test_scope_panel_specified_missing_chips(self):
         """Every field row carries an unambiguous status chip:

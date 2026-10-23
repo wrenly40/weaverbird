@@ -161,7 +161,9 @@ def _project_facts(project: dict) -> dict:
         "project": project,
         "scope": parsed,
         "values": values,
-        "title": values.get("Title (working)") or project["name"],
+        "title": (values.get("Title (working)")
+                  or projects_module.display_name_for(path)
+                  or project["name"]),
         "pitch": values.get("One-line pitch") or "",
         "state": state,
         "stage": state["stage"] if state else "scope",
@@ -827,9 +829,24 @@ def render_scope_form(server, name: str, notice: str = "",
 
 
 def _sample_cards_html(server, name: str, quoted: str,
-                       samples_by_id: dict, turn: dict) -> str:
+                       samples_by_id: dict, turn: dict,
+                       state: dict | None = None) -> str:
     """The style sample cards inside a chat turn: the generated
-    scene, the palette swatches, and a Pick button per card."""
+    scene, the palette swatches, and a Pick button per card —
+    until a style is chosen. Once chosen, every rendering of the
+    samples (including this old turn in the scrollback) locks:
+    the chosen card shows '✓ Chosen' with a Change style button,
+    and the other cards carry no pick controls at all (F5)."""
+    state = state or {}
+    chosen = state.get("style_chosen") or ""
+    picks_open = (not chosen) or bool(state.get("style_reopen"))
+    change_form = (
+        f'<form class="action" method="post" '
+        f'action="/project/{quoted}/scope/chat">'
+        f'<input type="hidden" name="message" '
+        f'value="{interview_module.CHANGE_STYLE_MESSAGE}">'
+        '<button class="btn small ghost" type="submit">'
+        "Change style</button></form>")
     cards = ""
     for sample_id in turn.get("samples", []):
         sample = samples_by_id.get(sample_id)
@@ -844,20 +861,35 @@ def _sample_cards_html(server, name: str, quoted: str,
                 ("hazard", sample["palette"].get("hazard_hex", "")),
                 ("platform", sample["palette"].get("platform_hex", "")),
                 ("crate", sample["palette"].get("crate_hex", ""))))
+        if picks_open:
+            action = (
+                f'<form class="action" method="post" '
+                f'action="/project/{quoted}/scope/chat">'
+                f'<input type="hidden" name="message" '
+                f'value="{_esc(sample_id)}">'
+                f'<button class="btn small" type="submit">'
+                f'Pick {_esc(sample["name"])}</button></form>')
+        elif sample_id == chosen:
+            action = ('<span class="chip green">✓ Chosen</span>'
+                      + change_form)
+        else:
+            action = '<span class="hint">Not chosen</span>'
         cards += f"""
 <div class="samplecard">
   <img src="/project/{quoted}/style-sample/{_esc(sample_id)}" alt="{_esc(sample['name'])} style sample">
   <div class="samplemeta"><b>{_esc(sample['name'])}</b><span class="hint">{_esc(sample['blurb'])}</span>
   <div class="swatches">{swatches}</div>
   <p class="hint">{_esc(sample['palette_text'])}</p>
-  <form class="action" method="post" action="/project/{quoted}/scope/chat">
-    <input type="hidden" name="message" value="{_esc(sample_id)}">
-    <button class="btn small" type="submit">Pick {_esc(sample['name'])}</button>
-  </form></div>
+  {action}</div>
 </div>"""
     if not cards:
         return ""
-    return f'<div class="samples">{cards}</div>'
+    note = ""
+    if chosen == "custom" and not picks_open:
+        note = ('<div style="grid-column:1/-1"><p class="hint">A style '
+                "is already chosen (recorded in the scope) and "
+                f"locked.</p>{change_form}</div>")
+    return f'<div class="samples">{note}{cards}</div>'
 
 
 def render_scope(server, name: str, notice: str = "",
@@ -884,7 +916,7 @@ def render_scope(server, name: str, notice: str = "",
         cards = ""
         if turn.get("kind") == "samples":
             cards = _sample_cards_html(server, name, quoted,
-                                       samples_by_id, turn)
+                                       samples_by_id, turn, state)
         thread += (f'<div class="msg {role}"><div class="bubble">'
                    f'<p class="msgtext">{text}</p>{cards}</div></div>')
     if not state["started"]:

@@ -88,7 +88,43 @@ by nature, not missing pieces of the app.
 A secondary route, if you prefer it: `python3 -m pip install .` gives
 you a `weaverbird` command the same way.
 
-Then start a project:
+### Your first game, in the app
+
+Run Weaverbird in a folder that will hold your games — that folder
+is the workspace:
+
+```
+mkdir games && cd games
+../dist/weaverbird        # the app opens in your browser
+```
+
+On the dashboard, **New project** starts a game: give it a name,
+check the folder name suggested from it, and — if you already know
+what you want to make — write a starting prompt describing the game
+in plain words. Create, and you land in the scope interview. The
+interview reads your prompt first and fills in everything it states
+(the opening recap says what it took), then asks only about what is
+missing, in small groups. One group shows generated style samples;
+the style you pick is locked into the scope, and can be changed
+later only by choosing Change style on the picked card. When every
+required field is filled, approve the scope on the same page and
+the factory builds from there — skeleton, assets, the game itself,
+tests and the finish check, each with its own card on the project
+page.
+
+Budgets and models live in one global settings file, and the app
+can start that too: **Settings → Create settings file** writes the
+template into the workspace root, and the same page edits the whole
+file — budgets, and the model ladder: provider, model, and the
+*name* of the environment variable that holds each key. Key values
+are never typed into the app. With no settings file the factory
+still works — interviews run deterministically and no model is
+called.
+
+### The same flow, as commands
+
+Everything the app does exists as commands over the same core, for
+scripting:
 
 ```
 ./dist/weaverbird init my-game --with-settings
@@ -109,16 +145,6 @@ stage (`weaverbird pipeline advance my-game`) runs the same builder
 through the pipeline's gates. The finish check marks the
 definition-of-done items the evidence supports; `weaverbird finish
 report my-game` writes the full `FINISH_REPORT.md`.
-
-The commands above are the scripting surface — everything they do,
-the app does too, over the same core. To see the project in the app
-instead, put it in a workspace folder and run Weaverbird there:
-
-```
-mkdir games && mv my-game games/
-cd games
-../dist/weaverbird        # the app opens; my-game is on the dashboard
-```
 
 ### The brain is bring-your-own-key
 

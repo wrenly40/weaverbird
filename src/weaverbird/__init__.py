@@ -45,7 +45,7 @@ platform, built by build-native.sh and the manual workflow;
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

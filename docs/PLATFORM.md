@@ -36,6 +36,47 @@ refused while dirty); other installs are told the exact upgrade
 command. Releases are therefore published with the built executable
 attached.
 
+## First run in the app (v0.9)
+
+The first run needs no terminal. The dashboard's **New project**
+form (name, folder, optional starting prompt) creates the project
+through the same library call as `weaverbird init`
+(`weaverbird.projects`) — one scaffold, two surfaces. The name
+seeds the scope's Title (working) and is kept in
+`.weaverbird/project.json` as the display name the dashboard falls
+back to while the scope title is empty; a starting prompt is stored
+as the scope's Original prompt, so creating with a prompt lands
+straight in the interview, whose prompt-first entry consumes it.
+Validation (folder shape, collisions, reserved names) happens
+before anything is written, and a refused creation leaves no folder
+behind. The Settings page closes the other first-run gap: with no
+workspace-root `global-settings.yaml` it offers **Create settings
+file** (the shipped template, byte-identical to
+`init --with-settings`), and the page edits the whole file —
+budgets and the model ladder, provider / model / base URL /
+`api_key_env` per tier. The app edits the workspace-root file only;
+when a project carries its own settings file the page says that
+project files take precedence for that project. Key values are
+never accepted, displayed or stored — the form takes the *name* of
+each key's environment variable only, and saves validate through
+`settings.py` before anything is written.
+
+Three interview contracts were hardened in the same pass. Surplus
+answers: a message with more answer lines than the pending group
+has open fields applies the first lines positionally and discards
+the rest, quoting the discarded lines back — answers never shift
+silently onto the wrong fields (the deterministic engine, shared
+by the app chat and the CLI interview, enforces this). Style lock:
+once a style sample is chosen, the decision is recorded in the
+scope and every rendering of the samples locks — the chosen card
+shows "Chosen" with a Change style action, other cards lose their
+pick controls, a further pick is refused by the engine, and
+Change style re-opens the choice as the pending turn. Value
+tidying: a prompt value segment cut short by the next field marker
+loses one trailing sentence stop (conservatively — never at the
+end of a prompt, never after "..", never after an abbreviation
+like "A."), and recaps never double sentence punctuation.
+
 ## How the pieces fit
 
 - The library (`src/weaverbird/`) is the core. Every stage works

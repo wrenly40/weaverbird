@@ -123,6 +123,7 @@ def _new_session() -> dict:
         "pending_fields": [],
         "prompt_extracted": False,
         "samples": None,
+        "style_reopen": False,
     }
 
 
@@ -240,6 +241,40 @@ def ensure_samples(project_dir, session: dict) -> list[dict]:
     return samples
 
 
+CHANGE_STYLE_MESSAGE = "change-style"
+
+
+def style_choice(project_dir) -> str:
+    """The style decision currently standing in the scope: the
+    chosen sample's id, "custom" when the style field is filled
+    by anything else (a link the maker pasted, a hand edit), or
+    "" when no choice stands. Derived from the scope itself —
+    the choice is a scope decision, so it survives session
+    resets and app restarts."""
+    try:
+        parsed = _load_scope(project_dir)
+    except InterviewError:
+        return ""
+    for fld in parsed.fields:
+        if fld.name == STYLE_FIELD:
+            if not fld.filled:
+                return ""
+            candidate = fld.value.split(" — ")[0].strip()
+            known = {s["id"] for s in assets_module.style_samples()}
+            return candidate if candidate in known else "custom"
+    return ""
+
+
+def _sentence(text: str) -> str:
+    """Close a sentence: append '.' only when the text does not
+    already end in sentence punctuation (a captured value that
+    ends in '.' must not double it in a recap)."""
+    stripped = text.rstrip()
+    if stripped.endswith((".", "!", "?")):
+        return text
+    return text + "."
+
+
 def apply_style_pick(project_dir, sample: dict) -> dict:
     """Write a style pick into the scope: style lock, palette and
     proportions/shading rules — the sample IS the decision, so
@@ -299,11 +334,17 @@ def _group_question_text(section: str, fields: list,
     return "\n".join(lines)
 
 
-def _present_group(project_dir, session: dict, parsed) -> dict | None:
+def _present_group(project_dir, session: dict, parsed,
+                   only_field=None) -> dict | None:
     """Build (do not append) the assistant turn asking the current
     pending group — or the completion turn. Style groups carry
-    the generated samples."""
-    group = pending_group(parsed)
+    the generated samples. With only_field, present exactly that
+    one field's group (the Change style re-open: the style lock
+    is already filled, so no missing-group logic would ask it)."""
+    if only_field is not None:
+        group = (only_field.section, [only_field])
+    else:
+        group = pending_group(parsed)
     if group is None:
         return {
             "role": "assistant", "kind": "complete", "at": _now(),
@@ -385,16 +426,28 @@ def _apply_fields(project_dir, answers: dict) -> tuple[dict, list]:
     return applied, dropped
 
 
-def _deterministic_apply(project_dir, parsed, text: str) -> tuple[dict, list]:
+def _deterministic_apply(project_dir, parsed,
+                         text: str) -> tuple[dict, list, list]:
     """Parse one message without a model: 'Field: value' lines
-    first, then plain lines walked across the pending group's
-    fields in order — a line lands on the first field whose
-    validation accepts it (so prose never becomes a Dimension,
-    and a bare '2D' never becomes a Genre)."""
+    first, then plain lines for the pending group. Returns
+    (applied, dropped, ignored lines).
+
+    With no more lines than the group has open fields, plain
+    lines are walked across the fields in order — a line lands
+    on the first field whose validation accepts it (so prose
+    never becomes a Dimension, and a bare '2D' never becomes a
+    Genre). With MORE lines than open fields, the walk could
+    silently shift every answer onto the wrong field, so the
+    first lines are applied positionally instead (line i to
+    field i, validation still applied, an unusable line is
+    dropped rather than walked onward) and the surplus lines
+    are returned as ignored, for the interviewer to quote back.
+    """
     scope_file = _scope_file(project_dir)
     empty = {f.name: f for f in parsed.missing_fields}
     answers: dict = {}
     dropped: list[str] = []
+    ignored: list[str] = []
     plain_lines: list[str] = []
     for raw_line in str(text).splitlines():
         line = raw_line.strip()
@@ -419,21 +472,24 @@ def _deterministic_apply(project_dir, parsed, text: str) -> tuple[dict, list]:
     group = pending_group(parsed)
     group_names = [f.name for f in group[1]] if group else []
     remaining = [n for n in group_names if n not in answers]
-    for line in plain_lines:
-        placed = False
-        for name in list(remaining):
+    if len(plain_lines) > len(remaining):
+        ignored.extend(plain_lines[len(remaining):])
+        for line, name in zip(plain_lines[:len(remaining)], remaining):
             canonical = validate_value(name, line)
-            if canonical is not None:
+            if canonical is None:
+                dropped.append(name)
+            else:
                 answers[name] = canonical
-                remaining.remove(name)
-                placed = True
-                break
-        if not placed:
-            # The whole message as one answer to the group's first
-            # still-open free field is the last resort — handled by
-            # the walk above for single lines; extra lines are kept
-            # in the transcript and simply not captured.
-            pass
+    else:
+        for line in plain_lines:
+            for name in list(remaining):
+                canonical = validate_value(name, line)
+                if canonical is not None:
+                    answers[name] = canonical
+                    remaining.remove(name)
+                    break
+            # A line no open field accepts is kept in the
+            # transcript and simply not captured.
     applied: dict = {}
     for name, canonical in answers.items():
         if name == STYLE_FIELD:
@@ -443,7 +499,7 @@ def _deterministic_apply(project_dir, parsed, text: str) -> tuple[dict, list]:
                 continue
         scope_module.set_field_value(scope_file, name, canonical)
         applied[name] = canonical
-    return applied, dropped
+    return applied, dropped, ignored
 
 
 _BRAIN_SYSTEM = (
@@ -510,6 +566,25 @@ def _brain_turn(project_dir, session: dict, parsed, text: str,
 # ---------------------------------------------------------------------------
 # The public engine
 
+_ABBREV_END_RE = re.compile(r"(?:^|\s)[A-Z]\.$")
+
+
+def _tidy_marker_segment(raw: str) -> str:
+    """Tidy a prompt value segment that was cut short by the NEXT
+    field marker: prose like 'Title (working): Star Shepherd.
+    Genre / archetype: …' leaves the sentence's full stop on the
+    captured value. Strip one trailing '.' or ',' — only here,
+    only for marker-terminated segments: never for a segment
+    running to the end of the prompt, never for chat answers,
+    never after '..' and never when the value ends in an
+    abbreviation-like single capital plus stop ('Option A.')."""
+    if raw.endswith("..") or _ABBREV_END_RE.search(raw):
+        return raw
+    if raw.endswith((".", ",")):
+        return raw[:-1].strip()
+    return raw
+
+
 def _prompt_field_lines(parsed, prompt_text: str) -> dict:
     """Deterministic prompt consumption: explicit 'Field: value'
     statements in the starting prompt. The stored prompt is one
@@ -533,8 +608,11 @@ def _prompt_field_lines(parsed, prompt_text: str) -> dict:
     for i, (_start, end, name) in enumerate(markers):
         if name in answers:
             continue
-        stop = markers[i + 1][0] if i + 1 < len(markers) else len(text)
+        terminated = i + 1 < len(markers)
+        stop = markers[i + 1][0] if terminated else len(text)
         raw = text[end:stop].strip().rstrip(";").strip()
+        if terminated:
+            raw = _tidy_marker_segment(raw)
         canonical = validate_value(name, raw)
         if canonical is not None:
             answers[name] = canonical
@@ -566,10 +644,10 @@ def start(project_dir, settings_path=None) -> dict:
         session["prompt_extracted"] = True
         parsed = _load_scope(project)
         if applied:
-            recap = ("From your prompt I filled in: "
-                     + "; ".join(f"{name}: {value}"
-                                 for name, value in applied.items())
-                     + ".")
+            recap = _sentence(
+                "From your prompt I filled in: "
+                + "; ".join(f"{name}: {value}"
+                            for name, value in applied.items()))
             if parsed.is_complete:
                 recap += (" That covers everything the scope "
                           "needs, so there are no questions to "
@@ -593,6 +671,22 @@ def start(project_dir, settings_path=None) -> dict:
     return public_state(project, session)
 
 
+def _is_exact_pick(text: str) -> bool:
+    """True when the message is exactly a style sample's id or
+    name — what a stale Pick button posts. Deliberately narrow:
+    an ordinary answer that merely mentions a style word ('warm
+    chiptune' for the audio mood) is a normal answer, never a
+    refused pick."""
+    cleaned = str(text or "").strip().lower()
+    if not cleaned:
+        return False
+    for sample in assets_module.style_samples():
+        if cleaned == sample["id"] \
+                or cleaned == sample["name"].lower():
+            return True
+    return False
+
+
 def respond(project_dir, text: str, settings_path=None,
             reporter=None) -> dict:
     """One conversational turn: record the maker's message, apply
@@ -601,13 +695,21 @@ def respond(project_dir, text: str, settings_path=None,
     the captures, and ask the next group. An empty message just
     (re)presents the current state — it is how the app's Begin
     button and a bare CLI start work. Returns the public state,
-    with this turn's 'applied' and 'dropped' included."""
+    with this turn's 'applied', 'dropped' and 'ignored' (surplus
+    answer lines, set aside unshifted) included.
+
+    The style decision locks once made: a pick is honoured only
+    while the style question is the pending turn (or the choice
+    has been re-opened with change-style); an exact pick arriving
+    after the choice stands is refused politely and changes
+    nothing."""
     project = Path(project_dir)
     start(project, settings_path=settings_path)
     session = load_session(project) or _new_session()
     text = (text or "").strip()
     applied: dict = {}
     dropped: list[str] = []
+    ignored: list[str] = []
     next_message = ""
     brain_used = False
     if text:
@@ -616,17 +718,88 @@ def respond(project_dir, text: str, settings_path=None,
             "text": text, "fields": [],
         })
         parsed = _load_scope(project)
+        choice = style_choice(project)
+
+        def finish(extra: dict | None = None) -> dict:
+            out = public_state(project,
+                               load_session(project) or session)
+            out["applied"] = applied
+            out["dropped"] = dropped
+            out["ignored"] = ignored
+            out["brain_used"] = brain_used
+            if extra:
+                out.update(extra)
+            return out
+
+        if text == CHANGE_STYLE_MESSAGE:
+            if choice:
+                # Re-open the style decision as the current turn:
+                # present the samples for the (filled) style field
+                # itself, and let the next pick land.
+                session["style_reopen"] = True
+                _append_turn(session, {
+                    "role": "assistant", "kind": "info", "at": _now(),
+                    "text": (
+                        "Of course — the style choice is open "
+                        "again. Pick the sample that should stand; "
+                        "picking replaces the current style lock, "
+                        "palette and shading rules."),
+                    "fields": [],
+                })
+                style_field = next(
+                    (f for f in parsed.fields
+                     if f.name == STYLE_FIELD), None)
+                if style_field is not None:
+                    turn = _present_group(
+                        project, session, parsed,
+                        only_field=style_field)
+                    if turn is not None:
+                        _append_turn(session, turn)
+                _save_session(project, session)
+                return finish({"style_reopened": True})
+            _append_turn(session, {
+                "role": "assistant", "kind": "info", "at": _now(),
+                "text": (
+                    "No style has been chosen yet, so there is "
+                    "nothing to change — the samples arrive with "
+                    "the style questions below."),
+                "fields": [],
+            })
+            _maybe_present(session, project, parsed)
+            _save_session(project, session)
+            return finish()
+
         # An explicit style pick is a decision, not an extraction —
         # honoured in both modes before anything else runs, but
         # only while the style lock is the pending question (so an
         # answer like "warm chiptune" for the audio mood can never
         # be mistaken for a re-pick).
+        pending_names = list(session.get("pending_fields") or [])
+        if not pending_names:
+            group = pending_group(parsed)
+            pending_names = ([f.name for f in group[1]]
+                             if group else [])
         sample = None
-        group = pending_group(parsed)
-        if group and STYLE_FIELD in [f.name for f in group[1]]:
+        if STYLE_FIELD in pending_names or session.get("style_reopen"):
             sample = style_pick_from_text(text)
         if sample is not None:
             applied = apply_style_pick(project, sample)
+            session["style_reopen"] = False
+        elif choice and _is_exact_pick(text):
+            # A pick for a decision that already stands — a stale
+            # page or a double submit. Refused: nothing changes.
+            _append_turn(session, {
+                "role": "assistant", "kind": "info", "at": _now(),
+                "text": (
+                    "The style is already chosen and locked, so I "
+                    "have not changed it. To pick a different one, "
+                    "use Change style on the chosen sample card "
+                    "(or send 'change-style')."),
+                "fields": [],
+            })
+            _maybe_present(session, project, parsed)
+            _save_session(project, session)
+            return finish({"style_refused": True})
         else:
             outcome = _brain_turn(project, session, parsed, text,
                                   settings_path=settings_path)
@@ -635,21 +808,32 @@ def respond(project_dir, text: str, settings_path=None,
                 brain_used = True
             else:
                 parsed = _load_scope(project)
-                applied, dropped = _deterministic_apply(
+                applied, dropped, ignored = _deterministic_apply(
                     project, parsed, text)
         if reporter is not None:
             reporter(f"Interview turn recorded "
                      f"({len(applied)} field(s) captured)")
         bits = []
         if applied:
-            bits.append("Got it — " + "; ".join(
-                f"{name}: {value}" for name, value in applied.items())
-                + ".")
+            bits.append(_sentence(
+                "Got it — " + "; ".join(
+                    f"{name}: {value}"
+                    for name, value in applied.items())))
         if dropped:
             bits.append(
                 "I could not use the answer for: "
                 + ", ".join(sorted(set(dropped)))
                 + " — I will ask about those again below.")
+        if ignored:
+            bits.append(
+                "I had more answers than questions in that group, "
+                "so I set "
+                + ("this extra line" if len(ignored) == 1
+                   else "these extra lines")
+                + " aside, unused: "
+                + "; ".join(f'"{line}"' for line in ignored)
+                + ". Nothing was shifted — each answer above went "
+                "to its own question.")
         if bits or next_message:
             _append_turn(session, {
                 "role": "assistant", "kind": "reflection",
@@ -665,6 +849,7 @@ def respond(project_dir, text: str, settings_path=None,
     out = public_state(project, load_session(project) or session)
     out["applied"] = applied
     out["dropped"] = dropped
+    out["ignored"] = ignored
     out["brain_used"] = brain_used
     return out
 
@@ -706,4 +891,6 @@ def public_state(project_dir, session: dict | None = None) -> dict:
         "samples": session.get("samples"),
         "pending_fields": list(session.get("pending_fields", [])),
         "started": bool(session.get("turns")),
+        "style_chosen": style_choice(project),
+        "style_reopen": bool(session.get("style_reopen")),
     }
