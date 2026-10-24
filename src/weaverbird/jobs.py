@@ -45,6 +45,7 @@ and tests all start jobs the same way: a runner takes a
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -92,6 +93,22 @@ def jobs_dir(workspace) -> Path:
 # ---------------------------------------------------------------------------
 # Persistence
 
+# The factory's own job-id shape: one filename-safe token (the
+# ids submit() mints look like job-20261024120000-abcdef). Anything
+# carrying a path separator, a parent reference or a NUL is not a
+# job id — before 0.13.0 an id like ../../canary was joined straight
+# onto the store directory and the app served arbitrary *.json
+# files outside it (security finding F4).
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$")
+
+
+def valid_job_id(job_id) -> bool:
+    """True when *job_id* has the factory's own id shape — a
+    single filename-safe token, never a path."""
+    return isinstance(job_id, str) and bool(_JOB_ID_RE.match(job_id)) \
+        and ".." not in job_id
+
+
 class JobStore:
     """One JSON file per job under the workspace's app folder."""
 
@@ -100,7 +117,12 @@ class JobStore:
         self.dir = jobs_dir(workspace)
 
     def path_for(self, job_id: str) -> Path:
-        return self.dir / f"{job_id}.json"
+        if not valid_job_id(job_id):
+            raise ValueError(f"Not a job id: {job_id!r}")
+        path = (self.dir / f"{job_id}.json").resolve()
+        if path.parent != self.dir.resolve():
+            raise ValueError(f"Not a job id: {job_id!r}")
+        return path
 
     def save(self, job: dict) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +132,10 @@ class JobStore:
         tmp.replace(path)
 
     def load(self, job_id: str) -> dict | None:
-        path = self.path_for(job_id)
+        try:
+            path = self.path_for(job_id)
+        except ValueError:
+            return None
         if not path.exists():
             return None
         try:

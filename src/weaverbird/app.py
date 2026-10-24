@@ -370,22 +370,7 @@ def render_new_project(server, notice: str = "",
   <label for="np_prompt">Starting prompt <span class="hint">(optional)</span></label>
   <textarea id="np_prompt" name="prompt" rows="4" placeholder="Describe the game in plain words — the interview reads this first and only asks about what is missing…">{_esc(values.get('prompt', ''))}</textarea>
   <div class="actions"><button class="btn" type="submit">Create project</button></div>
-</form></div>
-<script>
-(function () {{
-  var name = document.getElementById("np_name");
-  var folder = document.getElementById("np_folder");
-  var touched = false;
-  folder.addEventListener("input", function () {{ touched = true; }});
-  function slug(text) {{
-    return text.toLowerCase().replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }}
-  name.addEventListener("input", function () {{
-    if (!touched) {{ folder.value = slug(name.value); }}
-  }});
-}})();
-</script>"""
+</form></div>"""
     return _layout("New project", "projects", body)
 
 
@@ -1736,8 +1721,30 @@ def render_assets(server, name: str, notice: str = "",
 # ---------------------------------------------------------------------------
 # The server
 
+# The only hostnames this app serves: it binds 127.0.0.1 and is a
+# single-maker local tool, so a request naming any other host is a
+# DNS-rebinding attempt, and a state-changing request carrying a
+# foreign Origin/Referer (or Sec-Fetch-Site: cross-site) is a
+# cross-site form attack (security findings F1/F7, 0.13.0). Local
+# tooling that sends no Origin at all — curl, the CLI, scripts —
+# is unaffected: the defence targets browser-originated requests.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+# The tightest policy that fits how the app is actually built:
+# everything is served by the app itself (its own stylesheet and
+# app.js — no inline scripts since 0.13.0), pages use inline style
+# ATTRIBUTES throughout, and nothing may frame the app.
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self'; "
+    "media-src 'self'; font-src 'self'; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
+
 class _Handler(BaseHTTPRequestHandler):
-    server_version = f"Weaverbird/{__version__}"
+    # The banner names the tool only — never the version (F7).
+    server_version = "Weaverbird"
+    sys_version = ""
     protocol_version = "HTTP/1.1"
 
     # -- plumbing ------------------------------------------------------
@@ -1748,11 +1755,19 @@ class _Handler(BaseHTTPRequestHandler):
     def app(self) -> "WeaverbirdAppServer":
         return self.server  # type: ignore[return-value]
 
+    def _send_security_headers(self) -> None:
+        self.send_header("Content-Security-Policy",
+                         _CONTENT_SECURITY_POLICY)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+
     def _send_html(self, text: str, status: int = 200) -> None:
         data = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -1760,6 +1775,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(data)
 
@@ -1768,8 +1784,68 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(data)
+
+    # -- request defences (F1) --------------------------------------
+    def _bound_port(self) -> int:
+        return int(self.server.server_address[1])
+
+    def _authority_is_own(self) -> bool:
+        """The Host header, when present, must name one of the
+        loopback hosts on the port this server is bound to."""
+        host = self.headers.get("Host")
+        if host is None:
+            return True  # non-browser tooling need not send one
+        try:
+            parsed = urllib.parse.urlparse(f"//{host}")
+            port = parsed.port
+        except ValueError:
+            return False
+        if (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+            return False
+        return port is None or port == self._bound_port()
+
+    def _origin_is_own(self) -> bool:
+        """A browser-originated request must come from this app's
+        own origin. Requests with no Origin/Referer at all are
+        local tooling (curl, the CLI) and pass."""
+        if (self.headers.get("Sec-Fetch-Site") or "").strip().lower() \
+                == "cross-site":
+            return False
+        for header in ("Origin", "Referer"):
+            value = self.headers.get(header)
+            if not value:
+                continue
+            try:
+                parsed = urllib.parse.urlparse(value)
+                port = parsed.port
+            except ValueError:
+                return False
+            if (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+                return False
+            if port is not None and port != self._bound_port():
+                return False
+        return True
+
+    def _request_allowed(self, *, state_changing: bool) -> bool:
+        """Run the F1 defences; on refusal, answer 403 plainly and
+        return False — nothing has been read or executed yet."""
+        if not self._authority_is_own():
+            self._fail_page(
+                "This request names a host the Weaverbird app does "
+                "not serve — it only answers on its own loopback "
+                "address. Nothing was done.", 403)
+            return False
+        if state_changing and not self._origin_is_own():
+            self._fail_page(
+                "This request came from a different site, so the "
+                "app did not act on it. Weaverbird only acts on "
+                "requests from its own pages. Nothing was done.",
+                403)
+            return False
+        return True
 
     def _form(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -1783,6 +1859,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- routing ---------------------------------------------------------
     def do_GET(self):  # noqa: N802 (stdlib handler name)
+        if not self._request_allowed(state_changing=False):
+            return
         parsed = urllib.parse.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
         query = urllib.parse.parse_qs(parsed.query)
@@ -1917,6 +1995,8 @@ class _Handler(BaseHTTPRequestHandler):
         return self._send_bytes(candidate.read_bytes(), "image/svg+xml")
 
     def do_POST(self):  # noqa: N802
+        if not self._request_allowed(state_changing=True):
+            return
         parsed = urllib.parse.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
         try:
@@ -2079,6 +2159,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(303)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
+        self._send_security_headers()
         self.end_headers()
 
     def _post_job_action(self, name: str, action: str,

@@ -117,6 +117,22 @@ function followJobCard(card) {
 
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("[data-job-id]").forEach(followJobCard);
+  // New project form: fill the folder name in from the project
+  // name until the maker types a folder name of their own. (This
+  // lived in an inline <script> until 0.13.0; it moved here so
+  // the Content-Security-Policy needs no inline scripts.)
+  var npName = document.getElementById("np_name");
+  var npFolder = document.getElementById("np_folder");
+  if (npName && npFolder) {
+    var touched = false;
+    npFolder.addEventListener("input", function () { touched = true; });
+    npName.addEventListener("input", function () {
+      if (!touched) {
+        npFolder.value = npName.value.toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      }
+    });
+  }
   // Scope interview: the thread is its own scroll box — land on
   // the latest message on every load (the flow reloads the page
   // after each posted answer, so this also re-pins after a turn).
