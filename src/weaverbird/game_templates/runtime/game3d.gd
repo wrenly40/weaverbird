@@ -588,6 +588,7 @@ func _win() -> void:
 	var totals := _score_totals()
 	SettingsStore.record_run(true, int(totals[0]))
 	RunInfo.result = "win"
+	RunInfo.deaths = _deaths
 	RunInfo.targets_collected = int(totals[0])
 	RunInfo.targets_total = int(totals[1])
 	RunInfo.targets_label = collectible_label \
@@ -605,6 +606,7 @@ func _lose(reason: String) -> void:
 	var totals := _score_totals()
 	SettingsStore.record_run(false, int(totals[0]))
 	RunInfo.result = "lose"
+	RunInfo.deaths = _deaths
 	RunInfo.targets_collected = int(totals[0])
 	RunInfo.targets_total = int(totals[1])
 	RunInfo.targets_label = collectible_label \

@@ -361,6 +361,34 @@ like "A."), and recaps never double sentence punctuation.
   new edit types.
 - Future: longer scenario matrices, per-level coverage reports.
   It plugs into: godot module, pipeline state, ledger.
+- Reliability note (v0.12): the 3D win proof used to fail
+  intermittently on unchanged builds — the competent bot dead,
+  zero errors. Root cause, found by reproduction (3 losses in
+  12 runs) and instrumentation: the game itself is
+  deterministic (hazards, timer and player all advance in
+  physics ticks), but the bot steers from render frames, and
+  two of its habits turned frame timing into luck. Its
+  obstacle detour REPLACED the steering direction wholesale,
+  discarding the hazard-avoidance push for the detour's whole
+  0.8s — the bot regularly wedged and detoured near obstacles
+  (stuck time up to 0.56s even in winning runs), and a patrol
+  arriving during a blind detour was a death decided by
+  sub-step alignment. And its stuck test compared one frame's
+  movement to a fixed distance, so what counted as "stuck"
+  changed with the frame rate. Fixed in the bot: the hazard
+  push is accumulated separately and folded in after the
+  detour, a hazard at critical range steers the bot straight
+  away regardless of route, and stuck is measured as
+  displacement over a half-second window. The first-time bot
+  gained the matching fix for its round-2 stall (a target
+  centred behind a block face is a stable trap for a bot that
+  only ever re-aims — the old bot burned a full 60s round
+  without reaching its first objective; it now notices a
+  no-movement window and shuffles sideways, as a person
+  would: same trap, first objective in 4.1s, round won in
+  9.2s). Both bots also read the run's true death total from
+  RunInfo — the final death lands after their last sample of
+  the game scene, and lost runs used to report zero deaths.
 
 ### 6. AI playtesting ("real" testing)
 - Inputs: a build that passed headless testing.
