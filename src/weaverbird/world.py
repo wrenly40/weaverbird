@@ -438,6 +438,8 @@ def world_from_config(preset: str, config: dict,
                 "hazards": hazards,
                 "layout": layout,
             })
+    _attach_collectible_variants(
+        units, int(config.get("world_seed", 1234)))
     return {
         "preset": preset,
         "composition": composition,
@@ -691,6 +693,33 @@ def _plan_puzzles(plan: dict, config: dict) -> list[dict]:
             for index, puzzle in enumerate(puzzles)]
 
 
+def _attach_collectible_variants(units: list[dict],
+                                 seed: int) -> None:
+    """Per-instance collectible variation, recorded in the
+    world data: each collectible gets a small deterministic
+    tint (0.92–1.08) and scale (0.90–1.10) drawn from a stream
+    seeded by the world's seed, the unit index and the instance
+    index — so a field of collectibles does not read as stamped
+    copies, the variation is identical in every build, and the
+    runtime applies exactly what the data says."""
+    import random
+
+    for unit in units:
+        collectibles = unit.get("collectibles") or []
+        if not collectibles:
+            continue
+        variants = []
+        for i in range(len(collectibles)):
+            rng = random.Random(
+                f"collectible-variant:{seed}:"
+                f"{int(unit.get('index', 0))}:{i}")
+            variants.append({
+                "tint": round(rng.uniform(0.92, 1.08), 3),
+                "scale": round(rng.uniform(0.90, 1.10), 3),
+            })
+        unit["collectible_variants"] = variants
+
+
 def plan_entity_issues(plan: dict) -> list[dict]:
     """The plan's declared entities must be able to serve its
     objective and fail rules — a collect plan with no collectible
@@ -740,6 +769,8 @@ def world_from_plan(plan: dict, config: dict | None = None,
         units = _plan_puzzles(plan, config)
     else:
         units = []
+    _attach_collectible_variants(
+        units, int(plan.get("numbers", {}).get("world_seed", 0)))
     return {
         "plan": plan,
         "entity_kinds": plan_module.entity_kinds(plan),

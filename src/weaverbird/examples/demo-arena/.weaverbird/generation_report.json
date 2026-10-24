@@ -1,6 +1,6 @@
 {
   "stage": "build",
-  "built_at": "2026-10-24T00:40:53+00:00",
+  "built_at": "2026-10-24T04:38:56+00:00",
   "movement": "top_down_2d",
   "objective": "collect",
   "plan": {
@@ -160,36 +160,36 @@
     "godot_version": "4.7.2.stable.official.ed1daf0bf",
     "runs": [
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --import",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /home/hatch/workspace/.pass12/demo_regen/demo-arena/game --import",
         "returncode": 0,
-        "duration_seconds": 7.31,
+        "duration_seconds": 5.56,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "import"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --quit-after 45",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /home/hatch/workspace/.pass12/demo_regen/demo-arena/game --quit-after 45",
         "returncode": 0,
-        "duration_seconds": 0.68,
+        "duration_seconds": 0.61,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "main scene"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game res://scenes/game.tscn --quit-after 45",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /home/hatch/workspace/.pass12/demo_regen/demo-arena/game res://scenes/game.tscn --quit-after 45",
         "returncode": 0,
-        "duration_seconds": 0.89,
+        "duration_seconds": 0.95,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "game scene"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --script smoke/smoke.gd",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /home/hatch/workspace/.pass12/demo_regen/demo-arena/game --script smoke/smoke.gd",
         "returncode": 0,
-        "duration_seconds": 16.57,
+        "duration_seconds": 16.53,
         "errors": [],
         "ok": true,
         "smoke_pass": true,
@@ -198,5 +198,5 @@
     ]
   },
   "known_good_tag": "known-good/build",
-  "commit": "e461b2a970ec0b6ef0c9a9ffd3abbdd16ece1b68"
+  "commit": "f9bfe8ebe08cabfb92ae314b053268899b36bafa"
 }

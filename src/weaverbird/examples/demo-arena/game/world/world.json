@@ -120,7 +120,33 @@
         "pattern": "zigzag",
         "seed": 2028044504,
         "fallbacks": []
-      }
+      },
+      "collectible_variants": [
+        {
+          "tint": 0.929,
+          "scale": 1.061
+        },
+        {
+          "tint": 1.079,
+          "scale": 0.994
+        },
+        {
+          "tint": 1.068,
+          "scale": 1.057
+        },
+        {
+          "tint": 1.0,
+          "scale": 1.013
+        },
+        {
+          "tint": 0.943,
+          "scale": 0.982
+        },
+        {
+          "tint": 0.92,
+          "scale": 0.991
+        }
+      ]
     },
     {
       "index": 1,
@@ -193,7 +219,33 @@
         "pattern": "ring",
         "seed": 2028044504,
         "fallbacks": []
-      }
+      },
+      "collectible_variants": [
+        {
+          "tint": 0.962,
+          "scale": 0.924
+        },
+        {
+          "tint": 1.035,
+          "scale": 0.913
+        },
+        {
+          "tint": 0.931,
+          "scale": 0.956
+        },
+        {
+          "tint": 1.062,
+          "scale": 1.001
+        },
+        {
+          "tint": 1.041,
+          "scale": 0.91
+        },
+        {
+          "tint": 0.991,
+          "scale": 0.915
+        }
+      ]
     },
     {
       "index": 2,
@@ -274,7 +326,33 @@
         "pattern": "arc",
         "seed": 2028044504,
         "fallbacks": []
-      }
+      },
+      "collectible_variants": [
+        {
+          "tint": 1.055,
+          "scale": 0.993
+        },
+        {
+          "tint": 0.991,
+          "scale": 0.992
+        },
+        {
+          "tint": 0.961,
+          "scale": 1.066
+        },
+        {
+          "tint": 0.998,
+          "scale": 0.954
+        },
+        {
+          "tint": 1.078,
+          "scale": 1.081
+        },
+        {
+          "tint": 0.983,
+          "scale": 0.941
+        }
+      ]
     }
   ]
 }

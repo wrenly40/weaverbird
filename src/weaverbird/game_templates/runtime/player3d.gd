@@ -30,6 +30,34 @@ func _ready() -> void:
 	mesh.mesh = capsule
 	mesh.position = Vector3(0, 0.75, 0)
 	add_child(mesh)
+	# The visor: a dark band around the capsule at eye height
+	# with a bright slit on the facing side (-Z, the way "up"
+	# on the stick points), so the player's facing reads at a
+	# glance — the 3D counterpart of the sprite's visor.
+	var band := MeshInstance3D.new()
+	var band_mesh := CylinderMesh.new()
+	band_mesh.top_radius = 0.44
+	band_mesh.bottom_radius = 0.44
+	band_mesh.height = 0.20
+	var band_mat := StandardMaterial3D.new()
+	band_mat.albedo_color = Color(accent_hex).darkened(0.55)
+	band_mat.roughness = 0.4
+	band_mesh.material = band_mat
+	band.mesh = band_mesh
+	band.position = Vector3(0, 1.04, 0)
+	add_child(band)
+	var slit := MeshInstance3D.new()
+	var slit_mesh := BoxMesh.new()
+	slit_mesh.size = Vector3(0.36, 0.07, 0.05)
+	var slit_mat := StandardMaterial3D.new()
+	slit_mat.albedo_color = Color(1, 1, 1)
+	slit_mat.emission_enabled = true
+	slit_mat.emission = Color(1, 1, 1)
+	slit_mat.emission_energy_multiplier = 0.7
+	slit_mesh.material = slit_mat
+	slit.mesh = slit_mesh
+	slit.position = Vector3(0, 1.04, -0.43)
+	add_child(slit)
 	var shape := CollisionShape3D.new()
 	var body := CapsuleShape3D.new()
 	body.radius = 0.42

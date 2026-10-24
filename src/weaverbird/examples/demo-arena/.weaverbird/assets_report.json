@@ -1,6 +1,6 @@
 {
   "stage": "assets",
-  "generated_at": "2026-10-24T00:40:53+00:00",
+  "generated_at": "2026-10-24T04:38:56+00:00",
   "dimension": "2d",
   "requests": {
     "sprites": [
@@ -27,6 +27,27 @@
     "hazard_hex": "#F28B8B",
     "platform_hex": "#B8A99A",
     "crate_hex": "#D9B98A"
+  },
+  "style_traits": {
+    "outline_width": 2.0,
+    "outline_color": "#8A7F72",
+    "shading": "tint",
+    "glow": false,
+    "pattern": "grid"
+  },
+  "audio_mood": {
+    "name": "calm",
+    "scale_name": "major pentatonic",
+    "scale": [
+      0,
+      2,
+      4,
+      7,
+      9
+    ],
+    "root": 130.81,
+    "note_s": 0.22,
+    "pad_root": 65.41
   },
   "files": [
     "game/assets/audio/click.wav",

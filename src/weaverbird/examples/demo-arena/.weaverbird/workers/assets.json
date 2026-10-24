@@ -1,7 +1,7 @@
 {
   "worker": "assets",
-  "ran_at": "2026-10-24T00:40:53+00:00",
-  "inputs_hash": "d4602d93acd98205753a8246",
+  "ran_at": "2026-10-24T04:38:56+00:00",
+  "inputs_hash": "e268f72efd05227a2440a76e",
   "ok": true,
   "artifacts": [
     ".weaverbird/assets_report.json"

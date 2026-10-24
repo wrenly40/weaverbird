@@ -40,6 +40,7 @@ var orbs: Array = []
 var hazards: Array = []
 var obstacle_positions: Array = []
 var goal_node: Area3D = null
+var goal_mesh: MeshInstance3D = null
 var spawn_point := Vector3(0, 0.6, -9)
 var round_root: Node3D = null
 var hud_label: Label
@@ -113,6 +114,28 @@ func _mat(hex_value, roughness := 0.85) -> StandardMaterial3D:
 	return material
 
 
+func _tinted(base: Color, tint: float) -> Color:
+	# A per-instance tint from the world data: >1 lightens
+	# toward white, <1 deepens toward black.
+	if tint >= 1.0:
+		return base.lerp(Color(1, 1, 1), tint - 1.0)
+	return base.lerp(Color(0, 0, 0), 1.0 - tint)
+
+
+func _mat_emissive(hex_value, tint := 1.0, roughness := 0.35,
+		energy := 0.55) -> StandardMaterial3D:
+	# A self-lit material: collectibles glow in their own
+	# colour, so they read as the goal from across the arena.
+	var material := StandardMaterial3D.new()
+	var colour := _tinted(Color(String(hex_value)), tint)
+	material.albedo_color = colour
+	material.roughness = roughness
+	material.emission_enabled = true
+	material.emission = colour
+	material.emission_energy_multiplier = energy
+	return material
+
+
 func _setup_audio() -> void:
 	for sfx_name in ["click", "collect", "hurt", "win", "lose"]:
 		var sfx_player := WbAssets.make_sfx_player(self, sfx_name + ".wav")
@@ -172,6 +195,7 @@ func _start_round(index: int) -> void:
 	hazards.clear()
 	obstacle_positions.clear()
 	goal_node = null
+	goal_mesh = null
 	collected = 0
 	var units: Array = world.get("units", [])
 	if index >= units.size():
@@ -229,8 +253,18 @@ func _start_round(index: int) -> void:
 		round_root.add_child(body)
 		obstacle_positions.append([pos[0], pos[1],
 			maxf(size[0], size[1]) / 2.0])
-	# Collectible orbs.
-	for point in unit.get("collectibles", []):
+	# Collectible orbs: a glowing sphere with a brighter inner
+	# core. Each instance applies the variation the world data
+	# recorded for it (tint + scale, deterministic), and its
+	# roughness steps through a fixed spread, so no two orbs
+	# are quite the same object.
+	var variants: Array = unit.get("collectible_variants", [])
+	var target_hex := String(palette.get("target_hex", "#2FBF71"))
+	for orb_index in range((unit.get("collectibles", []) as Array).size()):
+		var point: Array = unit["collectibles"][orb_index]
+		var variant: Dictionary = variants[orb_index] \
+			if orb_index < variants.size() else {}
+		var tint := float(variant.get("tint", 1.0))
 		var orb := Area3D.new()
 		orb.add_to_group("collectibles")
 		orb.add_to_group("targets")
@@ -238,14 +272,25 @@ func _start_round(index: int) -> void:
 		var sphere := SphereMesh.new()
 		sphere.radius = 0.45
 		sphere.height = 0.9
-		sphere.material = _mat(palette.get("target_hex", "#2FBF71"), 0.35)
+		sphere.material = _mat_emissive(
+			target_hex, tint,
+			0.25 + 0.02 * float((orb_index * 7) % 11), 0.55)
 		mesh.mesh = sphere
+		var core := MeshInstance3D.new()
+		var core_sphere := SphereMesh.new()
+		core_sphere.radius = 0.20
+		core_sphere.height = 0.4
+		core_sphere.material = _mat_emissive(
+			target_hex, tint * 1.3, 0.2, 1.5)
+		core.mesh = core_sphere
 		var shape := CollisionShape3D.new()
 		var ball := SphereShape3D.new()
 		ball.radius = 0.7
 		shape.shape = ball
 		orb.add_child(mesh)
+		orb.add_child(core)
 		orb.add_child(shape)
+		orb.scale = Vector3.ONE * float(variant.get("scale", 1.0))
 		orb.position = Vector3(point[0], 0.8, point[1])
 		orb.body_entered.connect(_on_orb_body.bind(orb))
 		round_root.add_child(orb)
@@ -275,6 +320,7 @@ func _start_round(index: int) -> void:
 		goal.body_entered.connect(_on_goal_body)
 		round_root.add_child(goal)
 		goal_node = goal
+		goal_mesh = mesh
 		_refresh_goal_lock()
 	# Hazards, moving per the behaviour the plan assigned.
 	for hazard_data in unit.get("hazards", []):
@@ -286,16 +332,37 @@ func _start_round(index: int) -> void:
 			continue
 		var hazard := Area3D.new()
 		hazard.add_to_group("hazards")
-		var mesh := MeshInstance3D.new()
-		var prism := PrismMesh.new()
-		prism.size = Vector3(1.1, 1.1, 1.1)
-		prism.material = _mat(palette.get("hazard_hex", "#E63B3B"), 0.5)
-		mesh.mesh = prism
+		# A spiked form — cones radiating from a core — so the
+		# hazard's menace reads in silhouette, the way the 2D
+		# sprite's spikes do.
+		var hazard_mat := _mat(palette.get("hazard_hex", "#E63B3B"), 0.5)
+		var core := MeshInstance3D.new()
+		var core_sphere := SphereMesh.new()
+		core_sphere.radius = 0.5
+		core_sphere.height = 1.0
+		core_sphere.material = hazard_mat
+		core.mesh = core_sphere
+		hazard.add_child(core)
+		for k in range(7):
+			var spike := MeshInstance3D.new()
+			var cone := CylinderMesh.new()
+			cone.top_radius = 0.0
+			cone.bottom_radius = 0.20
+			cone.height = 0.62
+			cone.material = hazard_mat
+			spike.mesh = cone
+			if k < 6:
+				var ang := TAU * float(k) / 6.0
+				var dir := Vector3(cos(ang), 0, sin(ang))
+				spike.position = dir * 0.58
+				spike.quaternion = Quaternion(Vector3.UP, dir)
+			else:
+				spike.position = Vector3(0, 0.62, 0)
+			hazard.add_child(spike)
 		var shape := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = Vector3(1.1, 1.1, 1.1)
 		shape.shape = box
-		hazard.add_child(mesh)
 		hazard.add_child(shape)
 		hazard.position = Vector3(start[0], 0.7, start[1])
 		hazard.set_meta("behaviour",
@@ -334,7 +401,10 @@ func _refresh_goal_lock() -> void:
 	if goal_node == null:
 		return
 	var locked := objective == "collect" and collected < round_total
-	goal_node.modulate = Color(1, 1, 1, 0.35) if locked else Color.WHITE
+	# Node3D has no modulate (that is a 2D/CanvasItem property);
+	# the 3D analogue is the mesh's transparency.
+	if goal_mesh != null:
+		goal_mesh.transparency = 0.65 if locked else 0.0
 
 
 func _build_hud() -> void:

@@ -210,6 +210,28 @@ like "A."), and recaps never double sentence punctuation.
   opportunistically, as before); bespoke games get exactly
   their derived requests. The assets report records the
   requests and what they were based on (world or plan).
+- Built in v0.12: the style lock is obeyed, not just described.
+  Each style sample carries machine-readable traits (outline
+  width + colour or none, shading model, glow, background
+  pattern family) and the sprite makers follow them: sprites
+  are authored on a 4x canvas and downscaled by the renderer,
+  with two-tone shading, a glow halo and sparkles on
+  collectibles, spikes and angry eyes on hazards, and a visor
+  with a facing slit on the player. The icon composes the
+  game's own player and collectible sprites on a palette
+  ground; the background is a palette ground with the style's
+  pattern (dots, stars or grid). Collectibles vary slightly
+  per instance — a deterministic tint and scale recorded in
+  the world data. In 3D, collectibles are emissive spheres
+  with a brighter core, hazards are spiked forms, the player
+  capsule wears a visor band, and roughness varies per
+  instance. Audio is shaped synthesis in the scope's audio
+  mood: ADSR envelopes throughout, a two-note collect chime, a
+  noise-and-thump hurt, a four-note win jingle and a
+  descending lose pair written in the mood's pentatonic scale
+  and key, and a quiet detuned ambient pad loop; the mood and
+  scale are recorded in the assets report and the audio
+  provenance notes.
 - Future: model-provided art through connectors with the user's own
   keys, richer palettes, 3D assets. It plugs into:
   provenance, connectors (asset providers), ledger.

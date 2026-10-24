@@ -1,6 +1,6 @@
 {
   "stage": "headless_test",
-  "ran_at": "2026-10-24T00:42:14+00:00",
+  "ran_at": "2026-10-24T04:40:19+00:00",
   "godot_version": "4.7.2.stable.official.ed1daf0bf",
   "movement": "top_down_2d",
   "objective": "collect",
@@ -11,7 +11,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 6.31,
+      "duration_s": 4.7,
       "details": {}
     },
     {
@@ -19,7 +19,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 0.74,
+      "duration_s": 0.62,
       "details": {}
     },
     {
@@ -27,7 +27,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 0.71,
+      "duration_s": 0.67,
       "details": {}
     },
     {
@@ -37,15 +37,15 @@
       "mode": "win",
       "ok": true,
       "errors": [],
-      "duration_s": 16.39,
+      "duration_s": 16.45,
       "details": {
         "deaths": 0,
         "findings": [],
-        "fps_avg": 144.4,
-        "load_ms": 332,
+        "fps_avg": 143.9,
+        "load_ms": 355,
         "reason": "",
         "recoveries": 0,
-        "time_s": 15.39,
+        "time_s": 15.41,
         "units": [
           {
             "completed": true,
@@ -56,13 +56,13 @@
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 2.94,
+            "time_s": 2.93,
             "unit": 2
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 5.06,
+            "time_s": 5.07,
             "unit": 3
           }
         ]
@@ -90,15 +90,14 @@
       "mode": "fuzz",
       "ok": true,
       "errors": [],
-      "duration_s": 25.76,
+      "duration_s": 30.97,
       "details": {
         "deaths": 0,
         "findings": [
-          "fuzzing reached the game over screen",
           "pause overlay opened and closed under fuzz input"
         ],
         "reason": "",
-        "time_s": 24.83
+        "time_s": 30.0
       }
     },
     {
@@ -108,9 +107,9 @@
       "mode": "explore",
       "ok": true,
       "errors": [],
-      "duration_s": 3.82,
+      "duration_s": 3.83,
       "details": {
-        "deaths": 0,
+        "deaths": 1,
         "findings": [],
         "finished": false,
         "first_objective_s": 1.52,
@@ -120,7 +119,7 @@
         "units": [
           {
             "completed": false,
-            "deaths": 0,
+            "deaths": 1,
             "time_s": 2.71,
             "unit": 1
           }
@@ -135,8 +134,8 @@
   "win_proven": true,
   "lose_proven": true,
   "performance": {
-    "avg_fps": 144.4,
-    "load_time_s": 0.332,
+    "avg_fps": 143.9,
+    "load_time_s": 0.355,
     "target_fps": 30,
     "ok": true
   },
@@ -145,11 +144,11 @@
       "win": {
         "deaths": 0,
         "findings": [],
-        "fps_avg": 144.4,
-        "load_ms": 332,
+        "fps_avg": 143.9,
+        "load_ms": 355,
         "reason": "",
         "recoveries": 0,
-        "time_s": 15.39,
+        "time_s": 15.41,
         "units": [
           {
             "completed": true,
@@ -160,13 +159,13 @@
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 2.94,
+            "time_s": 2.93,
             "unit": 2
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 5.06,
+            "time_s": 5.07,
             "unit": 3
           }
         ]
@@ -182,15 +181,14 @@
     "breaker": {
       "deaths": 0,
       "findings": [
-        "fuzzing reached the game over screen",
         "pause overlay opened and closed under fuzz input"
       ],
       "reason": "",
-      "time_s": 24.83,
+      "time_s": 30.0,
       "ok": true
     },
     "first_time": {
-      "deaths": 0,
+      "deaths": 1,
       "findings": [],
       "finished": false,
       "first_objective_s": 1.52,
@@ -200,7 +198,7 @@
       "units": [
         {
           "completed": false,
-          "deaths": 0,
+          "deaths": 1,
           "time_s": 2.71,
           "unit": 1
         }
@@ -220,7 +218,7 @@
       "unit": 1,
       "source": "first_time",
       "completed": false,
-      "deaths": 0,
+      "deaths": 1,
       "time_s": 2.71
     },
     {
@@ -228,18 +226,17 @@
       "source": "competent",
       "completed": true,
       "deaths": 0,
-      "time_s": 2.94
+      "time_s": 2.93
     },
     {
       "unit": 3,
       "source": "competent",
       "completed": true,
       "deaths": 0,
-      "time_s": 5.06
+      "time_s": 5.07
     }
   ],
   "warnings": [
-    "breaker: fuzzing reached the game over screen",
     "breaker: pause overlay opened and closed under fuzz input"
   ],
   "ok": true

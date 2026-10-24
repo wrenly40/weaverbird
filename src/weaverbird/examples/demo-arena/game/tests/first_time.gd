@@ -31,6 +31,14 @@ var _jump_cooldown: float = 0.0
 var _last_x: float = 0.0
 var _blocked_for: float = 0.0
 var _first_objective_s: float = -1.0
+# The stuck shuffle (top-down): an anchor position + time, and
+# the sideways shuffle they trigger when a window passes with
+# no real movement. See _play_top.
+var _anchor_pos := Vector2(1e9, 1e9)
+var _anchor_time: float = -1.0
+var _shuffle: float = 0.0
+var _shuffle_dir := Vector2.ZERO
+var _shuffle_sign: float = 1.0
 var _finished: bool = false
 var _outcome: String = ""
 var _deaths: int = 0
@@ -146,6 +154,10 @@ func _track_unit() -> void:
 func _close_unit(completed: bool) -> void:
     if _unit_seen < 0:
         return
+    # The death that ends the run is counted by the game after
+    # this bot's last sample; the game leaves the total in
+    # RunInfo, so a lost run no longer reports zero deaths.
+    _deaths = maxi(_deaths, RunInfo.deaths)
     _units.append({
         "unit": _unit_seen + 1, "completed": completed,
         "deaths": _deaths - _unit_deaths0,
@@ -204,10 +216,10 @@ func _play_top(delta: float) -> void:
     var player := current_scene.find_child("Player", true, false)
     if player == null:
         return
+    var ppos := _node_pos(player)
     _decide_in -= delta
     if _decide_in <= 0.0:
         _decide_in = 0.35
-        var ppos := _node_pos(player)
         var goal := Vector2.ZERO
         var have := false
         # A first-timer goes for the FIRST objective it sees,
@@ -232,11 +244,39 @@ func _play_top(delta: float) -> void:
         var deadband := 0.6 if _movement == "top_down_3d" else 10.0
         _direction = (goal - ppos).normalized() if have \
             and goal.distance_to(ppos) > deadband else Vector2.ZERO
-    if _direction.length() > 0.05:
-        _set_action("move_left", _direction.x < -0.35)
-        _set_action("move_right", _direction.x > 0.35)
-        _set_action("move_up", _direction.y < -0.35)
-        _set_action("move_down", _direction.y > 0.35)
+    # The stuck shuffle: a first-timer who pushes into something
+    # solid and goes nowhere does what a person does — shuffles
+    # sideways for a moment, then tries the straight line again.
+    # It knows nothing about obstacles; it only notices "I asked
+    # to move and barely did" over a whole window. Without it,
+    # a target centred behind a block face is a stable trap:
+    # the push into the face cancels exactly, the bot re-aims at
+    # the same target forever, and the round clock runs out
+    # with the bot standing still (the dogfood round-2 stall).
+    var eff := _direction
+    if _shuffle > 0.0:
+        _shuffle -= delta
+        eff = _shuffle_dir
+    elif _direction.length() > 0.05:
+        if _anchor_time < 0.0:
+            _anchor_pos = ppos
+            _anchor_time = _game_time
+        elif _game_time - _anchor_time >= 1.2:
+            var min_travel := 0.5 if _movement == "top_down_3d" \
+                else 12.0
+            if ppos.distance_to(_anchor_pos) < min_travel:
+                _shuffle_sign = -_shuffle_sign
+                _shuffle_dir = Vector2(-_direction.y, _direction.x) \
+                    * _shuffle_sign
+                _shuffle = 0.7
+                eff = _shuffle_dir
+            _anchor_pos = ppos
+            _anchor_time = _game_time
+    if eff.length() > 0.05:
+        _set_action("move_left", eff.x < -0.35)
+        _set_action("move_right", eff.x > 0.35)
+        _set_action("move_up", eff.y < -0.35)
+        _set_action("move_down", eff.y > 0.35)
     else:
         _release_all()
 
@@ -389,6 +429,7 @@ func _release_all() -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    _deaths = maxi(_deaths, RunInfo.deaths)
     var data := {
         "player": "first_time", "mode": "explore", "ok": ok,
         "reason": reason, "time_s": snappedf(_game_time, 0.01),

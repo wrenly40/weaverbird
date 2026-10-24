@@ -7,6 +7,7 @@ extends RefCounted
 ## SettingsStore (user://), not here.
 
 static var result: String = ""
+static var deaths: int = 0
 static var targets_collected: int = 0
 static var targets_total: int = 0
 static var targets_label: String = ""

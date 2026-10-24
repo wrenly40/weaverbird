@@ -478,14 +478,26 @@ func _start_round(index: int) -> void:
     _spawn = Vector2(float(spawn_arr[0]), float(spawn_arr[1]))
     _player.position = _spawn
     var collect_behaviour := _entity_behaviour("collectible")
-    for spot in _unit_collectible_spots(index):
+    var variants: Array = unit.get("collectible_variants", [])
+    var spots := _unit_collectible_spots(index)
+    for spot_index in range(spots.size()):
         var marker := Marker.new()
         marker.kind = "target"
         marker.behaviour = collect_behaviour
-        marker.colour = target_color
+        # The per-instance variation the world data recorded:
+        # a slight tint and scale per collectible, so the field
+        # is not stamped copies. Visual only — the collection
+        # radius in the rules below never changes.
+        var variant: Dictionary = variants[spot_index] \
+            if spot_index < variants.size() else {}
+        var tint := float(variant.get("tint", 1.0))
+        marker.colour = target_color.lerp(Color(1, 1, 1), tint - 1.0) \
+            if tint >= 1.0 else \
+            target_color.lerp(Color(0, 0, 0), 1.0 - tint)
+        marker.scale = Vector2.ONE * float(variant.get("scale", 1.0))
         marker.bounds = ARENA
         marker.move_speed = 190.0 if collect_behaviour == "flee" else 45.0
-        marker.position = spot
+        marker.position = spots[spot_index]
         add_child(marker)
         marker.target_node = _player
         marker.add_to_group("targets")

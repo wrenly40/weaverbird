@@ -53,8 +53,8 @@ var _unit_deaths0: int = 0
 var _cur_moves: int = 0
 var _cur_budget: int = 0
 # --- top-down 3D obstacle detour state ---
-var _top_last_pos := Vector2(-9999, -9999)
-var _top_stuck_for: float = 0.0
+var _top_anchor_pos := Vector2(-9999, -9999)
+var _top_anchor_time: float = -1.0
 var _top_detour: float = 0.0
 var _top_detour_dir := Vector2.ZERO
 var _top_detour_sign: float = 1.0
@@ -187,9 +187,13 @@ func _node_pos(node: Node) -> Vector2:
 
 func _scene_deaths() -> int:
     if current_scene == null:
-        return _deaths
+        return maxi(_deaths, RunInfo.deaths)
     var value: Variant = current_scene.get("_deaths")
-    return int(value) if value != null else _deaths
+    var sampled := int(value) if value != null else _deaths
+    # Once the run has ended, the game's own total (left in
+    # RunInfo) includes the final death, which lands after this
+    # bot's last sample of the game scene.
+    return maxi(sampled, RunInfo.deaths)
 
 
 func _track_unit() -> void:
@@ -304,15 +308,29 @@ func _play_top(delta: float) -> void:
         direction = direction.normalized()
     else:
         direction = Vector2.ZERO
-    # Hazard awareness: veer away from a hazard that is close
-    # and ahead.
+    # Hazard awareness: a push away from every close hazard,
+    # accumulated SEPARATELY from the steering direction. It is
+    # folded in only at the end, so nothing below — in
+    # particular the obstacle detour, which replaces the
+    # direction wholesale — can silently discard it. (That
+    # discard was real: for the whole length of a detour the
+    # bot steered blind to the hazard bearing down on it, and
+    # whether an unchanged build was won or lost turned on
+    # sub-step steering luck. See docs/PLATFORM.md.)
+    var hazard_push := Vector2.ZERO
+    var nearest_hazard := Vector2.ZERO
+    var nearest_dist := 1e18
     for hazard in get_nodes_in_group("hazards"):
         var spot := _node_pos(hazard)
         var away := ppos - spot
         var dist := away.length()
+        if dist < nearest_dist:
+            nearest_dist = dist
+            nearest_hazard = spot
         var close := 110.0 if not is_3d else 3.6
         if dist < close and dist > 0.05:
-            direction += away.normalized() * (close - dist) / close * 1.6
+            hazard_push += away.normalized() \
+                * (close - dist) / close * 1.6
     if is_3d:
         # Obstacle awareness: the world data carries the blocks
         # (centre + size) — veer around them, and if wedged
@@ -331,23 +349,41 @@ func _play_top(delta: float) -> void:
                 if dist < reach + 1.6 and dist > 0.05:
                     direction += away.normalized() \
                         * (reach + 1.6 - dist) / (reach + 1.6) * 1.8
-        if direction.length() > 0.05 \
-                and ppos.distance_to(_top_last_pos) < 0.03:
-            _top_stuck_for += delta
-        else:
-            _top_stuck_for = 0.0
-        _top_last_pos = ppos
+        # Stuck means: commanded to move, but the displacement
+        # over a half-second WINDOW is tiny. The window is what
+        # makes the test frame-rate independent — the earlier
+        # per-frame version compared one frame's movement to a
+        # fixed distance, so what counted as "stuck" changed
+        # with the frame rate and the alignment of steering
+        # updates to physics steps.
+        var stuck := false
+        if _top_anchor_time < 0.0:
+            _top_anchor_pos = ppos
+            _top_anchor_time = _game_time
+        elif _game_time - _top_anchor_time >= 0.5:
+            stuck = direction.length() > 0.05 \
+                and ppos.distance_to(_top_anchor_pos) < 0.6
+            _top_anchor_pos = ppos
+            _top_anchor_time = _game_time
         if _top_detour > 0.0:
             _top_detour -= delta
             direction = _top_detour_dir
-        elif _top_stuck_for > 0.6 and (goal - ppos).length() > deadband:
+        elif stuck and (goal - ppos).length() > deadband:
             _top_detour_sign = -_top_detour_sign
             var forward := (goal - ppos).normalized()
             _top_detour_dir = Vector2(-forward.y, forward.x) \
                 * _top_detour_sign
             _top_detour = 0.8
-            _top_stuck_for = 0.0
             direction = _top_detour_dir
+    direction += hazard_push
+    # Critical range outranks every plan: a hazard about to
+    # touch the player is steered straight away from, whatever
+    # the route or the detour says. (The additive push alone
+    # can never do this — once the sum is normalized, a hazard
+    # dead ahead barely bends the course.)
+    var critical := 60.0 if not is_3d else 2.0
+    if nearest_dist < critical and nearest_dist > 0.01:
+        direction = (ppos - nearest_hazard).normalized()
     if direction.length() > 0.05:
         direction = direction.normalized()
         _apply_direction(direction)
@@ -946,6 +982,10 @@ func _release_all() -> void:
 
 func _report(ok: bool, reason: String) -> void:
     _done = true
+    # The death that ends a run lands in the game's counter
+    # after this bot's last sample of it (the scene has already
+    # changed); the game leaves the true total in RunInfo.
+    _deaths = maxi(_deaths, RunInfo.deaths)
     if _unit_seen >= 0:
         _close_unit(false)  # still mid-unit: it was not completed
     var fps := 0.0

@@ -54,12 +54,22 @@ plan: with a brain, the bespoke-module path takes it; without
 one, generation stops at the plan and says so plainly. Projects
 built by older versions keep working untouched — their files,
 test stage, patch loop and exports are unchanged.
+Since 0.12.0: the brain ladder also speaks OpenCode (the
+maker's own local server holds the keys; Weaverbird sends
+none), projects can be deleted behind a typed confirmation
+and guardrails, the 3D test bots measure stuck over time
+windows instead of frames (the intermittent win-proof flake's
+root cause), and the style lock is obeyed in the assets —
+outline, shading, glow and pattern traits drive the drawing,
+collectibles vary per instance from the world data, 3D
+materials glow and take form, and the audio is shaped
+synthesis in the scope's mood.
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

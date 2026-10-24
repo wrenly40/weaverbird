@@ -272,6 +272,20 @@ class PaletteSkyTests(unittest.TestCase):
         player = self._template("player3d.gd")
         self.assertIn('parsed.get("accent_hex"', player)
 
+    def test_goal_lock_never_modulates_a_node3d(self):
+        # Regression (found in the v0.12 clean room): a 3D plan
+        # that derives a goal entity builds an Area3D goal, and
+        # the lock visual assigned .modulate — a CanvasItem
+        # property Node3D does not have — so every goal-bearing
+        # 3D game errored in _refresh_goal_lock and assembly
+        # validation refused it. The 3D analogue is the goal
+        # mesh's transparency.
+        text = self._template("game3d.gd")
+        self.assertNotIn("goal_node.modulate", text)
+        lock_body = text.split("func _refresh_goal_lock()")[1]
+        lock_body = lock_body.split("\nfunc ")[0]
+        self.assertIn("goal_mesh.transparency", lock_body)
+
 
 if __name__ == "__main__":
     unittest.main()

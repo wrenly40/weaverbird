@@ -55,143 +55,326 @@ def _svg(body: str, size: int = 64, view: str | None = None) -> str:
             f'height="{size}" viewBox="{view}">{body}</svg>\n')
 
 
+# Sprites are drawn on a 256-unit canvas and declared at 64px:
+# the geometry is authored at 4x and the renderer downscales it
+# to the display size, anti-aliased — the vector pipeline's
+# supersampling. Every maker obeys the style lock's traits
+# (palette["style"], see style_traits): an outline in the
+# style's width and colour when the style has one (none when it
+# doesn't — neon never outlines), two-tone shading per the
+# style's model, and a glow rim where the style glows.
+
+_CANVAS = "0 0 256 256"
+
+
+def _mix_hex(hex_value: str, other: str, frac: float) -> str:
+    """Blend two #RRGGBB colours, frac of the way toward other."""
+    def rgb(value: str) -> tuple[int, int, int]:
+        value = value.lstrip("#")
+        return (int(value[0:2], 16), int(value[2:4], 16),
+                int(value[4:6], 16))
+    a, b = rgb(hex_value), rgb(other)
+    return "#%02X%02X%02X" % tuple(
+        round(a[i] + (b[i] - a[i]) * frac) for i in range(3))
+
+
+def _tint(hex_value: str, frac: float = 0.35) -> str:
+    return _mix_hex(hex_value, "#FFFFFF", frac)
+
+
+def _shade(hex_value: str, frac: float = 0.30) -> str:
+    return _mix_hex(hex_value, "#000000", frac)
+
+
+def _traits(p: dict) -> dict:
+    traits = p.get("style")
+    return traits if isinstance(traits, dict) else _DEFAULT_TRAITS
+
+
+def _ol(p: dict, scale: float = 1.0) -> str:
+    """The outline attributes for a shape, per the style lock:
+    a stroke in the style's colour at its width (authored at
+    display scale, so x4 on this canvas) — or nothing."""
+    traits = _traits(p)
+    if not traits.get("outline_width") or not traits.get("outline_color"):
+        return ""
+    width = float(traits["outline_width"]) * 4.0 * scale
+    return (f' stroke="{traits["outline_color"]}" '
+            f'stroke-width="{width:.0f}"')
+
+
+def _halo(colour: str, cx: float, cy: float, r: float,
+          opacity: float = 0.16) -> str:
+    return (f'<circle cx="{cx:.0f}" cy="{cy:.0f}" r="{r:.0f}" '
+            f'fill="{colour}" opacity="{opacity}"/>'
+            f'<circle cx="{cx:.0f}" cy="{cy:.0f}" r="{r * 0.78:.0f}" '
+            f'fill="{colour}" opacity="{opacity + 0.06}"/>')
+
+
+def _sparkle(cx: float, cy: float, r: float, colour: str,
+             opacity: float = 0.95) -> str:
+    """A four-point sparkle (a diamond star), the collectible's
+    glint."""
+    inner = r * 0.22
+    points = (f"{cx:.0f},{cy - r:.0f} {cx + inner:.0f},{cy - inner:.0f} "
+              f"{cx + r:.0f},{cy:.0f} {cx + inner:.0f},{cy + inner:.0f} "
+              f"{cx:.0f},{cy + r:.0f} {cx - inner:.0f},{cy + inner:.0f} "
+              f"{cx - r:.0f},{cy:.0f} {cx - inner:.0f},{cy - inner:.0f}")
+    return (f'<polygon points="{points}" fill="{colour}" '
+            f'opacity="{opacity}"/>')
+
+
+def _round_body(p: dict, base: str, cx: float, cy: float,
+                r: float, clip_id: str = "body") -> str:
+    """A round body with the style's two-tone shading: the base
+    fill (with the style's outline, when it has one), then —
+    clipped to the body — a darker shade crescent low on the
+    shape and a lighter tint patch high on it. The shading
+    model sets the strengths: cel is hard and full, tint is a
+    whisper of each, soft (chunky) is broad and gentle, flat
+    (neon) is none."""
+    mode = _traits(p).get("shading", "tint")
+    layers = ""
+    if mode != "flat":
+        shade_op = {"cel": 0.9, "tint": 0.55, "soft": 0.5}.get(mode, 0.55)
+        tint_op = {"cel": 0.9, "tint": 0.5, "soft": 0.35}.get(mode, 0.5)
+        layers = (
+            f'<g clip-path="url(#{clip_id})">'
+            f'<circle cx="{cx:.0f}" cy="{cy + r * 0.52:.0f}" '
+            f'r="{r:.0f}" fill="{_shade(base, 0.32)}" '
+            f'opacity="{shade_op}"/>'
+            f'<ellipse cx="{cx - r * 0.34:.0f}" '
+            f'cy="{cy - r * 0.40:.0f}" rx="{r * 0.54:.0f}" '
+            f'ry="{r * 0.36:.0f}" fill="{_tint(base, 0.45)}" '
+            f'opacity="{tint_op}"/></g>')
+    return (
+        f'<defs><clipPath id="{clip_id}">'
+        f'<circle cx="{cx:.0f}" cy="{cy:.0f}" r="{r:.0f}"/>'
+        f'</clipPath></defs>'
+        f'<circle cx="{cx:.0f}" cy="{cy:.0f}" r="{r:.0f}" '
+        f'fill="{base}"{_ol(p)}/>' + layers)
+
+
 def _sprite_player(p: dict) -> str:
-    accent, dark = p["accent_hex"], p["platform_hex"]
-    return _svg(
-        f'<circle cx="32" cy="34" r="22" fill="{accent}"/>'
-        f'<circle cx="32" cy="40" r="13" fill="#FFFFFF" opacity="0.28"/>'
-        f'<circle cx="25" cy="30" r="4" fill="#FFFFFF"/>'
-        f'<circle cx="39" cy="30" r="4" fill="#FFFFFF"/>'
-        f'<circle cx="25" cy="31" r="2" fill="{dark}"/>'
-        f'<circle cx="39" cy="31" r="2" fill="{dark}"/>'
-    )
+    accent = p["accent_hex"]
+    body = ""
+    if _traits(p).get("glow"):
+        body += _halo(accent, 128, 128, 116)
+    body += (f'<ellipse cx="128" cy="222" rx="72" ry="13" '
+             f'fill="#000000" opacity="0.16"/>')
+    body += _round_body(p, accent, 128, 128, 88, "clip-player")
+    # The directional cue: a visor band across the face with its
+    # bright slit pushed to the facing side — the player reads
+    # as looking (and so moving) that way.
+    visor = _shade(accent, 0.62)
+    body += (f'<rect x="62" y="98" width="132" height="44" rx="22" '
+             f'fill="{visor}"/>'
+             f'<rect x="98" y="110" width="76" height="19" rx="9" '
+             f'fill="#FFFFFF" opacity="0.92"/>'
+             f'<circle cx="188" cy="119" r="6" fill="#FFFFFF" '
+             f'opacity="0.75"/>')
+    return _svg(body, view=_CANVAS)
+
+
+def _star_points(cx: float, cy: float, outer: float, inner: float,
+                 dy: float = 0.0) -> str:
+    points = []
+    for i in range(10):
+        angle = -math.pi / 2 + i * math.pi / 5
+        radius = outer if i % 2 == 0 else inner
+        points.append("%.1f,%.1f" % (cx + radius * math.cos(angle),
+                                     cy + dy + radius * math.sin(angle)))
+    return " ".join(points)
 
 
 def _sprite_target(p: dict) -> str:
     target = p["target_hex"]
-    points = []
-    for i in range(10):
-        angle = -math.pi / 2 + i * math.pi / 5
-        radius = 24 if i % 2 == 0 else 10.5
-        points.append("%.1f,%.1f" % (32 + radius * math.cos(angle),
-                                     32 + radius * math.sin(angle)))
-    return _svg(
-        f'<polygon points="{" ".join(points)}" fill="{target}"/>'
-        f'<circle cx="32" cy="32" r="5" fill="#FFFFFF" opacity="0.85"/>'
-    )
+    body = _halo(target, 128, 128, 120)  # collectibles always glow
+    body += (f'<polygon points="{_star_points(128, 128, 96, 42, 9)}" '
+             f'fill="{_shade(target, 0.30)}"/>')
+    body += (f'<polygon points="{_star_points(128, 128, 96, 42)}" '
+             f'fill="{target}"{_ol(p)}/>')
+    if _traits(p).get("shading") != "flat":
+        body += (f'<polygon points="{_star_points(128, 122, 52, 23)}" '
+                 f'fill="{_tint(target, 0.40)}" opacity="0.75"/>')
+    body += (f'<circle cx="128" cy="128" r="19" fill="#FFFFFF" '
+             f'opacity="0.88"/>')
+    body += _sparkle(198, 52, 17, "#FFFFFF")
+    body += _sparkle(50, 192, 11, "#FFFFFF", 0.7)
+    return _svg(body, view=_CANVAS)
 
 
 def _sprite_hazard(p: dict) -> str:
     hazard = p["hazard_hex"]
-    return _svg(
-        f'<rect x="10" y="10" width="44" height="44" rx="9" fill="{hazard}"/>'
-        f'<path d="M22 22 L42 42 M42 22 L22 42" stroke="#FFFFFF" '
-        f'stroke-width="5" stroke-linecap="round"/>'
-    )
+    body = ""
+    if _traits(p).get("glow"):
+        body += _halo(hazard, 128, 128, 122, 0.13)
+    # Menace, first read: spikes radiating in the hazard colour.
+    for i in range(8):
+        angle = i * math.pi / 4 + math.pi / 8
+        tip = (128 + 116 * math.cos(angle), 128 + 116 * math.sin(angle))
+        left = (128 + 66 * math.cos(angle - 0.30),
+                128 + 66 * math.sin(angle - 0.30))
+        right = (128 + 66 * math.cos(angle + 0.30),
+                 128 + 66 * math.sin(angle + 0.30))
+        body += (f'<polygon points="{left[0]:.0f},{left[1]:.0f} '
+                 f'{tip[0]:.0f},{tip[1]:.0f} '
+                 f'{right[0]:.0f},{right[1]:.0f}" fill="{hazard}"/>')
+    body += (f'<circle cx="128" cy="128" r="76" '
+             f'fill="{_shade(hazard, 0.28)}"/>')
+    body += (f'<circle cx="128" cy="122" r="70" fill="{hazard}"'
+             f'{_ol(p)}/>')
+    # Menace, second read: angry eyes — white eyes, pupils
+    # glaring inward and down, brows slanted over them.
+    dark = _shade(hazard, 0.62)
+    body += (f'<circle cx="102" cy="118" r="14" fill="#FFFFFF"/>'
+             f'<circle cx="154" cy="118" r="14" fill="#FFFFFF"/>'
+             f'<circle cx="106" cy="122" r="7" fill="{dark}"/>'
+             f'<circle cx="150" cy="122" r="7" fill="{dark}"/>'
+             f'<path d="M84 96 L120 106 M172 96 L136 106" '
+             f'stroke="{dark}" stroke-width="10" '
+             f'stroke-linecap="round"/>')
+    return _svg(body, view=_CANVAS)
 
 
 def _sprite_platform_tile(p: dict) -> str:
     platform, accent = p["platform_hex"], p["accent_hex"]
     return _svg(
-        f'<rect x="0" y="0" width="64" height="64" fill="{platform}"/>'
-        f'<rect x="0" y="0" width="64" height="10" fill="{accent}"/>'
-        f'<rect x="0" y="54" width="64" height="10" fill="#000000" opacity="0.18"/>'
-    )
+        f'<rect x="0" y="0" width="256" height="256" fill="{platform}"/>'
+        f'<rect x="0" y="0" width="256" height="40" fill="{accent}"/>'
+        f'<rect x="0" y="40" width="256" height="26" fill="{_tint(platform, 0.30)}"/>'
+        f'<rect x="0" y="216" width="256" height="40" fill="{_shade(platform, 0.30)}"/>'
+        f'<rect x="0" y="0" width="256" height="256" fill="none"{_ol(p)}/>',
+        view=_CANVAS)
 
 
 def _sprite_spikes(p: dict) -> str:
     hazard = p["hazard_hex"]
-    teeth = "".join(
-        f'<polygon points="{i * 16},20 {i * 16 + 8},2 {i * 16 + 16},20" '
-        f'fill="{hazard}"/>'
-        for i in range(4)
-    )
-    return _svg(teeth, view="0 0 64 20")
+    teeth = ""
+    for i in range(4):
+        x = i * 64
+        teeth += (f'<polygon points="{x},80 {x + 32},8 {x + 64},80" '
+                  f'fill="{_shade(hazard, 0.30)}"/>'
+                  f'<polygon points="{x},72 {x + 32},8 {x + 60},72" '
+                  f'fill="{hazard}"{_ol(p, 0.7)}/>')
+    return _svg(teeth + f'<rect x="0" y="72" width="256" height="8" '
+                        f'fill="{_shade(hazard, 0.45)}"/>',
+                view="0 0 256 80")
 
 
 def _sprite_exit_door(p: dict) -> str:
     accent, target = p["accent_hex"], p["target_hex"]
     return _svg(
-        f'<rect x="14" y="6" width="36" height="52" rx="6" fill="{accent}"/>'
-        f'<rect x="19" y="11" width="26" height="42" rx="4" fill="#FFFFFF" opacity="0.22"/>'
-        f'<circle cx="43" cy="33" r="3.2" fill="{target}"/>'
-    )
+        f'<rect x="56" y="24" width="144" height="208" rx="24" '
+        f'fill="{accent}"/>'
+        f'<rect x="56" y="188" width="144" height="44" rx="22" '
+        f'fill="{_shade(accent, 0.30)}"/>'
+        f'<rect x="76" y="44" width="104" height="168" rx="16" '
+        f'fill="{_tint(accent, 0.28)}" opacity="0.8"/>'
+        f'<circle cx="172" cy="132" r="13" fill="{target}"/>'
+        f'<rect x="56" y="24" width="144" height="208" rx="24" '
+        f'fill="none"{_ol(p)}/>',
+        view=_CANVAS)
 
 
 def _sprite_crate(p: dict) -> str:
     crate = p["crate_hex"]
     return _svg(
-        f'<rect x="6" y="6" width="52" height="52" rx="6" fill="{crate}"/>'
-        f'<rect x="6" y="6" width="52" height="52" rx="6" fill="none" '
-        f'stroke="#000000" stroke-opacity="0.28" stroke-width="3"/>'
-        f'<path d="M8 8 L56 56 M56 8 L8 56" stroke="#000000" '
-        f'stroke-opacity="0.20" stroke-width="4"/>'
-        f'<rect x="24" y="24" width="16" height="16" rx="3" fill="#FFFFFF" opacity="0.20"/>'
-    )
+        f'<rect x="24" y="24" width="208" height="208" rx="24" '
+        f'fill="{crate}"/>'
+        f'<rect x="24" y="24" width="208" height="52" rx="24" '
+        f'fill="{_tint(crate, 0.30)}"/>'
+        f'<rect x="24" y="180" width="208" height="52" rx="24" '
+        f'fill="{_shade(crate, 0.30)}"/>'
+        f'<path d="M32 32 L224 224 M224 32 L32 224" '
+        f'stroke="{_shade(crate, 0.45)}" stroke-opacity="0.55" '
+        f'stroke-width="14"/>'
+        f'<rect x="96" y="96" width="64" height="64" rx="12" '
+        f'fill="{_tint(crate, 0.38)}"/>'
+        f'<rect x="24" y="24" width="208" height="208" rx="24" '
+        f'fill="none"{_ol(p)}/>',
+        view=_CANVAS)
 
 
 def _sprite_pad(p: dict) -> str:
     target = p["target_hex"]
-    return _svg(
-        f'<rect x="9" y="9" width="46" height="46" rx="10" fill="none" '
-        f'stroke="{target}" stroke-width="4"/>'
-        f'<circle cx="32" cy="32" r="6" fill="{target}"/>'
-    )
+    body = ""
+    if _traits(p).get("glow"):
+        body += _halo(target, 128, 128, 120, 0.13)
+    body += (
+        f'<rect x="36" y="36" width="184" height="184" rx="40" '
+        f'fill="none" stroke="{target}" stroke-width="17"/>'
+        f'<rect x="36" y="36" width="184" height="184" rx="40" '
+        f'fill="none"{_ol(p, 0.6)}/>'
+        f'<circle cx="128" cy="128" r="25" fill="{_tint(target, 0.25)}"/>')
+    return _svg(body, view=_CANVAS)
 
 
 def _sprite_wall_tile(p: dict) -> str:
     platform = p["platform_hex"]
     return _svg(
-        f'<rect x="0" y="0" width="64" height="64" fill="{platform}"/>'
-        f'<rect x="3" y="3" width="58" height="58" rx="6" fill="none" '
-        f'stroke="#FFFFFF" stroke-opacity="0.20" stroke-width="3"/>'
-        f'<line x1="0" y1="32" x2="64" y2="32" stroke="#000000" stroke-opacity="0.20" stroke-width="3"/>'
-    )
+        f'<rect x="0" y="0" width="256" height="256" fill="{platform}"/>'
+        f'<rect x="0" y="0" width="256" height="30" fill="{_tint(platform, 0.28)}"/>'
+        f'<rect x="0" y="226" width="256" height="30" fill="{_shade(platform, 0.30)}"/>'
+        f'<rect x="12" y="12" width="232" height="232" rx="24" '
+        f'fill="none" stroke="#FFFFFF" stroke-opacity="0.20" '
+        f'stroke-width="10"/>'
+        f'<line x1="0" y1="128" x2="256" y2="128" '
+        f'stroke="{_shade(platform, 0.42)}" stroke-width="10"/>',
+        view=_CANVAS)
 
 
 def _sprite_background(p: dict) -> str:
-    accent = p["accent_hex"]
-    dots = []
-    for row in range(6):
-        for col in range(10):
-            cx = 60 + col * 116 + (28 if row % 2 else 0)
-            cy = 58 + row * 108
-            dots.append(f'<circle cx="{cx}" cy="{cy}" r="26" '
-                        f'fill="{accent}" opacity="0.07"/>')
-    body = ('<rect x="0" y="0" width="1152" height="648" fill="#101219"/>'
-            + "".join(dots))
+    """The menu/world backdrop: a palette ground (the platform
+    colour, deepened) with a subtle pattern in the accent, the
+    pattern family set by the style lock — dots, stars or a
+    grid. Never the flat black it used to be: the ground belongs
+    to the game's own palette."""
+    accent, platform = p["accent_hex"], p["platform_hex"]
+    ground = _shade(platform, 0.45)
+    pattern = _traits(p).get("pattern", "dots")
+    marks = []
+    if pattern == "grid":
+        for x in range(96, 1152, 96):
+            marks.append(f'<line x1="{x}" y1="0" x2="{x}" y2="648" '
+                         f'stroke="{accent}" stroke-width="2" '
+                         f'opacity="0.055"/>')
+        for y in range(96, 648, 96):
+            marks.append(f'<line x1="0" y1="{y}" x2="1152" y2="{y}" '
+                         f'stroke="{accent}" stroke-width="2" '
+                         f'opacity="0.055"/>')
+    elif pattern == "stars":
+        for i in range(46):
+            cx = (i * 173 + 61) % 1152
+            cy = (i * 269 + 47) % 648
+            marks.append(_sparkle(cx, cy, 9 + (i % 3) * 3, accent,
+                                  0.10))
+    else:  # dots
+        for row in range(6):
+            for col in range(10):
+                cx = 60 + col * 116 + (28 if row % 2 else 0)
+                cy = 58 + row * 108
+                marks.append(f'<circle cx="{cx}" cy="{cy}" r="26" '
+                             f'fill="{accent}" opacity="0.07"/>')
+    body = (f'<rect x="0" y="0" width="1152" height="648" '
+            f'fill="{ground}"/>' + "".join(marks))
     return _svg(body, size=1152, view="0 0 1152 648")
 
 
 def _icon(p: dict, archetype: str) -> str:
-    accent, target, hazard = p["accent_hex"], p["target_hex"], p["hazard_hex"]
-    crate = p["crate_hex"]
-    if archetype in ("platformer", "side_view"):
-        motif = (
-            f'<rect x="18" y="86" width="52" height="12" rx="5" fill="{accent}"/>'
-            f'<rect x="52" y="60" width="52" height="12" rx="5" fill="{accent}" opacity="0.75"/>'
-            f'<circle cx="82" cy="34" r="13" fill="{target}"/>'
-        )
-    elif archetype in ("crate_pusher", "grid_step"):
-        motif = (
-            f'<rect x="24" y="46" width="44" height="44" rx="7" fill="{crate}"/>'
-            f'<path d="M26 48 L66 88 M66 48 L26 88" stroke="#000000" '
-            f'stroke-opacity="0.22" stroke-width="4"/>'
-            f'<rect x="70" y="70" width="34" height="34" rx="8" fill="none" '
-            f'stroke="{target}" stroke-width="4"/>'
-        )
-    else:  # arena collector: the player dot chasing its target ring
-        motif = (
-            f'<circle cx="46" cy="70" r="17" fill="{accent}"/>'
-            f'<circle cx="46" cy="70" r="6" fill="#FFFFFF" opacity="0.85"/>'
-            f'<circle cx="84" cy="42" r="14" fill="none" stroke="{target}" stroke-width="6"/>'
-            f'<rect x="96" y="82" width="15" height="15" rx="3" fill="{hazard}"/>'
-        )
+    """The game's icon composes the game's own motifs — the
+    player and the main collectible, drawn by the same sprite
+    code that draws them in the game — on a ground from the
+    palette. Not a generic shape."""
+    ground = _shade(p["platform_hex"], 0.18)
+    player = _embed_svg(_sprite_player(p), 8, 52, 66)
+    target = _embed_svg(_sprite_target(p), 58, 10, 62)
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" '
         'viewBox="0 0 128 128">'
-        f'<rect x="4" y="4" width="120" height="120" rx="26" fill="#171A24"/>'
-        f"{motif}</svg>\n"
+        f'<rect x="4" y="4" width="120" height="120" rx="26" '
+        f'fill="{ground}"/>'
+        f"{player}{target}</svg>\n"
     )
 
 
@@ -212,6 +395,27 @@ _SPRITES = {
 # ---------------------------------------------------------------------------
 # Audio synthesis (stdlib wave): tones, sweeps, and a music loop
 
+def _adsr(i: int, count: int, attack: float = 0.008,
+          decay: float = 0.06, sustain: float = 0.55,
+          release: float = 0.09) -> float:
+    """An ADSR envelope's value at sample i of count: a fast
+    attack, a decay to the sustain level, and a release tail
+    that reaches zero exactly at the end — every generated
+    sound is shaped with one, so nothing starts or stops with
+    a click."""
+    t = i / SAMPLE_RATE
+    total = count / SAMPLE_RATE
+    if t < attack:
+        return t / attack if attack > 0 else 1.0
+    if t < attack + decay:
+        return 1.0 - (1.0 - sustain) * (t - attack) / decay \
+            if decay > 0 else sustain
+    if t > total - release:
+        return sustain * max(0.0, (total - t) / release) \
+            if release > 0 else 0.0
+    return sustain
+
+
 def _tone(freq: float, seconds: float, volume: float = 0.5,
           shape: str = "sine", sweep_to: float | None = None,
           harmonics: float = 0.0) -> list[float]:
@@ -227,9 +431,27 @@ def _tone(freq: float, seconds: float, volume: float = 0.5,
             value = 0.6 if math.sin(phase) >= 0 else -0.6
         else:
             value = math.sin(phase) + harmonics * math.sin(2 * phase)
-        envelope = min(1.0, i / (0.008 * SAMPLE_RATE)) * \
-            (1.0 - 0.65 * frac)
-        samples.append(value * volume * envelope)
+        samples.append(value * volume * _adsr(i, count))
+    return samples
+
+
+def _noise_burst(seconds: float, volume: float = 0.5,
+                 seed: int = 20240, smooth: int = 6) -> list[float]:
+    """A deterministic noise burst: a seeded PRNG (the same
+    burst in every build), lightly smoothed so it reads as a
+    thud of static rather than digital harshness, under a
+    fast-decay envelope."""
+    import random
+    rng = random.Random(seed)
+    count = int(SAMPLE_RATE * seconds)
+    raw = [rng.uniform(-1.0, 1.0) for _ in range(count)]
+    samples = []
+    for i in range(count):
+        window = raw[max(0, i - smooth):i + 1]
+        value = sum(window) / len(window)
+        frac = i / max(count - 1, 1)
+        samples.append(value * volume * (1.0 - frac) ** 1.6
+                       * min(1.0, i / (0.004 * SAMPLE_RATE)))
     return samples
 
 
@@ -274,40 +496,64 @@ def _write_wav(path: Path, samples: list[float]) -> None:
     path.write_bytes(_wav_bytes(samples))
 
 
-def _audio_files() -> dict:
-    """Generated audio: file name -> sample list."""
+def _audio_files(mood: dict | None = None) -> dict:
+    """Generated audio: file name -> sample list. Every sound
+    is shaped synthesis in the scope's audio mood: the win
+    jingle and the ambient pad are written in the mood's scale
+    and key, at the mood's pace (see audio_mood)."""
+    mood = mood or audio_mood({})
+    root = mood["root"]
+    scale = mood["scale"]
+    step = mood["note_s"]
+
+    def note(degree: int, octave: int = 1) -> float:
+        return _mood_note(root * octave, scale[degree % len(scale)])
+
+    chime = _sequence([(note(0, 2), 0.0, 0.10),
+                       (note(2, 2), 0.07, 0.18)], 0.45)
+    hurt = _mix(_noise_burst(0.22, 0.5),
+                _tone(96.0, 0.26, 0.55, sweep_to=52.0))
+    win = _sequence(
+        [(note(0, 2), 0.0, step * 1.15),
+         (note(1, 2), step, step * 1.15),
+         (note(2, 2), step * 2, step * 1.15),
+         (note(4, 2), step * 3, step * 3.2)], 0.45,
+        shape="sine" if mood["name"] != "energetic" else "square")
+    lose = _sequence([(note(2, 1), 0.0, 0.20),
+                      (note(0, 1), 0.18, 0.34)], 0.45)
     return {
-        "click.wav": _tone(1150.0, 0.06, 0.35),
-        "collect.wav": _sequence([(880.0, 0.0, 0.09), (1318.5, 0.07, 0.14)], 0.45),
-        "hurt.wav": _tone(220.0, 0.28, 0.5, "square", sweep_to=105.0),
+        "click.wav": _tone(880.0, 0.045, 0.30),
+        "collect.wav": chime,
+        "hurt.wav": hurt,
         "jump.wav": _tone(300.0, 0.16, 0.4, sweep_to=720.0),
         "push.wav": _tone(82.0, 0.13, 0.7, harmonics=0.4),
-        "win.wav": _sequence(
-            [(523.25, 0.0, 0.13), (659.25, 0.11, 0.13),
-             (783.99, 0.22, 0.13), (1046.5, 0.33, 0.3)], 0.45),
-        "lose.wav": _sequence(
-            [(392.0, 0.0, 0.2), (329.63, 0.17, 0.2), (261.63, 0.34, 0.38)], 0.45),
-        "music.wav": _music_loop(),
+        "win.wav": win,
+        "lose.wav": lose,
+        "music.wav": _music_loop(mood),
     }
 
 
-def _music_loop() -> list[float]:
-    """A 8-second loop: a soft arpeggio over Am–F–C–G, built so the
-    pattern ends where it begins and loops without a click."""
-    roots = [110.0, 87.31, 130.81, 98.0]  # A2 F2 C3 G2
-    notes: list[tuple[float, float, float]] = []
-    step = 0.5
-    for bar, root in enumerate(roots):
-        chord = [root * 2, root * 2.5, root * 3, root * 4]
-        for beat in range(4):
-            freq = chord[beat % len(chord)]
-            notes.append((freq, (bar * 4 + beat) * step, step * 0.96))
-            notes.append((root, (bar * 4 + beat) * step, step * 0.96))
-    samples = _sequence(notes, 0.16)
-    target = int(SAMPLE_RATE * 8.0)
-    if len(samples) < target:
-        samples += [0.0] * (target - len(samples))
-    return samples[:target]
+def _music_loop(mood: dict | None = None) -> list[float]:
+    """An 8-second ambient pad loop in the mood's key: two
+    detuned sines on the root and one on the fifth, breathing
+    through a slow tremolo, kept very quiet — a bed under the
+    game, not a tune over it. The tremolo completes a whole
+    number of cycles in the loop and the pad's phase is
+    continuous, so the loop point is seamless."""
+    mood = mood or audio_mood({})
+    root = mood["pad_root"]
+    seconds = 8.0
+    count = int(SAMPLE_RATE * seconds)
+    fifth = root * 1.5
+    samples = []
+    for i in range(count):
+        t = i / SAMPLE_RATE
+        tremolo = 0.72 + 0.28 * math.sin(2 * math.pi * 0.25 * t)
+        value = (math.sin(2 * math.pi * root * t)
+                 + 0.85 * math.sin(2 * math.pi * root * 1.004 * t)
+                 + 0.6 * math.sin(2 * math.pi * fifth * t))
+        samples.append(value / 2.45 * 0.16 * tremolo)
+    return samples
 
 
 # ---------------------------------------------------------------------------
@@ -439,11 +685,19 @@ def asset_requests(project: Path, values: dict) -> dict:
         palette = generate_module._palette(values)
         materials = [
             {"name": "player", "hex": palette["accent_hex"],
-             "used_for": "the player's capsule"},
+             "used_for": "the player's capsule",
+             "finish": "capsule with a dark visor band and a "
+                       "bright facing slit"},
             {"name": "collectible", "hex": palette["target_hex"],
-             "used_for": "the collectible orbs"},
+             "used_for": "the collectible orbs",
+             "finish": "emissive — the orbs glow in their own "
+                       "colour, with a brighter inner core; "
+                       "roughness varies per instance (0.25–0.45) "
+                       "by the world data's variant seed"},
             {"name": "hazard", "hex": palette["hazard_hex"],
-             "used_for": "the patrolling hazards"},
+             "used_for": "the patrolling hazards",
+             "finish": "a spiked form — cones radiating from a "
+                       "core — so the menace reads in silhouette"},
             {"name": "ground", "hex": palette["platform_hex"],
              "used_for": "the ground plane"},
             {"name": "obstacle", "hex": palette["crate_hex"],
@@ -497,7 +751,8 @@ def _preflight(project: Path,
 
 
 def _producers(palette: dict, archetype: str,
-               requests: dict | None = None) -> dict:
+               requests: dict | None = None,
+               values: dict | None = None) -> dict:
     """Every generated asset, by name: {name: (relative path,
     produce() -> bytes, provenance note, kind)}.
 
@@ -512,6 +767,12 @@ def _producers(palette: dict, archetype: str,
     """
     bespoke = bool(requests and requests.get("bespoke"))
     is_3d = bool(requests and requests.get("dimension") == "3d")
+    values = values or {}
+    # The drawing palette carries the style lock's traits, so
+    # every sprite obeys the same outline/shading/glow rules.
+    draw = dict(palette)
+    draw["style"] = traits_for_values(values)
+    mood = audio_mood(values)
     producers: dict[str, tuple[str, object, str, str]] = {}
     for name, maker in _SPRITES.items():
         if bespoke and name not in requests["sprites"]:
@@ -523,24 +784,27 @@ def _producers(palette: dict, archetype: str,
             continue
         producers[name] = (
             f"{GAME_DIR_NAME}/assets/{name}.svg",
-            (lambda maker=maker: maker(palette).encode("utf-8")),
+            (lambda maker=maker: maker(draw).encode("utf-8")),
             f"{name} sprite drawn from the style-lock palette by "
-            "the deterministic SVG generator",
+            "the deterministic SVG generator, obeying the style "
+            "lock's outline, shading and glow rules",
             "sprite")
     producers["icon"] = (
         f"{GAME_DIR_NAME}/icon.svg",
-        (lambda: _icon(palette, archetype).encode("utf-8")),
-        f"game icon generated from the palette with the "
-        f"{archetype} motif",
+        (lambda: _icon(draw, archetype).encode("utf-8")),
+        "game icon composed from the game's own player and "
+        "collectible sprites on a ground from the palette",
         "icon")
-    for filename, samples in _audio_files().items():
+    for filename, samples in _audio_files(mood).items():
         stem = filename.rsplit(".", 1)[0]
         if bespoke and stem not in requests["audio"]:
             continue
         producers[stem] = (
             f"{GAME_DIR_NAME}/assets/audio/{filename}",
             (lambda samples=samples: _wav_bytes(samples)),
-            "procedurally synthesised audio (stdlib wave, no samples)",
+            "procedurally synthesised audio (stdlib wave, no "
+            f"samples), {mood['name']} mood, "
+            f"{mood['scale_name']} scale",
             "audio")
     return producers
 
@@ -566,7 +830,7 @@ def generate_assets(project_dir, archetype: str | None = None,
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     requests = asset_requests(project, values)
-    producers = _producers(palette, chosen, requests)
+    producers = _producers(palette, chosen, requests, values)
     if reporter is not None:
         reporter(f"Generating assets for the game — palette "
                  f"{palette['accent_hex']} / {palette['target_hex']} "
@@ -599,6 +863,8 @@ def generate_assets(project_dir, archetype: str | None = None,
                      "based_on": requests["based_on"],
                      "materials": requests.get("materials", [])},
         "palette": palette,
+        "style_traits": traits_for_values(values),
+        "audio_mood": audio_mood(values),
         "files": written,
         "icon": f"{GAME_DIR_NAME}/icon.svg",
         "icon_generated": True,
@@ -641,6 +907,9 @@ STYLE_SAMPLES: list[dict] = [
         "rules": "Chunky proportions (shapes about 1.4x natural "
                  "scale), no outlines, soft drop shadows, every "
                  "corner rounded.",
+        "traits": {"outline_width": 0.0, "outline_color": None,
+                   "shading": "soft", "glow": False,
+                   "pattern": "dots"},
         "sky": "#FFE9B8", "ground": "#8FD14F", "sun": "#FFC93D",
     },
     {
@@ -654,6 +923,9 @@ STYLE_SAMPLES: list[dict] = [
         "rules": "Soft natural proportions, thin 2px outlines in "
                  "warm grey, flat shading with one lighter tint "
                  "per shape.",
+        "traits": {"outline_width": 2.0, "outline_color": "#8A7F72",
+                   "shading": "tint", "glow": False,
+                   "pattern": "grid"},
         "sky": "#FDF3F7", "ground": "#CDE7C0", "sun": "#FFE29A",
     },
     {
@@ -667,6 +939,9 @@ STYLE_SAMPLES: list[dict] = [
         "rules": "Slim proportions, dark backgrounds, flat fills "
                  "with a bright glowing rim on every shape (a "
                  "light halo, never an outline).",
+        "traits": {"outline_width": 0.0, "outline_color": None,
+                   "shading": "flat", "glow": True,
+                   "pattern": "stars"},
         "sky": "#0B1026", "ground": "#16213B", "sun": "#E2E8F0",
     },
     {
@@ -679,9 +954,74 @@ STYLE_SAMPLES: list[dict] = [
                     "crate_hex": "#A9713B"},
         "rules": "Slightly irregular hand-drawn proportions, 3px "
                  "dark-brown outlines, two-tone cel shading.",
+        "traits": {"outline_width": 3.0, "outline_color": "#3E2A1E",
+                   "shading": "cel", "glow": False,
+                   "pattern": "dots"},
         "sky": "#FBEED3", "ground": "#7FA653", "sun": "#F6B352",
     },
 ]
+
+# The style lock, as machine-readable drawing rules. The samples'
+# "rules" prose is what the maker reads; these traits are what
+# the drawing code obeys — outline (width in display px, colour)
+# or none, the shading model, whether shapes carry a glow rim,
+# and the background pattern family. A scope that names no known
+# sample gets the quiet default: a thin outline, one tint,
+# dots.
+_DEFAULT_TRAITS = {"outline_width": 2.0, "outline_color": "#4A4238",
+                   "shading": "tint", "glow": False,
+                   "pattern": "dots"}
+
+
+def style_traits(sample_id: str | None) -> dict:
+    """The drawing traits of one style sample (or the default)."""
+    for sample in STYLE_SAMPLES:
+        if sample["id"] == sample_id:
+            return dict(sample["traits"])
+    return dict(_DEFAULT_TRAITS)
+
+
+def traits_for_values(values: dict) -> dict:
+    """The drawing traits for a project's scope: the traits of
+    the sample the style lock names (the scope field holds the
+    sample id, possibly among other words)."""
+    text = (values.get(
+        "Style sample chosen (id / link to approved sample)")
+        or "").lower()
+    for sample in STYLE_SAMPLES:
+        if sample["id"] in text:
+            return dict(sample["traits"])
+    return dict(_DEFAULT_TRAITS)
+
+
+def audio_mood(values: dict) -> dict:
+    """The sound design for a project's scope, from its REQUIRED
+    Audio mood field: a scale, a root and a pace. Calm scopes
+    get a slow major pentatonic in a low key; energetic scopes a
+    faster, brighter one; anything else a plain bright major.
+    The choice is recorded in the assets report and the audio
+    provenance notes — never silently defaulted in the files."""
+    text = (values.get("Audio mood (music + SFX character)")
+            or "").lower()
+    if any(word in text for word in
+           ("calm", "quiet", "gentle", "soft", "peaceful", "chill",
+            "relax")):
+        return {"name": "calm", "scale_name": "major pentatonic",
+                "scale": [0, 2, 4, 7, 9], "root": 130.81,
+                "note_s": 0.22, "pad_root": 65.41}
+    if any(word in text for word in
+           ("energetic", "upbeat", "intense", "driving", "fast",
+            "exciting", "punchy", "arcade")):
+        return {"name": "energetic", "scale_name": "major pentatonic",
+                "scale": [0, 2, 4, 7, 9], "root": 196.0,
+                "note_s": 0.09, "pad_root": 98.0}
+    return {"name": "bright", "scale_name": "major pentatonic",
+            "scale": [0, 2, 4, 7, 9], "root": 164.81,
+            "note_s": 0.13, "pad_root": 82.41}
+
+
+def _mood_note(freq: float, semitones: int) -> float:
+    return freq * (2.0 ** (semitones / 12.0))
 
 # Palette roles in scope order — the scope's Palette field pins
 # roles by position (see generate._palette), so a style's palette
@@ -728,6 +1068,7 @@ def style_sample_svg(sample: dict) -> str:
     palette by the sprite generators above — sky, sun, hills, a
     tree, and the player / target / crate sprites themselves."""
     palette = dict(sample["palette"])
+    palette["style"] = dict(sample["traits"])
     player = _embed_svg(_sprite_player(palette), 28, 116, 58)
     target = _embed_svg(_sprite_target(palette), 238, 52, 46)
     crate = _embed_svg(_sprite_crate(palette), 138, 128, 50)
@@ -754,7 +1095,8 @@ def asset_names(project_dir) -> list[str]:
     project = Path(project_dir)
     palette, chosen, values = _preflight(project)
     return sorted(_producers(palette, chosen,
-                             asset_requests(project, values)))
+                             asset_requests(project, values),
+                             values))
 
 
 def list_assets(project_dir) -> list[dict]:
@@ -773,7 +1115,8 @@ def list_assets(project_dir) -> list[dict]:
     project = Path(project_dir)
     palette, chosen, values = _preflight(project)
     producers = _producers(palette, chosen,
-                           asset_requests(project, values))
+                           asset_requests(project, values),
+                           values)
     records: dict[str, dict] = {}
     try:
         for record in provenance_module.list_records(project):
@@ -845,7 +1188,8 @@ def regenerate_asset(project_dir, name: str, reporter=None) -> dict:
     project = Path(project_dir)
     palette, chosen, values = _preflight(project)
     producers = _producers(palette, chosen,
-                           asset_requests(project, values))
+                           asset_requests(project, values),
+                           values)
     if name not in producers:
         raise AssetsError(
             f"Unknown asset {name!r}. The generated assets are: "

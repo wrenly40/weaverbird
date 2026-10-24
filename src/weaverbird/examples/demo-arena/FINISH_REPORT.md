@@ -2,29 +2,30 @@
 
 A tiny arena collector: gather the stars, dodge the hazards, beat the clock.
 
-Demo Arena is at the playtest stage of the factory. 7 of 7 definition-of-done items are marked, each backed by recorded evidence; the rest stay open with their reasons listed below. Total recorded spend is 0 tokens (cost 0.0000); the skeleton stage itself is deterministic and spent none.
+Demo Arena is at the finished stage of the factory. 7 of 7 definition-of-done items are marked, each backed by recorded evidence; the rest stay open with their reasons listed below. Total recorded spend is 0 tokens (cost 0.0000); the skeleton stage itself is deterministic and spent none.
 
 _Summary built from the project's records (no model was used)._
 
 ## Where the game is
 
-Current pipeline stage: **playtest**
+Current pipeline stage: **finished**
 
 Stage history:
 - scope — 2026-10-24T00:40:40+00:00
 - skeleton — 2026-10-24T00:40:52+00:00
 - build — 2026-10-24T00:40:52+00:00
 - playtest — 2026-10-24T00:42:14+00:00
+- finished — 2026-10-24T00:42:14+00:00
 
 ## What was built
 
 A grey-box Godot project in `game/` (22 files), generated from the approved scope by the skeleton builder.
 
 Godot validation (4.7.2.stable.official.ed1daf0bf):
-- ✓ import — 7.7s, no errors
-- ✓ main scene — 0.79s, no errors
-- ✓ game scene — 0.82s, no errors
-- ✓ flow smoke — 1.34s, no errors
+- ✓ import — 6.25s, no errors
+- ✓ main scene — 0.77s, no errors
+- ✓ game scene — 0.86s, no errors
+- ✓ flow smoke — 1.24s, no errors
 
 Known-good tag: `known-good/skeleton`
 
@@ -34,8 +35,7 @@ Scope numbers: Scope numbers reconciled: the scope says 6 targets per round, the
 
 Assets generated deterministically: 19 files (vector sprites, a generated icon, synthesised audio), palette #9B8CF2 / #7FD6A4 from the scope's style lock, each with a provenance record.
 
-Test stage: 7 of 7 runs passed (base runs plus the scripted competent, breaker and first-time players). Win proven: yes; lose proven: yes; performance: 144.4 avg FPS against a target of 30.
-- Warning: breaker: fuzzing reached the game over screen
+Test stage: 7 of 7 runs passed (base runs plus the scripted competent, breaker and first-time players). Win proven: yes; lose proven: yes; performance: 143.9 avg FPS against a target of 30.
 - Warning: breaker: pause overlay opened and closed under fuzz input
 
 ## Definition of done
@@ -52,7 +52,7 @@ Test stage: 7 of 7 runs passed (base runs plus the scripted competent, breaker a
 
 ## What it cost
 
-Total: 0 tokens, cost 0.0000 (4 ledger entries).
+Total: 0 tokens, cost 0.0000 (8 ledger entries).
 
 By stage:
 - assets: 0 tokens, cost 0.0000
