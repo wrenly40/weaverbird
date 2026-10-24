@@ -79,6 +79,20 @@ def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""), quote=True)
 
 
+def _notice_html(notice: str, notice_kind: str) -> str:
+    """A notice banner — the ONE place notice text becomes HTML.
+
+    Notices are text, never markup: every render_* escapes its
+    notice here, and callers pass plain strings (never pre-escaped
+    fragments, which would double-escape). Before 0.13.0 the
+    renders inserted notices raw and trusted callers to escape;
+    one caller didn't, and a settings provider string became live
+    markup (security finding F2)."""
+    if not notice:
+        return ""
+    return f'<div class="notice {notice_kind}">{_esc(notice)}</div>'
+
+
 def _web_text(name: str) -> str:
     return resources.files(__package__).joinpath("web", name).read_text(
         encoding="utf-8")
@@ -249,8 +263,7 @@ def render_dashboard(server, notice: str = "",
     projects = find_projects(workspace)
     _, settings_data = workspace_settings(workspace)
     statuses = brain_module.brain_status(settings_data)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
 
     cards = ""
     totals = {"tokens": 0, "cost": 0.0}
@@ -354,8 +367,7 @@ def render_new_project(server, notice: str = "",
     the same scaffold `weaverbird init` performs — so an app-made
     project and a CLI-made one are identical on disk."""
     values = values or {}
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     body = f"""
 <div class="top"><div><h1>New project</h1><div class="sub">Start a game in this workspace. Weaverbird creates the project folder and its scope file; the scope interview takes it from there.</div></div>
 <div><a class="btn ghost" href="/">Back to projects</a></div></div>
@@ -587,8 +599,7 @@ def render_project(server, name: str, notice: str = "",
     path = project["path"]
     quoted = urllib.parse.quote(name)
 
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     job_html = _job_card_for(server, job_id)
 
     dod_html = ""
@@ -848,8 +859,7 @@ def render_feedback(server, name: str, notice: str = "",
     quoted = urllib.parse.quote(name)
     store = feedback_module.load_store(path)
     items = feedback_module.ranked_queue(store)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     job_html = _job_card_for(server, job_id)
     rows = ""
     for item in items:
@@ -916,8 +926,7 @@ def render_scope_form(server, name: str, notice: str = "",
     path = project["path"]
     parsed = scope_module.load_scope(scope_module.scope_path_for(path))
     quoted = urllib.parse.quote(name)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
 
     groups: dict[str, list] = {}
     order: list[str] = []
@@ -1081,8 +1090,7 @@ def render_scope(server, name: str, notice: str = "",
     project = server.project_by_name(name)
     path = project["path"]
     quoted = urllib.parse.quote(name)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     job_html = _job_card_for(server, job_id)
     state = interview_module.public_state(path)
     samples_by_id = {s["id"]: s for s in (state.get("samples") or [])}
@@ -1186,7 +1194,7 @@ def _project_settings_note(server) -> str:
     maker's project file wins for that project — say so."""
     for project in find_projects(server.workspace):
         if (Path(project["path"]) / SETTINGS_FILENAME).exists():
-            return (f"Note: project {_esc(project['name'])} has its own "
+            return (f"Note: project {project['name']} has its own "
                     "global-settings.yaml — a project file takes "
                     "precedence over this workspace file for that "
                     "project.")
@@ -1272,10 +1280,9 @@ def render_settings(server, notice: str = "", notice_kind: str = "ok") -> str:
     root file yet, one click creates it from the shipped
     template (the same file `init --with-settings` copies)."""
     root = Path(server.workspace) / SETTINGS_FILENAME
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     note = _project_settings_note(server)
-    note_html = (f'<div class="notice warn">{note}</div>' if note else "")
+    note_html = _notice_html(note, "warn")
     if not root.exists():
         body = f"""
 <div class="top"><div><h1>Settings</h1><div class="sub">One global settings file serves the whole factory: budgets, and the model ladder the brain climbs.</div></div></div>
@@ -1337,9 +1344,11 @@ def render_settings(server, notice: str = "", notice_kind: str = "ok") -> str:
 
 def render_result(server, title: str, message: str, back_href: str,
                   kind: str = "ok") -> str:
+    # The message is text and is escaped here, like every notice
+    # (F2's rule: render escapes, callers pass text).
     body = f"""
 <div class="top"><div><h1>{_esc(title)}</h1></div></div>
-<div class="notice {kind}">{message}</div>
+<div class="notice {kind}">{_esc(message)}</div>
 <p><a class="btn ghost" href="{_esc(back_href)}">Back</a></p>"""
     return _layout(title, "projects", body)
 
@@ -1494,8 +1503,7 @@ def render_balance(server, name: str, notice: str = "",
     project = server.project_by_name(name)
     path = project["path"]
     quoted = urllib.parse.quote(name)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     job_html = _job_card_for(server, job_id)
     report = finish_module.load_test_report(path)
     if report is None:
@@ -1615,8 +1623,7 @@ def render_assets(server, name: str, notice: str = "",
     project = server.project_by_name(name)
     path = project["path"]
     quoted = urllib.parse.quote(name)
-    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
-                   if notice else "")
+    notice_html = _notice_html(notice, notice_kind)
     job_html = _job_card_for(server, job_id)
     try:
         listing = assets_module.list_assets(path)
@@ -1855,7 +1862,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _fail_page(self, message: str, status: int = 400) -> None:
         self._send_html(render_result(self.app, "Something needs attention",
-                                      _esc(message), "/"), status)
+                                      message, "/"), status)
 
     # -- routing ---------------------------------------------------------
     def do_GET(self):  # noqa: N802 (stdlib handler name)
@@ -1890,7 +1897,7 @@ class _Handler(BaseHTTPRequestHandler):
                     self.app, urllib.parse.unquote(parts[1])))
             if not parts:
                 deleted = (query.get("deleted") or [""])[0]
-                notice = (f"Project {_esc(deleted)} deleted — "
+                notice = (f"Project {deleted} deleted — "
                           "permanently. Its folder, git history and "
                           "exports are gone."
                           if deleted else "")
@@ -2101,12 +2108,12 @@ class _Handler(BaseHTTPRequestHandler):
                 folder=values["folder"], prompt=values["prompt"])
         except projects_module.ProjectError as exc:
             return self._send_html(render_new_project(
-                self.app, notice=_esc(f"Not created. {exc}"),
+                self.app, notice=f"Not created. {exc}",
                 notice_kind="bad", values=values))
         except Exception as exc:  # a half-made folder is already removed
             return self._send_html(render_new_project(
                 self.app,
-                notice=_esc(f"Not created. {type(exc).__name__}: {exc}"),
+                notice=f"Not created. {type(exc).__name__}: {exc}",
                 notice_kind="bad", values=values))
         quoted = urllib.parse.quote(created["name"])
         if values["prompt"].strip():
@@ -2148,7 +2155,7 @@ class _Handler(BaseHTTPRequestHandler):
         except projects_module.ProjectError as exc:
             return self._send_html(render_project(
                 self.app, name,
-                notice=_esc(f"Not deleted. {exc}"),
+                notice=f"Not deleted. {exc}",
                 notice_kind="bad"))
         return self._redirect(
             f"/?deleted={urllib.parse.quote(deleted['name'])}")
@@ -2226,7 +2233,7 @@ class _Handler(BaseHTTPRequestHandler):
                 scope_module.ScopeError) as exc:
             return self._send_html(render_assets(
                 self.app, name,
-                notice=_esc(f"Palette not saved. {exc}"),
+                notice=f"Palette not saved. {exc}",
                 notice_kind="bad"))
         return self._send_html(render_assets(
             self.app, name,
@@ -2259,8 +2266,8 @@ class _Handler(BaseHTTPRequestHandler):
                 path, source="manual", text=text)
             return self._send_html(render_feedback(
                 self.app, name,
-                notice=_esc(f"{'Added' if created else 'Already on record'}: "
-                            f"[{item['id']}] {item['text']}"),
+                notice=(f"{'Added' if created else 'Already on record'}: "
+                        f"[{item['id']}] {item['text']}"),
                 notice_kind="ok"))
         if len(parts) == 5 and parts[4] in ("approve", "dismiss"):
             try:
@@ -2269,10 +2276,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "approved" if parts[4] == "approve" else "dismissed")
             except feedback_module.FeedbackError as exc:
                 return self._send_html(render_feedback(
-                    self.app, name, notice=_esc(str(exc)), notice_kind="bad"))
+                    self.app, name, notice=str(exc), notice_kind="bad"))
             return self._send_html(render_feedback(
                 self.app, name,
-                notice=_esc(f"[{item['id']}] is now {item['status']}."),
+                notice=f"[{item['id']}] is now {item['status']}.",
                 notice_kind="ok"))
         return self._fail_page("That feedback action does not exist here.", 404)
 
@@ -2290,11 +2297,11 @@ class _Handler(BaseHTTPRequestHandler):
             state = state_module.advance(project["path"])
         except state_module.PipelineError as exc:
             return self._send_html(render_project(
-                self.app, name, notice=_esc(f"Not advanced. {exc}"),
+                self.app, name, notice=f"Not advanced. {exc}",
                 notice_kind="warn"))
         return self._send_html(render_project(
             self.app, name,
-            notice=f"Advanced. The pipeline is now at stage: {_esc(state['stage'])}.",
+            notice=f"Advanced. The pipeline is now at stage: {state['stage']}.",
             notice_kind="ok"))
 
     def _post_scope_save(self, name: str) -> None:
@@ -2310,7 +2317,7 @@ class _Handler(BaseHTTPRequestHandler):
                 changed.append(fld.name)
         note = ("Saved: " + ", ".join(changed)) if changed else "No changes."
         return self._send_html(render_scope_form(
-            self.app, name, notice=_esc(note + " The scope file has been updated."),
+            self.app, name, notice=note + " The scope file has been updated.",
             notice_kind="ok"))
 
     def _post_scope_chat(self, name: str) -> None:
@@ -2350,7 +2357,7 @@ class _Handler(BaseHTTPRequestHandler):
             bits.append(str(outcome["note"]))
         bits.append(f"{outcome['missing_count']} required field(s) still missing.")
         return self._send_html(render_scope_form(
-            self.app, name, notice=_esc(" ".join(bits)),
+            self.app, name, notice=" ".join(bits),
             notice_kind="ok" if outcome["brain_used"] else "warn"))
 
     def _post_scope_approve(self, name: str) -> None:
@@ -2362,10 +2369,10 @@ class _Handler(BaseHTTPRequestHandler):
                                                 by=form.get("by", ""))
         except scope_module.ScopeError as exc:
             return self._send_html(render_scope(
-                self.app, name, notice=_esc(str(exc)), notice_kind="bad"))
+                self.app, name, notice=str(exc), notice_kind="bad"))
         return self._send_html(render_scope(
             self.app, name,
-            notice=f"Scope approved and frozen. {_esc(parsed.approval)}",
+            notice=f"Scope approved and frozen. {parsed.approval}",
             notice_kind="ok"))
 
     def _post_settings_create(self) -> None:

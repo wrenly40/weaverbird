@@ -188,6 +188,52 @@ class TestSecurityHeaders(AppSecurityTestCase):
                          "nosniff")
 
 
+class TestSettingsXss(AppSecurityTestCase):
+    """F2: the settings save error once embedded the raw provider
+    string into the page. Notices are text; the render layer
+    escapes them — for every render, not just this one."""
+
+    PAYLOAD = '"><svg onload=alert(1)>'
+
+    def test_provider_payload_is_escaped_in_the_notice(self):
+        settings = self.workspace / "global-settings.yaml"
+        settings.write_text("budgets:\n  tokens_per_game: 10\n",
+                            encoding="utf-8")
+        status, _h, body = self.raw(
+            "POST", "/settings",
+            {"m_cheap_provider": self.PAYLOAD, "m_cheap_model": "m",
+             "m_cheap_api_key_env": "FOO"})
+        self.assertEqual(status, 200)
+        self.assertNotIn("<svg onload=alert(1)>", body)
+        self.assertIn("&lt;svg onload=alert(1)&gt;", body)
+        # and the refused save changed nothing on disk
+        self.assertEqual(settings.read_text(encoding="utf-8"),
+                         "budgets:\n  tokens_per_game: 10\n")
+
+    def test_script_variant_is_escaped_too(self):
+        settings = self.workspace / "global-settings.yaml"
+        settings.write_text("budgets:\n  tokens_per_game: 10\n",
+                            encoding="utf-8")
+        status, _h, body = self.raw(
+            "POST", "/settings",
+            {"m_cheap_provider": "x'><script>alert(3)</script>",
+             "m_cheap_model": "m", "m_cheap_api_key_env": "FOO"})
+        self.assertEqual(status, 200)
+        self.assertNotIn("<script>alert(3)</script>", body)
+
+    def test_notice_text_is_escaped_exactly_once(self):
+        # Feedback text is user text shown back in a notice: it
+        # must appear escaped once — raw markup is the bug,
+        # double-escaping is the over-correction.
+        status, _h, body = self.raw(
+            "POST", "/project/bee-game/feedback/add",
+            {"text": "the <b>bold</b> button broke"})
+        self.assertEqual(status, 200)
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", body)
+        self.assertNotIn("&amp;lt;b&amp;gt;", body)
+        self.assertNotIn("<b>bold</b>", body)
+
+
 class TestJobTraversal(AppSecurityTestCase):
     """F4: job ids cannot walk out of the job store."""
 
