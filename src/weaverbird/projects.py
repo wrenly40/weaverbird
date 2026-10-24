@@ -187,3 +187,78 @@ def new_project(workspace, display_name: str, folder: str = "",
         raise
     return {"name": folder, "path": target,
             "display_name": display_name}
+
+
+def running_jobs_for(workspace, folder: str) -> list[dict]:
+    """The queued/running job records for one project, read from
+    the workspace's job store — the same records the app writes, so
+    the CLI sees a job the app started and vice versa. Empty when
+    the workspace has no job store yet."""
+    from . import jobs as jobs_module
+
+    store = jobs_module.JobStore(workspace)
+    return [job for job in store.list(project=folder)
+            if job.get("status") in ("queued", "running")]
+
+
+def delete_project(workspace, folder: str, confirm_name: str,
+                   running_jobs=None) -> dict:
+    """Delete a project folder — permanently — behind guardrails.
+
+    One code path for the app's Danger zone and `weaverbird
+    delete`. Every refusal is a ProjectError with a plain reason
+    and deletes nothing:
+
+    - the target must be a single folder directly inside the
+      workspace (never the workspace itself, never a path that
+      climbs out of it, never a reserved workspace name);
+    - the folder must exist and look like a Weaverbird project
+      (a .weaverbird/ folder or a SCOPE.md);
+    - ``confirm_name`` must be the folder name, typed exactly;
+    - no job may be queued or running for the project.
+
+    Deletion is a plain recursive remove: the project's own git
+    history, exports and saves go with it. There is no trash
+    folder and no undo. ``running_jobs`` may be supplied by the
+    caller; by default the workspace's job store is read.
+    Returns {"name": folder, "path": target}.
+    """
+    workspace = Path(workspace).resolve()
+    folder = (folder or "").strip()
+    if not folder or folder in (".", "..") or "/" in folder \
+            or "\\" in folder:
+        raise ProjectError(
+            "Deletion needs the project's folder name inside this "
+            f"workspace — {folder!r} is not one.")
+    if folder in RESERVED_FOLDERS:
+        raise ProjectError(
+            f"{folder!r} belongs to the workspace itself and "
+            "cannot be deleted as a project.")
+    target = workspace / folder
+    if target.resolve().parent != workspace:
+        raise ProjectError(
+            f"{folder!r} does not sit inside this workspace — "
+            "nothing was deleted.")
+    if not target.is_dir():
+        raise ProjectError(
+            f"There is no folder named {folder!r} in this "
+            "workspace — nothing was deleted.")
+    if not (target / ".weaverbird").is_dir() \
+            and not (target / "SCOPE.md").is_file():
+        raise ProjectError(
+            f"{folder!r} does not look like a Weaverbird project "
+            "(no .weaverbird/ folder and no SCOPE.md) — refusing "
+            "to delete it.")
+    if (confirm_name or "") != folder:
+        raise ProjectError(
+            "The name typed does not match the folder name "
+            f"{folder!r} exactly — nothing was deleted.")
+    if running_jobs is None:
+        running_jobs = running_jobs_for(workspace, folder)
+    if running_jobs:
+        raise ProjectError(
+            f"A job is currently running for {folder!r} — wait "
+            "for it to finish (or cancel it) before deleting the "
+            "project. Nothing was deleted.")
+    shutil.rmtree(target)
+    return {"name": folder, "path": target}

@@ -87,5 +87,65 @@ class CliTests(unittest.TestCase):
         self.assertIn("Godot", out)
 
 
+class DeleteCliTests(unittest.TestCase):
+    """0.12.0 (2/4): `weaverbird delete` — typed confirmation, or
+    --yes for scripts; every other guardrail always applies."""
+
+    def _make_project(self, tmp) -> Path:
+        project = Path(tmp) / "bee-game"
+        (project / ".weaverbird").mkdir(parents=True)
+        (project / "SCOPE.md").write_text("# scope\n",
+                                         encoding="utf-8")
+        return project
+
+    def test_delete_yes_removes_the_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._make_project(tmp)
+            code, out = run_cli("delete", str(project), "--yes")
+            self.assertEqual(code, 0, out)
+            self.assertIn("permanently", out)
+            self.assertFalse(project.exists())
+
+    def test_delete_typed_confirmation_over_stdin(self):
+        import io as _io
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._make_project(tmp)
+            with mock.patch("sys.stdin", _io.StringIO("bee-game\n")):
+                code, out = run_cli("delete", str(project))
+            self.assertEqual(code, 0, out)
+            self.assertFalse(project.exists())
+
+    def test_delete_wrong_typed_name_refuses(self):
+        import io as _io
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._make_project(tmp)
+            with mock.patch("sys.stdin", _io.StringIO("nope\n")):
+                code, out = run_cli("delete", str(project))
+            self.assertEqual(code, 1)
+            self.assertIn("does not match", out)
+            self.assertTrue((project / "SCOPE.md").exists())
+
+    def test_delete_yes_still_refuses_a_running_job(self):
+        from weaverbird import jobs as jobs_module
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._make_project(tmp)
+            jobs_module.JobStore(tmp).save(
+                {"id": "j1", "project": "bee-game",
+                 "status": "running", "created": "2026-10-24"})
+            code, out = run_cli("delete", str(project), "--yes")
+            self.assertEqual(code, 1)
+            self.assertIn("job is currently running", out)
+            self.assertTrue(project.exists())
+
+    def test_delete_missing_folder_fails_plainly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, out = run_cli("delete", str(Path(tmp) / "ghost"),
+                                "--yes")
+            self.assertEqual(code, 1)
+            self.assertIn("nothing was deleted", out)
+
+
 if __name__ == "__main__":
     unittest.main()

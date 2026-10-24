@@ -138,6 +138,33 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_delete(args) -> int:
+    target = Path(args.dir)
+    if not target.is_dir():
+        return _fail(f"No such folder: {target} — nothing was deleted.")
+    workspace = target.parent.resolve()
+    folder = target.name
+    if args.yes:
+        typed = folder
+    else:
+        print(f"This deletes {target} permanently — the scope, the "
+              "game, its git history, its exports and its saves. "
+              "There is no trash folder and no undo.")
+        try:
+            typed = input(f"Type the folder name {folder!r} to "
+                          "confirm: ")
+        except EOFError:
+            return _fail("No confirmation could be read — nothing "
+                         "was deleted. (Scripts can pass --yes.)")
+    try:
+        deleted = projects_module.delete_project(workspace, folder,
+                                                 typed)
+    except projects_module.ProjectError as exc:
+        return _fail(str(exc))
+    print(f"Deleted {deleted['path']} — permanently.")
+    return 0
+
+
 def cmd_export(args) -> int:
     from . import exports as exports_module
     from . import workers as workers_module
@@ -1223,6 +1250,17 @@ def build_parser() -> argparse.ArgumentParser:
                                "(default: demo-arena). An existing "
                                "folder is never overwritten.")
 
+    delete_cmd = sub.add_parser(
+        "delete", help="Delete a project folder, permanently — "
+                       "typed confirmation, and every guardrail "
+                       "(inside its workspace, a real project, no "
+                       "job running) still applies.")
+    delete_cmd.add_argument("dir", help="The project folder to delete.")
+    delete_cmd.add_argument(
+        "--yes", action="store_true",
+        help="Skip the typed confirmation (for scripts). Every "
+             "other guardrail still applies.")
+
     export_cmd = sub.add_parser(
         "export", help="Export a finished game to local zip files "
                        "(linux, windows, macos, source). Local "
@@ -1517,6 +1555,7 @@ _HANDLERS = {
     ("identity", None): cmd_identity,
     ("init", None): cmd_init,
     ("demo", None): cmd_demo,
+    ("delete", None): cmd_delete,
     ("export", None): cmd_export,
     ("scope", "check"): cmd_scope_check,
     ("scope", "questions"): cmd_scope_questions,
@@ -1609,6 +1648,7 @@ commands, for scripts and terminals:
   weaverbird init <dir>                 start a new game project
   weaverbird demo                       install the bundled demo project (a finished game)
   weaverbird export <dir>               export a finished game to local zips (no publishing)
+  weaverbird delete <dir>               delete a project, permanently (typed confirmation)
   weaverbird scope ...                  the scope file and the interview
   weaverbird brain check                the bring-your-own-key ladder
   weaverbird workers list               every independent worker + its contract

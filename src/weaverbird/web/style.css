@@ -22,6 +22,8 @@ h2 { font-size:20px; letter-spacing:-.3px; }
 a { color:#5438C9; }
 .btn { display:inline-block; background:#6C4CF1; color:#fff; border:none; padding:12px 20px; border-radius:12px; font-size:14.5px; font-weight:600; box-shadow:0 8px 20px rgba(108,76,241,.28); cursor:pointer; text-decoration:none; font-family:inherit; }
 .btn.ghost { background:#fff; color:#232936; box-shadow:0 4px 14px rgba(35,41,54,.07); }
+.btn.danger { background:#D24545; box-shadow:0 8px 20px rgba(210,69,69,.25); }
+.card.dangerzone { border:1.5px solid #F0C6C6; }
 .btn.small { padding:9px 15px; font-size:13.5px; }
 .btn[disabled] { background:#C9C4DE; box-shadow:none; cursor:not-allowed; }
 .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }

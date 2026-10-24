@@ -125,5 +125,83 @@ class NewProjectTests(unittest.TestCase):
         self.assertEqual(list(self.ws.iterdir()), [])
 
 
+class DeleteProjectTests(unittest.TestCase):
+    """0.12.0 (2/4): permanent deletion behind guardrails — one
+    code path for the app's Danger zone and `weaverbird delete`."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self._tmp.name)
+        self.project = self.ws / "bee-game"
+        (self.project / ".weaverbird").mkdir(parents=True)
+        (self.project / "SCOPE.md").write_text("# scope\n",
+                                              encoding="utf-8")
+        (self.project / "game").mkdir()
+        (self.project / "game" / "main.gd").write_text(
+            "extends Node\n", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_happy_path_removes_the_folder(self):
+        out = projects.delete_project(self.ws, "bee-game", "bee-game")
+        self.assertEqual(out["name"], "bee-game")
+        self.assertFalse(self.project.exists())
+
+    def test_wrong_name_refuses_and_deletes_nothing(self):
+        with self.assertRaises(projects.ProjectError) as ctx:
+            projects.delete_project(self.ws, "bee-game", "bee-gam")
+        self.assertIn("does not match", str(ctx.exception))
+        self.assertTrue((self.project / "SCOPE.md").exists())
+
+    def test_not_a_project_refuses(self):
+        plain = self.ws / "plain-folder"
+        plain.mkdir()
+        (plain / "notes.txt").write_text("hi", encoding="utf-8")
+        with self.assertRaises(projects.ProjectError) as ctx:
+            projects.delete_project(self.ws, "plain-folder",
+                                    "plain-folder")
+        self.assertIn("does not look like a Weaverbird project",
+                      str(ctx.exception))
+        self.assertTrue((plain / "notes.txt").exists())
+
+    def test_running_job_refuses(self):
+        with self.assertRaises(projects.ProjectError) as ctx:
+            projects.delete_project(
+                self.ws, "bee-game", "bee-game",
+                running_jobs=[{"id": "j1", "status": "running"}])
+        self.assertIn("job is currently running",
+                      str(ctx.exception))
+        self.assertTrue(self.project.exists())
+
+    def test_path_climbing_out_of_the_workspace_refuses(self):
+        for bad in ("../outside", "..", ".", "a/b"):
+            with self.assertRaises(projects.ProjectError):
+                projects.delete_project(self.ws, bad, bad)
+        self.assertTrue(self.project.exists())
+
+    def test_reserved_workspace_names_refuse(self):
+        with self.assertRaises(projects.ProjectError):
+            projects.delete_project(self.ws, ".weaverbird-app",
+                                    ".weaverbird-app")
+
+    def test_missing_folder_refuses_plainly(self):
+        with self.assertRaises(projects.ProjectError) as ctx:
+            projects.delete_project(self.ws, "ghost", "ghost")
+        self.assertIn("no folder named", str(ctx.exception))
+
+    def test_running_jobs_for_reads_the_job_store(self):
+        from weaverbird import jobs as jobs_module
+        store = jobs_module.JobStore(self.ws)
+        store.save({"id": "j-run", "project": "bee-game",
+                    "status": "running", "created": "2026-10-24"})
+        store.save({"id": "j-done", "project": "bee-game",
+                    "status": "done", "created": "2026-10-24"})
+        store.save({"id": "j-other", "project": "other-game",
+                    "status": "queued", "created": "2026-10-24"})
+        found = projects.running_jobs_for(self.ws, "bee-game")
+        self.assertEqual([j["id"] for j in found], ["j-run"])
+
+
 if __name__ == "__main__":
     unittest.main()

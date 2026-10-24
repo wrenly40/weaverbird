@@ -524,6 +524,44 @@ class TestJobActionRedirects(AppTestCase):
         self.assertEqual(status, 404)
 
 
+class DeleteProjectTests(AppTestCase):
+    """0.12.0 (2/4): the Danger zone on the project page."""
+
+    def test_project_page_has_a_danger_zone(self):
+        _status, body = get(f"{self.base}/project/bee-game")
+        self.assertIn("Danger zone", body)
+        self.assertIn("Delete this project", body)
+        self.assertIn('action="/project/bee-game/delete"', body)
+        self.assertIn("no undo", body)
+
+    def test_delete_happy_path_lands_on_a_dashboard_without_it(self):
+        status, body = post(f"{self.base}/project/bee-game/delete",
+                            {"confirm_name": "bee-game"})
+        self.assertEqual(status, 200)  # 303 followed to the dashboard
+        self.assertFalse(self.project.exists())
+        self.assertNotIn('href="/project/bee-game"', body)
+        self.assertIn("deleted", body)
+
+    def test_wrong_name_deletes_nothing(self):
+        _status, body = post(f"{self.base}/project/bee-game/delete",
+                             {"confirm_name": "bee-gam"})
+        self.assertIn("Not deleted", body)
+        self.assertIn("does not match", body)
+        self.assertTrue((self.project / "SCOPE.md").exists())
+
+    def test_running_job_blocks_deletion(self):
+        from weaverbird import jobs as jobs_module
+        jobs_module.JobStore(self.workspace).save(
+            {"id": "seeded-running", "project": "bee-game",
+             "kind": "test_run", "status": "running",
+             "created": "2026-10-24T00:00:00Z", "events": []})
+        _status, body = post(f"{self.base}/project/bee-game/delete",
+                             {"confirm_name": "bee-game"})
+        self.assertIn("Not deleted", body)
+        self.assertIn("job is currently running", body)
+        self.assertTrue((self.project / "SCOPE.md").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
 

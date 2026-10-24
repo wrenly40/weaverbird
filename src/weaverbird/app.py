@@ -243,11 +243,14 @@ def _stage_pips(current_stage: str) -> str:
 # ---------------------------------------------------------------------------
 # Screens
 
-def render_dashboard(server) -> str:
+def render_dashboard(server, notice: str = "",
+                     notice_kind: str = "ok") -> str:
     workspace = server.workspace
     projects = find_projects(workspace)
     _, settings_data = workspace_settings(workspace)
     statuses = brain_module.brain_status(settings_data)
+    notice_html = (f'<div class="notice {notice_kind}">{notice}</div>'
+                   if notice else "")
 
     cards = ""
     totals = {"tokens": 0, "cost": 0.0}
@@ -325,6 +328,7 @@ def render_dashboard(server) -> str:
     body = f"""
 <div class="top"><div><h1>Projects</h1><div class="sub">Every game in this workspace, where it is, and what it has cost.</div></div>
 <div><a class="btn" href="/new">New project</a> {demo_form}</div></div>
+{notice_html}
 <div class="grid">{cards}</div>
 {_jobs_strip(server)}
 <div class="row">
@@ -840,7 +844,14 @@ Scripted players are deterministic bots; the model playtester plays from screens
 <div class="card" style="margin-top:20px"><h3>Ledger</h3>
 <table><tr><th>When</th><th>Stage</th><th>Tier</th><th class="r">Tokens</th><th class="r">Cost</th></tr>{ledger_rows}</table></div>
 <div class="card" style="margin-top:20px"><h3>Provenance</h3>
-<table><tr><th>Asset</th><th>Source</th><th>Provider</th><th>Note</th></tr>{prov_rows}</table></div>"""
+<table><tr><th>Asset</th><th>Source</th><th>Provider</th><th>Note</th></tr>{prov_rows}</table></div>
+<div class="card dangerzone" style="margin-top:20px"><h3>Danger zone</h3>
+<p class="hint" style="margin:6px 0 10px">Delete this project — permanently. The whole folder goes: the scope, the game, its git history, its exports and its saves. There is no trash folder and no undo.</p>
+<form class="stack" method="post" action="/project/{quoted}/delete">
+  <label for="confirm_name">Type the folder name <b>{_esc(name)}</b> to confirm</label>
+  <input type="text" id="confirm_name" name="confirm_name" value="" autocomplete="off" placeholder="{_esc(name)}">
+  <div class="actions"><button class="btn danger" type="submit">Delete this project</button></div>
+</form></div>"""
     return _layout(facts["title"], "projects", body)
 
 
@@ -1800,7 +1811,13 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_html(render_job_page(
                     self.app, urllib.parse.unquote(parts[1])))
             if not parts:
-                return self._send_html(render_dashboard(self.app))
+                deleted = (query.get("deleted") or [""])[0]
+                notice = (f"Project {_esc(deleted)} deleted — "
+                          "permanently. Its folder, git history and "
+                          "exports are gone."
+                          if deleted else "")
+                return self._send_html(render_dashboard(
+                    self.app, notice=notice))
             if parts == ["new"]:
                 return self._send_html(render_new_project(self.app))
             if parts == ["settings"]:
@@ -1970,6 +1987,8 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._post_assets_palette(name)
                 if action == "advance":
                     return self._post_advance(name)
+                if action == "delete":
+                    return self._post_delete_project(name)
                 if action == "scope" and len(parts) == 3:
                     return self._post_scope_save(name)
                 if action == "scope" and len(parts) == 4 and parts[3] == "chat":
@@ -2031,6 +2050,28 @@ class _Handler(BaseHTTPRequestHandler):
             return self._fail_page(str(exc), 400)
         return self._redirect(
             f"/project/{urllib.parse.quote(installed['name'])}")
+
+    def _post_delete_project(self, name: str) -> None:
+        """The Danger zone: permanently delete the project folder.
+
+        All guardrails live in projects.delete_project (target
+        inside the workspace, a real project, the folder name
+        typed exactly, no job running); a refusal re-renders the
+        project page with the reason and deletes nothing. Success
+        is a 303 to the dashboard, which no longer lists it."""
+        project = self.app.project_by_name(name)
+        form = self._form()
+        try:
+            deleted = projects_module.delete_project(
+                self.app.workspace, project["name"],
+                form.get("confirm_name", ""))
+        except projects_module.ProjectError as exc:
+            return self._send_html(render_project(
+                self.app, name,
+                notice=_esc(f"Not deleted. {exc}"),
+                notice_kind="bad"))
+        return self._redirect(
+            f"/?deleted={urllib.parse.quote(deleted['name'])}")
 
     # -- job-backed actions ------------------------------------------------
     def _redirect(self, location: str) -> None:
