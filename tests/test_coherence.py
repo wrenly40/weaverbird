@@ -155,6 +155,61 @@ class ReconciliationTests(unittest.TestCase):
             recon = finish.scope_number_reconciliation(project)
             self.assertEqual(recon["status"], "unparseable")
 
+    LOSE = "- REQUIRED Lose / fail condition: Filled in for the test"
+
+    def _survive_project(self, tmp, win_text, lose_text, built_units):
+        project = scoped_project(tmp, {
+            WIN: f"- REQUIRED Win condition: {win_text}",
+            self.LOSE: f"- REQUIRED Lose / fail condition: {lose_text}",
+        })
+        game_dir = project / "game"
+        game_dir.mkdir(exist_ok=True)
+        (game_dir / "game_config.json").write_text(
+            json.dumps({"units": built_units,
+                        "plan": {"movement": "top_down_2d",
+                                 "objective": "survive",
+                                 "numbers": {"units": built_units}}}),
+            encoding="utf-8")
+        return project
+
+    def test_survive_units_statement_is_a_read_number(self):
+        # D2-4's second half (0.13.0): Emberwatch's exact Win/Lose
+        # text. A survive game has no per-round target count; its
+        # "3 nights" is the units count the plan derived and the
+        # config built, and "3 lives" is the plan's lives — neither
+        # is an unread number, so nothing blocks finish.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._survive_project(
+                tmp,
+                "Survive until dawn in each of the 3 nights; "
+                "finish all 3 nights to win the game",
+                "A storm wisp touch costs one life; lose all "
+                "3 lives and the game ends",
+                built_units=3)
+            self.assertIsNone(finish.scope_number_reconciliation(project))
+
+    def test_survive_units_mismatch_still_blocks(self):
+        # The strip is equality-gated: a scope saying 5 nights
+        # over a 3-night build is a number the build did not use.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._survive_project(
+                tmp, "Survive all 5 nights to win the game",
+                "Lose all 3 lives and the game ends",
+                built_units=3)
+            recon = finish.scope_number_reconciliation(project)
+            self.assertEqual(recon["status"], "unparseable")
+
+    def test_survive_other_numbers_still_block(self):
+        # Units read, but an unrelated stated number remains
+        # unread and keeps blocking.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._survive_project(
+                tmp, "Survive the 3 nights and reach 100% completion",
+                "Lose all 3 lives and the game ends",
+                built_units=3)
+            recon = finish.scope_number_reconciliation(project)
+            self.assertEqual(recon["status"], "unparseable")
+
     def test_world_counts_matching_the_pin_reconcile(self):
         # D6: config AND world agree with the scope — the line
         # quotes the actual per-round placement.

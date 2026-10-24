@@ -172,9 +172,10 @@ def scope_number_reconciliation(project_dir) -> dict | None:
     number, clamping explained when it applied), "mismatch" (the
     built config disagrees with the scope — the built game is not
     the scoped game), "unparseable" (the Win/Lose text carries a
-    number none of the conservative patterns in
-    generate.scope_target_count could read — reported plainly
-    rather than silently passed), or "not_applicable" (a number
+    number the factory could not read — reported plainly rather
+    than silently passed; numbers the plan demonstrably DID read
+    do not count: lives, and a units statement whose count equals
+    the built unit count), or "not_applicable" (a number
     was stated but this kind of game has no per-round target
     count to reconcile against).
     """
@@ -186,6 +187,7 @@ def scope_number_reconciliation(project_dir) -> dict | None:
     facts = _facts(project)
     values = facts["values"]
     built = None
+    built_units = None
     unit_plural = "rounds"
     config_path = (project / skeleton_module.GAME_DIR_NAME
                    / "game_config.json")
@@ -201,6 +203,13 @@ def scope_number_reconciliation(project_dir) -> dict | None:
         if isinstance(config, dict) \
                 and isinstance(config.get("plan"), dict):
             unit_plural = plan_module.unit_word(config["plan"])
+            numbers = config["plan"].get("numbers")
+            if isinstance(numbers, dict) \
+                    and isinstance(numbers.get("units"), (int, float)):
+                built_units = int(numbers["units"])
+        if built_units is None and isinstance(config, dict) \
+                and isinstance(config.get("units"), (int, float)):
+            built_units = int(config["units"])
     found = generate_module.scope_target_count(values)
     if found is None:
         stated_text = " ".join(
@@ -212,6 +221,20 @@ def scope_number_reconciliation(project_dir) -> dict | None:
         unread_text = _re.sub(
             r"\b\d{1,3}\s*(?:lives|life)\b", "", stated_text,
             flags=_re.IGNORECASE)
+        # A units statement is the same kind of read number when
+        # its count is the built game's unit count: a survive
+        # scope's "each of the 3 nights; finish all 3 nights" is
+        # where the plan's rounds come from, so a survive game
+        # (which has no per-round target count at all) must not
+        # block here. The strip is equality-gated — only the exact
+        # built count followed by a unit noun is removed, so a
+        # number the build did NOT use (a scope saying 5 nights
+        # over a 3-night build) still reads as unread and blocks.
+        if built_units is not None and built_units >= 1:
+            unread_text = _re.sub(
+                rf"\b{built_units}\s*(?:nights?|rounds?|levels?|"
+                r"waves?|rooms?|puzzles?)\b", "", unread_text,
+                flags=_re.IGNORECASE)
         if _re.search(r"\d", unread_text):
             return {
                 "status": "unparseable", "stated": None, "built": built,
