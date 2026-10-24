@@ -281,22 +281,65 @@ _HAZARD_WORDS = (
 )
 
 
+# Words that make a derived label a sentence fragment rather
+# than a noun phrase — conjunctions, prepositions, articles and
+# pronouns that dangle at the edge of a bad capture ("gathering
+# star shards while patrol drones…" captured "Shards While" as
+# the hazard). They are trimmed from a capture's edges; a
+# capture made only of them is no label at all.
+_LABEL_FRAGMENT = {
+    "while", "when", "and", "or", "but", "that", "who", "whom",
+    "to", "of", "with", "as", "if", "so", "in", "on", "at",
+    "by", "from", "per", "each", "they", "their", "you",
+    "your", "it", "its", "then", "than",
+}
+
+
+def _clean_hazard_label(raw: str, collectible: str) -> str | None:
+    """A hazard label from a raw capture, or None when the
+    capture is not a clean noun phrase. Fragment words are
+    stripped from both ends; what remains must be 1–3 words and
+    at least 3 characters — and never the collectible's noun, in
+    whole or in part: the things you gather are not the things
+    you avoid, so a derivation that lands on them (or on a
+    phrase built from them) found the wrong words, and the
+    caller falls back to the neutral "Hazards"."""
+    words = [w for w in re.split(r"\s+", str(raw or "").strip().lower())
+             if w and w not in ("the", "a", "an")]
+    while words and words[-1] in _LABEL_FRAGMENT:
+        words.pop()
+    while words and words[0] in _LABEL_FRAGMENT:
+        words.pop(0)
+    words = words[:3]
+    while words and words[-1] in _LABEL_FRAGMENT:
+        words.pop()
+    if not words or len(" ".join(words)) < 3:
+        return None
+    own = set(words)
+    theirs = {w for w in re.split(
+        r"\s+", str(collectible or "").strip().lower()) if w}
+    if theirs and (own <= theirs or theirs <= own):
+        return None
+    return " ".join(words).title()
+
+
 def _hazard_label(values: dict) -> str:
     fields = ("One-line pitch", "Lose / fail condition",
               "Core verb (what the player does most)",
               "Win condition")
+    collectible = collectible_label(values)
     for name in fields:
         match = _HAZARD_AFTER_RE.search(str(values.get(name, "") or ""))
         if match:
-            label = _clean_label(match.group(1))
-            if label and len(label) >= 3:
-                return label.title()
+            label = _clean_hazard_label(match.group(1), collectible)
+            if label:
+                return label
     for name in fields:
         hit = _hazard_before(str(values.get(name, "") or ""))
         if hit:
-            label = _clean_label(hit)
-            if label and len(label) >= 3:
-                return label.title()
+            label = _clean_hazard_label(hit, collectible)
+            if label:
+                return label
     return "Hazards"
 
 

@@ -214,6 +214,56 @@ class LabelTests(unittest.TestCase):
         hint = plan.objective_hint(derived, values_for(COLLECTOR))
         self.assertIn("Apples", hint)
 
+    # The v0.12.0 clean-room scope whose shipped hint read
+    # "Collect the Shards and reach the Goal. Avoid the Shards
+    # While!" — the hazard derivation grabbed the collectible
+    # noun plus a dangling conjunction out of "...gathering
+    # star shards while patrol drones sweep the dark...".
+    COMET_FIELDS = {
+        TITLE: f"{TITLE} Comet Fields",
+        PITCH: f"{PITCH} A little keeper crosses glowing comet "
+               "fields gathering star shards while patrol drones "
+               "sweep the dark, racing to reach the gate.",
+        GENRE: f"{GENRE} 3D collector",
+        VERB: f"{VERB} run around a 3D field collecting shards "
+              "and reach the gate",
+        WIN: f"{WIN} Collect 8 shards each round to clear the "
+             "round; clear all 3 rounds to win",
+        LOSE: f"{LOSE} The timer reaches zero, or a hazard "
+              "touches you (you have 1 lives) checked over "
+              "repeated hazard_contacts.",
+        COUNTS: f"{COUNTS} 3 rounds; patrolling hazards 2 in "
+                "round 1, 3 in round 2, 4 in round 3; obstacles "
+                "3 in round 1, 4 in round 2, 5 in round 3",
+        "- REQUIRED Dimension:": "- REQUIRED Dimension: 3D",
+    }
+
+    def test_comet_fields_hint_is_grammatical(self):
+        values = values_for(self.COMET_FIELDS)
+        derived = plan.derive_plan(values)
+        self.assertEqual(derived["collectible_label"], "Shards")
+        hazard = next(e for e in derived["entities"]
+                      if e["kind"] == "hazard")
+        self.assertEqual(hazard["label"], "Hazards")
+        self.assertEqual(
+            plan.objective_hint(derived, values),
+            "Collect the Shards and reach the Goal. "
+            "Avoid the Hazards!")
+
+    def test_hazard_never_reuses_the_collectible_noun(self):
+        values = values_for({
+            PITCH: f"{PITCH} picking berries while berries guard "
+                   "the thicket",
+            VERB: f"{VERB} gather berries",
+            WIN: f"{WIN} gather 4 berries each round",
+            LOSE: f"{LOSE} the timer runs out",
+        })
+        derived = plan.derive_plan(values)
+        self.assertEqual(derived["collectible_label"], "Berries")
+        hazard = next(e for e in derived["entities"]
+                      if e["kind"] == "hazard")
+        self.assertEqual(hazard["label"], "Hazards")
+
 
 class BoundsTests(unittest.TestCase):
     def test_every_movement_has_patch_bounds(self):
