@@ -111,7 +111,18 @@ def _clean_value(raw: str) -> str:
     if value in _HINT_VALUES:
         return ""
     if "(pick any" in value:
-        return ""
+        # The template's options instruction ("code-drawn /
+        # AI-generated / licensed library (pick any, in preference
+        # order):"): the options list before it is a hint, not an
+        # answer. An answer is what the maker wrote after the
+        # instruction's closing paren — the template line ends
+        # with a colon inviting exactly that. With nothing after
+        # it, the field is still unfilled.
+        close = value.find(")", value.index("(pick any"))
+        if close < 0:
+            return ""
+        tail = value[close + 1:].strip().lstrip(":").strip()
+        return _clean_value(tail) if tail else ""
     return value
 
 
@@ -126,8 +137,13 @@ def _parse_required_line(text: str, section: str,
         return ScopeField(name=name.strip(), section=section,
                           value=_clean_value(raw_value), line_no=line_no)
     # Shape like: "Telemetry: off by default — REQUIRED explicit yes/no:"
+    # The label and its instruction come first; the maker's answer,
+    # when they write one, goes after the instruction's colon —
+    # the last colon on the line.
     name = text.split(":", 1)[0].strip()
-    return ScopeField(name=name, section=section, value="", line_no=line_no)
+    raw_value = text.rsplit(":", 1)[1] if text.count(":") > 1 else ""
+    return ScopeField(name=name, section=section,
+                      value=_clean_value(raw_value), line_no=line_no)
 
 
 def parse_scope_text(text: str, path=None) -> Scope:

@@ -56,6 +56,64 @@ class ScopeParsingTests(unittest.TestCase):
         self.assertEqual(scope.interview_questions(parsed), [])
 
 
+class TemplateWordingTests(unittest.TestCase):
+    """0.12.1: two template fields carry their hint inside the
+    line — "Allowed sources" with its options list and the long
+    Telemetry label — and a maker answering in the template's
+    own words (writing the answer after the line's trailing
+    colon, where the template invites it) must read as filled.
+    Before the fix both parsed as empty forever, so a scope
+    filled in entirely from the CLI template could never pass
+    the required-fields gate."""
+
+    def _answered_template(self) -> str:
+        text = template_scope_text()
+        text = text.replace(
+            "- REQUIRED Allowed sources: code-drawn / AI-generated "
+            "/ licensed library (pick any, in preference order):",
+            "- REQUIRED Allowed sources: code-drawn / AI-generated "
+            "/ licensed library (pick any, in preference order): "
+            "code-drawn")
+        text = text.replace(
+            "- Telemetry: off by default — REQUIRED explicit yes/no:",
+            "- Telemetry: off by default — REQUIRED explicit yes/no: no")
+        return text
+
+    def test_template_worded_answers_parse_as_filled(self):
+        parsed = scope.parse_scope_text(self._answered_template())
+        by_name = {f.name: f for f in parsed.fields}
+        self.assertEqual(by_name["Allowed sources"].value, "code-drawn")
+        self.assertTrue(by_name["Allowed sources"].filled)
+        self.assertEqual(by_name["Telemetry"].value, "no")
+        self.assertTrue(by_name["Telemetry"].filled)
+
+    def test_template_filled_in_its_own_words_passes_the_gate(self):
+        # Every other field filled the plain way, the two
+        # template-worded lines kept exactly as a maker editing
+        # the template leaves them: the scope reads complete,
+        # with zero questions left to ask.
+        lines = []
+        for line in self._answered_template().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- REQUIRED"):
+                name = stripped[len("- REQUIRED"):].partition(":")[0].strip()
+                if name == "Allowed sources":
+                    lines.append(line)
+                elif name == "Dimension":
+                    lines.append("- REQUIRED Dimension: 2D")
+                elif name == "Scope class":
+                    lines.append("- REQUIRED Scope class: Micro")
+                else:
+                    lines.append(
+                        f"- REQUIRED {name}: Filled in for the test")
+            else:
+                lines.append(line)
+        parsed = scope.parse_scope_text("\n".join(lines) + "\n")
+        self.assertTrue(parsed.is_complete,
+                        [f.name for f in parsed.missing_fields])
+        self.assertEqual(scope.interview_questions(parsed), [])
+
+
 class ScopeApprovalTests(unittest.TestCase):
     def test_approve_refuses_incomplete_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
