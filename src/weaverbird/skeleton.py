@@ -221,6 +221,54 @@ def _run_godot(godot_bin: str, game_dir: Path, args: list, timeout: int = 120) -
     }
 
 
+FLOW_SMOKE_BASE_TIMEOUT = 120
+FLOW_SMOKE_MAX_TIMEOUT = 900
+
+
+def _flow_smoke_timeout(game_dir: Path) -> int:
+    """How long the flow smoke may run, in seconds.
+
+    The smoke's contract is a full end-to-end play: menu → every
+    round → the win screen, through the game's real logic (it is
+    the competent player). For collect/reach games the player
+    finishes rounds quickly and the 120s base is ample — but a
+    survive round is won by lasting the whole round timer, so a
+    survive game's smoke legitimately needs the sum of its round
+    times (dogfood finding D2-4: 3 × 75s rounds could NEVER pass
+    a 120s cap, so a scope-valid survive game could not finish
+    assembly at all). The cap therefore scales from the plan's
+    own numbers — units × round_seconds, plus the base 120s of
+    slack for menus, transitions and recoveries — under a hard
+    ceiling of 900s. This changes only the smoke's allowance;
+    nothing about what it must prove (a full win) is weakened,
+    and the testing stage's win/lose proofs keep their own
+    timeouts untouched.
+    """
+    total_round_seconds = 0.0
+    try:
+        config = json.loads(
+            (Path(game_dir) / "game_config.json").read_text(
+                encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        config = None
+    if isinstance(config, dict):
+        plan = config.get("plan")
+        numbers = plan.get("numbers") if isinstance(plan, dict) \
+            else None
+        if not isinstance(numbers, dict):
+            numbers = config
+        try:
+            units = float(numbers.get("units") or 0)
+            round_seconds = float(numbers.get("round_seconds") or 0)
+        except (TypeError, ValueError):
+            units, round_seconds = 0.0, 0.0
+        if units > 0 and round_seconds > 0:
+            total_round_seconds = units * round_seconds
+    return int(min(FLOW_SMOKE_MAX_TIMEOUT,
+                   max(FLOW_SMOKE_BASE_TIMEOUT,
+                       total_round_seconds + FLOW_SMOKE_BASE_TIMEOUT)))
+
+
 def validate_project(project_dir, godot_path=None, reporter=None) -> dict:
     """Run Godot against the generated project. Returns the report dict.
 
@@ -254,15 +302,18 @@ def validate_project(project_dir, godot_path=None, reporter=None) -> dict:
         return validation
 
     steps = [
-        ("import", ["--import"]),
-        ("main scene", ["--quit-after", "45"]),
-        ("game scene", ["res://scenes/game.tscn", "--quit-after", "45"]),
-        ("flow smoke", ["--script", "smoke/smoke.gd"]),
+        ("import", ["--import"], 120),
+        ("main scene", ["--quit-after", "45"], 120),
+        ("game scene", ["res://scenes/game.tscn", "--quit-after", "45"],
+         120),
+        ("flow smoke", ["--script", "smoke/smoke.gd"],
+         _flow_smoke_timeout(game_dir)),
     ]
     passed = True
-    for index, (name, args) in enumerate(steps):
-        run = _run_godot(godot_bin, game_dir, args)
+    for index, (name, args, timeout) in enumerate(steps):
+        run = _run_godot(godot_bin, game_dir, args, timeout=timeout)
         run["name"] = name
+        run["timeout_seconds"] = timeout
         if name == "flow smoke" and not run["smoke_pass"]:
             # The smoke script exits 0 only on success, so a failed
             # smoke also shows up in the return code — but say it

@@ -57,6 +57,56 @@ def _run_cli(*argv):
     return code, buffer.getvalue()
 
 
+class FlowSmokeTimeoutTests(unittest.TestCase):
+    """D2-4: the flow smoke plays the whole game to a win, so its
+    cap scales with the plan's own total round time — a survive
+    game (3 x 75s) can finish assembly, a short game keeps the
+    snappy base cap, and a hard ceiling bounds the allowance."""
+
+    def _game_dir(self, config=None):
+        tmp = tempfile.mkdtemp()
+        game_dir = Path(tmp) / "game"
+        game_dir.mkdir()
+        if config is not None:
+            import json
+            (game_dir / "game_config.json").write_text(
+                json.dumps(config), encoding="utf-8")
+        return game_dir
+
+    def test_no_config_keeps_the_base_cap(self):
+        self.assertEqual(
+            skeleton._flow_smoke_timeout(self._game_dir()), 120)
+
+    def test_emberwatch_numbers_scale_the_cap(self):
+        # The preserved repro: survive, 3 rounds of 75 seconds.
+        config = {"plan": {"objective": "survive",
+                           "numbers": {"units": 3,
+                                       "round_seconds": 75}}}
+        self.assertEqual(
+            skeleton._flow_smoke_timeout(self._game_dir(config)), 345)
+
+    def test_declared_round_time_extends_the_cap_by_the_slack(self):
+        # The cap is an allowance, not a wait — a run ends when
+        # the game does, so declared round time always adds the
+        # base slack on top.
+        config = {"plan": {"numbers": {"units": 2,
+                                       "round_seconds": 20}}}
+        self.assertEqual(
+            skeleton._flow_smoke_timeout(self._game_dir(config)), 160)
+
+    def test_hard_ceiling(self):
+        config = {"plan": {"numbers": {"units": 40,
+                                       "round_seconds": 300}}}
+        self.assertEqual(
+            skeleton._flow_smoke_timeout(self._game_dir(config)), 900)
+
+    def test_broken_config_is_the_base_cap(self):
+        game_dir = self._game_dir()
+        (game_dir / "game_config.json").write_text("{ nope",
+                                                   encoding="utf-8")
+        self.assertEqual(skeleton._flow_smoke_timeout(game_dir), 120)
+
+
 class SkeletonRefusalTests(unittest.TestCase):
     def test_refuses_incomplete_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
