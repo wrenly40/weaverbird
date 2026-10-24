@@ -263,16 +263,77 @@ _HAZARD_LEAD_STOP = {
 }
 
 
+# Bare verb forms that are actions, never the hazard's name.
+# A label whose HEAD word is one of these is a derivation that
+# grabbed the verb instead of the noun (dogfood D2-3: "Storm
+# wisps that drift across the coast and chase the keeper" shipped
+# with the hazard named "Drift").
+_HAZARD_VERB_FORMS = {
+    "drift", "chase", "sweep", "wander", "patrol", "hunt",
+    "stalk", "attack", "guard", "pursue", "flee", "roam",
+    "lurk", "creep", "prowl", "glide", "hover", "dart",
+}
+
+
+def _trailing_nouns(words: list, limit: int = 2) -> list:
+    """The noun phrase at the END of a word window: trailing
+    fragment words and bare verb forms are stripped first (the
+    polluted tail a bad capture carries — 'wisps drift and'),
+    then up to ``limit`` words are taken, stopping at the first
+    fragment or verb form met walking back."""
+    words = list(words)
+    while words and (words[-1] in _LABEL_FRAGMENT
+                     or words[-1] in _HAZARD_VERB_FORMS):
+        words.pop()
+    taken: list = []
+    for word in reversed(words):
+        if word in _LABEL_FRAGMENT or word in _HAZARD_VERB_FORMS:
+            break
+        taken.append(word)
+        if len(taken) >= limit:
+            break
+    return list(reversed(taken))
+
+
 def _hazard_before(text: str):
     """The noun phrase immediately before a hazard verb:
-    '...while wasps patrol the orchard' -> 'wasps'."""
+    '...while wasps patrol the orchard' -> 'wasps';
+    '...while storm wisps drift and chase you' -> 'storm wisps'
+    (the verb and conjunction between the noun and the hazard
+    verb are stripped, never shipped as the label)."""
     for match in _HAZARD_BEFORE_RE.finditer(text):
         words = re.findall(r"[a-z]+", text[:match.start()].lower())
-        words = words[-2:]
-        while words and words[0] in _HAZARD_LEAD_STOP:
-            words.pop(0)
-        if words:
-            return " ".join(words)
+        taken = _trailing_nouns(words[-4:])
+        while taken and taken[0] in _HAZARD_LEAD_STOP:
+            taken.pop(0)
+        if taken:
+            return " ".join(taken)
+    return None
+
+
+_RELATIVE_RE = re.compile(r"\b(?:that|which|who)\b", re.IGNORECASE)
+_RELATIVE_FOLLOWERS = _HAZARD_VERB_FORMS | {
+    "are", "is", "were", "was", "keep", "keeps", "come", "comes",
+}
+
+
+def _hazard_relative(text: str):
+    """The noun phrase a relative clause hangs off:
+    'Storm wisps that drift across the coast...' -> 'storm
+    wisps'. Preferred over the before-a-verb capture when both
+    exist — the maker's sentence names the thing first, then
+    says what it does."""
+    for match in _RELATIVE_RE.finditer(text):
+        following = re.findall(r"[a-z]+",
+                               text[match.end():].lower())
+        if not following or following[0] not in _RELATIVE_FOLLOWERS:
+            continue
+        words = re.findall(r"[a-z]+", text[:match.start()].lower())
+        taken = _trailing_nouns(words[-3:], limit=3)
+        while taken and taken[0] in _HAZARD_LEAD_STOP:
+            taken.pop(0)
+        if taken:
+            return " ".join(taken)
     return None
 _HAZARD_WORDS = (
     "hazard", "spike", "enemy", "enemies", "monster", "mites",
@@ -315,6 +376,10 @@ def _clean_hazard_label(raw: str, collectible: str) -> str | None:
         words.pop()
     if not words or len(" ".join(words)) < 3:
         return None
+    if words[-1] in _HAZARD_VERB_FORMS:
+        # The head word is a bare verb form — the capture grabbed
+        # an action, not a thing (D2-3's "Drift").
+        return None
     own = set(words)
     theirs = {w for w in re.split(
         r"\s+", str(collectible or "").strip().lower()) if w}
@@ -332,6 +397,12 @@ def _hazard_label(values: dict) -> str:
         match = _HAZARD_AFTER_RE.search(str(values.get(name, "") or ""))
         if match:
             label = _clean_hazard_label(match.group(1), collectible)
+            if label:
+                return label
+    for name in fields:
+        hit = _hazard_relative(str(values.get(name, "") or ""))
+        if hit:
+            label = _clean_hazard_label(hit, collectible)
             if label:
                 return label
     for name in fields:

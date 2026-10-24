@@ -250,6 +250,57 @@ class LabelTests(unittest.TestCase):
             "Collect the Shards and reach the Goal. "
             "Avoid the Hazards!")
 
+    def test_emberwatch_hazard_is_the_noun_not_the_verb(self):
+        # Dogfood D2-3: "Storm wisps that drift across the coast
+        # and chase the keeper when close" shipped with the
+        # hazard named "Drift" — a verb. The leading noun phrase
+        # is the label.
+        values = values_for({
+            PITCH: f"{PITCH} Storm wisps that drift across the "
+                   "coast and chase the keeper when close",
+            GENRE: f"{GENRE} survival",
+            VERB: f"{VERB} keep the lighthouse lit and survive",
+            WIN: f"{WIN} survive until dawn in each of the "
+                 "3 nights",
+            LOSE: f"{LOSE} a storm wisp touch costs one life; "
+                  "lose all 3 lives",
+            COUNTS: f"{COUNTS} 3 nights",
+        })
+        derived = plan.derive_plan(values)
+        hazard = next(e for e in derived["entities"]
+                      if e["kind"] == "hazard")
+        self.assertEqual(hazard["label"], "Storm Wisps")
+        self.assertEqual(
+            plan.objective_hint(derived, values),
+            "Stay alive until the time is up. "
+            "Avoid the Storm Wisps!")
+
+    def test_emberwatch_full_pitch_derives_storm_wisps(self):
+        # The preserved project's actual pitch: no relative
+        # clause — "storm wisps" sits two words and a conjunction
+        # away from the hazard verb "chase".
+        values = values_for({
+            PITCH: f"{PITCH} Emberwatch: a top-down survival "
+                   "game. You are the lighthouse keeper on a "
+                   "storm coast. Survive 3 nights until dawn while "
+                   "storm wisps drift and chase you; a wisp touch "
+                   "costs a life, lose all 3 lives and the game "
+                   "ends.",
+            GENRE: f"{GENRE} Survival",
+            VERB: f"{VERB} keep the lighthouse lit and survive "
+                  "the storm until dawn",
+            WIN: f"{WIN} survive until dawn in each of the "
+                 "3 nights; finish all 3 nights to win the game",
+            LOSE: f"{LOSE} a storm wisp touch costs one life; "
+                  "lose all 3 lives and the game ends",
+            COUNTS: f"{COUNTS} 3 nights",
+        })
+        derived = plan.derive_plan(values)
+        self.assertEqual(derived["objective"], "survive")
+        hazard = next(e for e in derived["entities"]
+                      if e["kind"] == "hazard")
+        self.assertEqual(hazard["label"], "Storm Wisps")
+
     def test_hazard_never_reuses_the_collectible_noun(self):
         values = values_for({
             PITCH: f"{PITCH} picking berries while berries guard "

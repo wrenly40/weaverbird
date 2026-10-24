@@ -79,6 +79,33 @@ class TriageTests(unittest.TestCase):
             self.assertEqual(item["status"], "triaged")
             self.assertTrue(item["cluster"])
 
+    def test_past_tense_bug_verbs(self):
+        # Dogfood D2-2: the parent's real words — "froze" is not
+        # "freeze", and the item landed in unknown.
+        category, _severity = feedback.classify_text(
+            "The game froze when I pressed pause during the "
+            "dawn banner")
+        self.assertEqual(category, "bug")
+        for text in (
+                "It hung on the loading screen forever.",
+                "The menu glitched and half the buttons vanished.",
+                "Everything went unresponsive after the wave.",
+                "The game stopped working when I opened the map.",
+                "It softlocked — I can move but the door never "
+                "opens and nothing responds."):
+            self.assertEqual(feedback.classify_text(text)[0],
+                             "bug", text)
+        # …and the new words must not flip other categories.
+        controls = {
+            "The frozen lake level was great fun, loved it.":
+                "praise",
+            "The wisps feel way too fast in round 2.": "balance",
+            "Please add a frozen lake level.": "request",
+        }
+        for text, expected in controls.items():
+            self.assertEqual(feedback.classify_text(text)[0],
+                             expected, text)
+
     def test_natural_balance_language(self):
         # Dogfood finding D7: the parent's real words. Players
         # write "wall", "ran out", "much harder" — not "too hard".

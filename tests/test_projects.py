@@ -101,6 +101,29 @@ class NewProjectTests(unittest.TestCase):
         parsed = scope.load_scope(created["path"] / "SCOPE.md")
         self.assertIn("A herding game.", parsed.original_prompt)
 
+    def test_creation_with_a_prompt_starts_the_interview(self):
+        # D2-1: the creation prompt IS the first message — the
+        # interview has begun (extraction consumed, first group
+        # pending) before the scope page is ever opened.
+        from weaverbird import interview
+        created = projects.new_project(
+            self.ws, "Star Shepherd",
+            prompt="A herding game about guiding sheep home")
+        session = interview.load_session(created["path"])
+        self.assertIsNotNone(session)
+        state = interview.public_state(created["path"])
+        self.assertTrue(state["started"])
+        self.assertTrue(state["pending_fields"])
+        self.assertFalse(state["complete"])
+
+    def test_creation_without_a_prompt_leaves_interview_unstarted(self):
+        from weaverbird import interview
+        created = projects.new_project(self.ws, "Star Shepherd")
+        self.assertIsNone(interview.load_session(created["path"]))
+        state = interview.public_state(created["path"])
+        self.assertFalse(state["started"])
+        self.assertEqual(state["pending_fields"], [])
+
     def test_explicit_folder_wins_over_the_slug(self):
         created = projects.new_project(self.ws, "Star Shepherd",
                                        folder="custom-folder")

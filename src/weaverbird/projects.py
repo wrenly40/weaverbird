@@ -6,9 +6,12 @@ browser are identical: the SCOPE.md template, the connector
 registry, the pipeline state, an empty provenance log and an
 empty ledger. The app additionally records the maker's display
 name for the project (``.weaverbird/project.json``) and can seed
-the scope's Title from it and store a starting prompt — the
-prompt itself is consumed later, by the interview's prompt-first
-entry (interview.start), exactly as a CLI-stored prompt is.
+the scope's Title from it and store a starting prompt. A starting
+prompt IS the interview's first message (0.13.0, dogfood D2-1):
+creation with one runs prompt extraction and opens the interview
+immediately, so the scope page starts mid-conversation with the
+first question group pending — creating without a prompt leaves
+the interview unstarted, exactly as before.
 """
 
 from __future__ import annotations
@@ -179,6 +182,14 @@ def new_project(workspace, display_name: str, folder: str = "",
         if prompt and prompt.strip():
             scope_module.set_original_prompt(scope_file,
                                              prompt.strip())
+            # The prompt is the interview's first message: run
+            # its extraction and present the first question group
+            # NOW, so the scope page opens mid-conversation
+            # (D2-1). Imported lazily — interview imports scope
+            # and brain, and creation must not pay for them when
+            # no prompt was given.
+            from . import interview as interview_module
+            interview_module.start(target)
     except ProjectError:
         raise
     except Exception:

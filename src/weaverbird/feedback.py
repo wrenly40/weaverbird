@@ -285,7 +285,8 @@ _RULES: list[tuple[str, tuple[str, ...], int]] = [
     # (category, keywords, severity when matched)
     ("bug", ("crash", "error", "broken", "can't", "cannot", "won't",
              "doesn't work", "bug", "freeze", "stuck on", "black screen",
-             "not working", "fails"), 3),
+             "not working", "fails", "not responding",
+             "stopped working", "soft lock"), 3),
     ("balance", ("too hard", "too easy", "too slow", "too fast",
                  "unfair", "impossible", "frustrating", "grind",
                  "overpowered", "weak", "difficult", "difficulty",
@@ -309,6 +310,17 @@ _RULES: list[tuple[str, tuple[str, ...], int]] = [
 # word — an intensifier before it or a "than" after — so praise
 # ("the harder levels were great fun") and requests ("add an
 # easier mode") are not swallowed.
+# Past-tense / irregular bug verbs (dogfood D2-2): players write
+# "the game froze", not "freeze", and the substring keyword list
+# missed them, so the report landed in unknown. These match on
+# word boundaries, NOT as substrings: "froze" must catch the verb
+# without claiming the adjective in "the frozen lake level" (which
+# would flip praise and requests about one), and "hung" must not
+# claim "hunger".
+_BUG_VERB_RE = re.compile(
+    r"\b(froze|freezing|hung|hangs|unresponsive|glitch|glitched|"
+    r"glitching|glitches|softlock|softlocked)\b")
+
 _COMPARATIVE_RE = re.compile(r"\b(harder|easier|tougher)\b")
 _COMPARATIVE_CONTEXT = {
     "much", "way", "so", "far", "too", "feels", "feel", "felt",
@@ -354,6 +366,8 @@ def classify_text(text: str) -> tuple[str, int]:
     lowered = f" {text.lower()} "
     for category, keywords, severity in _RULES:
         if any(keyword in lowered for keyword in keywords):
+            return category, severity
+        if category == "bug" and _BUG_VERB_RE.search(lowered):
             return category, severity
         if category == "balance" and _balance_signals(lowered):
             return category, severity
