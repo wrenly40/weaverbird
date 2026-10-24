@@ -115,7 +115,8 @@ def missing_brain_message(project, tier: str, settings_path=None) -> str | None:
             f"The model playtester needs the {tier} tier (set "
             f"playtest.model_tier to choose another) configured with a "
             "vision-capable model — one that accepts image input "
-            "(OpenAI-compatible or Anthropic), with its key environment "
+            "(OpenAI-compatible, Anthropic, or a model served by your "
+            "OpenCode server), with its key environment "
             "variable set. No model was called and the game was not touched.")
 
 

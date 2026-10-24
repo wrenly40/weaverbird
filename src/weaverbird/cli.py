@@ -333,6 +333,25 @@ def cmd_brain_check(args) -> int:
     statuses = brain_module.brain_status(data)
     for tier in brain_module.TIERS:
         st = statuses[tier]
+        if st["provider"] == "opencode":
+            if not st["configured"]:
+                print(f"- {tier}: provider opencode, not configured — "
+                      f"{st['reason']}")
+                continue
+            health = brain_module.opencode_health(st["base_url"])
+            if health["reachable"]:
+                version = (f" (OpenCode {health['version']})"
+                           if health["version"] else "")
+                print(f"- {tier}: provider opencode, model {st['model']}, "
+                      f"server {st['base_url']} — reachable{version}. "
+                      "OpenCode holds the model keys; Weaverbird "
+                      "sends none.")
+            else:
+                print(f"- {tier}: provider opencode, model {st['model']}, "
+                      f"server {st['base_url']} — NOT reachable "
+                      f"({health['error']}). Start it with "
+                      "`opencode serve`.")
+            continue
         if st["configured"]:
             line = (f"- {tier}: provider {st['provider']}, model {st['model']}, "
                     f"key ({st['api_key_env']}): "

@@ -16,9 +16,14 @@ models:                        # the ladder — cheap first, frontier only for j
   # never written to any file, log, ledger or report.
   # provider is "openai" (OpenAI-compatible chat completions — OpenAI,
   # OpenRouter, Together, or a local server such as Ollama / LM Studio
-  # via base_url) or "anthropic" (Messages API). Leave model empty to
-  # leave a tier unconfigured. cost_per_1k_tokens is optional and only
-  # used to price the ledger entry; tokens are always recorded.
+  # via base_url), "anthropic" (Messages API), or "opencode" (your own
+  # OpenCode server: run `opencode serve`, default base_url
+  # http://127.0.0.1:4096, and write the model as provider/model, e.g.
+  # anthropic/claude-sonnet-4-5 — OpenCode holds its own provider keys,
+  # so api_key_env is ignored for opencode tiers and the server reports
+  # the tokens and cost itself). Leave model empty to leave a tier
+  # unconfigured. cost_per_1k_tokens is optional and only used to price
+  # the ledger entry; tokens are always recorded.
   cheap:    { provider: openai, model: "", base_url: null, api_key_env: OPENAI_API_KEY, cost_per_1k_tokens: null }  # classification, extraction, digests
   mid:      { provider: openai, model: "", base_url: null, api_key_env: OPENAI_API_KEY, cost_per_1k_tokens: null }  # routine code edits
   frontier: { provider: anthropic, model: "", base_url: null, api_key_env: ANTHROPIC_API_KEY, cost_per_1k_tokens: null } # design, hard debugging, judgement

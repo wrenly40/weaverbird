@@ -28,8 +28,14 @@ def ledger_path_for(project_dir) -> Path:
     return path / ".weaverbird" / "ledger.jsonl"
 
 
-def add_entry(project_dir, stage: str, tier: str, tokens: int, cost: float) -> dict:
-    """Append one entry to the project's ledger and return it."""
+def add_entry(project_dir, stage: str, tier: str, tokens: int, cost: float,
+              source: str | None = None) -> dict:
+    """Append one entry to the project's ledger and return it.
+
+    ``source`` names where the figures came from when a provider
+    reports them itself (e.g. "opencode" — the maker's OpenCode
+    server reports its own token counts and cost); it is recorded
+    on the entry and never changes the numbers."""
     if tier not in TIERS:
         raise LedgerError(f"Tier must be one of {', '.join(TIERS)}, got {tier!r}.")
     if not stage:
@@ -48,6 +54,8 @@ def add_entry(project_dir, stage: str, tier: str, tokens: int, cost: float) -> d
         "tokens": tokens,
         "cost": round(cost, 6),
     }
+    if source:
+        entry["source"] = str(source)
     path = ledger_path_for(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:

@@ -337,5 +337,175 @@ class TestBrainStatus(BrainTestCase):
         self.assertEqual(status["api_key_env"], "WB_TEST_KEY")
 
 
+OPENCODE_SETTINGS = {
+    "budgets": dict(SETTINGS["budgets"]),
+    "models": {
+        "cheap": {"provider": "opencode",
+                  "model": "anthropic/claude-sonnet-4-5",
+                  "base_url": None, "api_key_env": None,
+                  "cost_per_1k_tokens": None},
+        "mid": {"provider": "opencode",
+                "model": "openai/gpt-5",
+                "base_url": "http://127.0.0.1:4096",
+                "api_key_env": None, "cost_per_1k_tokens": None},
+        "frontier": {"provider": "opencode", "model": "",
+                     "base_url": None, "api_key_env": None,
+                     "cost_per_1k_tokens": None},
+    },
+}
+
+
+def opencode_send(reply_text="hello from opencode", prompt=21,
+                  completion=9, cost=0.0042, capture=None):
+    """A fake OpenCode server behind brain._send: session create,
+    then the message call answering {info, parts} as documented."""
+    def send(url, headers, body, timeout=60):
+        if capture is not None:
+            capture.append((url, dict(headers),
+                            json.loads(body.decode("utf-8"))))
+        if url.endswith("/session"):
+            return 200, json.dumps({"id": "ses_test123"})
+        if url.endswith("/session/ses_test123/message"):
+            return 200, json.dumps({
+                "info": {"tokens": {"input": prompt,
+                                    "output": completion},
+                         "cost": cost},
+                "parts": [{"type": "text", "text": reply_text}]})
+        return 404, json.dumps({"error": "unknown path"})
+    return send
+
+
+class TestOpenCode(BrainTestCase):
+    def setUp(self):
+        super().setUp()
+        self.oc_settings = Path(self.tmp) / "opencode-settings.yaml"
+        self.oc_settings.write_text(yaml.safe_dump(OPENCODE_SETTINGS),
+                                    encoding="utf-8")
+
+    def test_completion_uses_server_reported_tokens_and_cost(self):
+        capture = []
+        env = dict(os.environ)
+        env.pop("WB_TEST_KEY", None)  # no key anywhere — none is needed
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(brain, "_send",
+                                  opencode_send(capture=capture)):
+            result = self.complete(settings=self.oc_settings)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.text, "hello from opencode")
+        self.assertEqual(result.prompt_tokens, 21)
+        self.assertEqual(result.completion_tokens, 9)
+        # The server's own cost figure wins; nothing is invented.
+        self.assertAlmostEqual(result.cost, 0.0042)
+        entries = ledger.read_entries(self.project)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["tokens"], 30)
+        self.assertAlmostEqual(entries[0]["cost"], 0.0042)
+        self.assertEqual(entries[0]["source"], "opencode")
+        # Session first, then the message, model split provider/model.
+        self.assertTrue(capture[0][0].endswith("/session"))
+        url, _headers, body = capture[1]
+        self.assertTrue(url.endswith("/session/ses_test123/message"))
+        self.assertEqual(body["model"], {
+            "providerID": "anthropic", "modelID": "claude-sonnet-4-5"})
+        self.assertEqual(body["parts"],
+                         [{"type": "text", "text": "Say hello"}])
+        # No credential header is ever sent to the OpenCode server.
+        for _url, headers, _body in capture:
+            self.assertNotIn("Authorization", headers)
+            self.assertNotIn("x-api-key", headers)
+
+    def test_named_key_env_is_ignored_for_opencode(self):
+        data = yaml.safe_load(yaml.safe_dump(OPENCODE_SETTINGS))
+        data["models"]["cheap"]["api_key_env"] = "WB_TEST_KEY"
+        path = Path(self.tmp) / "oc-keyenv.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        capture = []
+        with mock.patch.dict(os.environ, {"WB_TEST_KEY": SENTINEL}), \
+                mock.patch.object(brain, "_send",
+                                  opencode_send(capture=capture)):
+            result = self.complete(settings=path)
+        self.assertTrue(result.ok, result.error)
+        for _url, headers, _body in capture:
+            self.assertNotIn(SENTINEL, json.dumps(headers))
+        status = brain.tier_status(data, "cheap")
+        self.assertIsNone(status["api_key_env"])
+        self.assertFalse(status["key_required"])
+
+    def test_interview_extraction_through_opencode(self):
+        reply = json.dumps({"One-line pitch": "A bee collects stars."})
+        with mock.patch.object(brain, "_send",
+                               opencode_send(reply_text=reply)):
+            outcome = brain.interview_from_prompt(
+                self.project, "A tiny game about a bee collecting stars",
+                settings_path=self.oc_settings)
+        self.assertTrue(outcome["brain_used"])
+        self.assertEqual(outcome["applied"],
+                         {"One-line pitch": "A bee collects stars."})
+
+    def test_unreachable_server_is_a_plain_failure(self):
+        import urllib.error
+
+        def send(url, headers, body, timeout=60):
+            raise urllib.error.URLError("Connection refused")
+        with mock.patch.object(brain, "_send", send):
+            result = self.complete(settings=self.oc_settings)
+        self.assertFalse(result.ok)
+        self.assertIn("OpenCode server", result.error)
+        self.assertIn("opencode serve", result.error)
+        self.assertNotIn("Traceback", result.error)
+        self.assertEqual(ledger.read_entries(self.project), [])
+
+    def test_model_must_be_provider_slash_model(self):
+        data = yaml.safe_load(yaml.safe_dump(OPENCODE_SETTINGS))
+        data["models"]["cheap"]["model"] = "claude-sonnet-4-5"
+        status = brain.tier_status(data, "cheap")
+        self.assertFalse(status["configured"])
+        self.assertIn("provider/model", status["reason"])
+        path = Path(self.tmp) / "oc-badshape.yaml"
+        path.write_text(yaml.safe_dump(data), encoding="utf-8")
+        with mock.patch.object(brain, "_send", opencode_send()):
+            result = self.complete(settings=path)
+        self.assertFalse(result.ok)
+
+    def test_vision_call_sends_a_file_part(self):
+        image = Path(self.tmp) / "shot.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n fake")
+        capture = []
+        with mock.patch.object(brain, "_send",
+                               opencode_send(capture=capture)):
+            result = brain.complete_with_image(
+                self.project, "mid", "What do you see?", image,
+                stage="playtest", settings_path=self.oc_settings)
+        self.assertTrue(result.ok, result.error)
+        _url, _headers, body = capture[-1]
+        kinds = [part.get("type") for part in body["parts"]]
+        self.assertIn("text", kinds)
+        self.assertIn("file", kinds)
+        file_part = next(p for p in body["parts"] if p["type"] == "file")
+        self.assertEqual(file_part["mime"], "image/png")
+        self.assertTrue(file_part["url"].startswith("data:image/png;base64,"))
+
+    def test_health_probe(self):
+        def get_ok(url, timeout=5):
+            return 200, json.dumps({"healthy": True, "version": "1.2.3"})
+        with mock.patch.object(brain, "_get", get_ok):
+            health = brain.opencode_health("http://127.0.0.1:4096")
+        self.assertTrue(health["reachable"])
+        self.assertEqual(health["version"], "1.2.3")
+
+        import urllib.error
+
+        def get_down(url, timeout=5):
+            raise urllib.error.URLError("Connection refused")
+        with mock.patch.object(brain, "_get", get_down):
+            health = brain.opencode_health(None)
+        self.assertFalse(health["reachable"])
+        self.assertIsNone(health["version"])
+        # The maker reads this line: plain words, no exception repr.
+        self.assertNotIn("URLError", health["error"])
+        self.assertNotIn("urlopen", health["error"])
+        self.assertIn("could not connect", health["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

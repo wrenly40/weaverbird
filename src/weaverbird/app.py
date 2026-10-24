@@ -296,7 +296,10 @@ def render_dashboard(server) -> str:
     brain_lines = ""
     for tier in brain_module.TIERS:
         st = statuses[tier]
-        if st["usable"]:
+        if st["usable"] and st["provider"] == "opencode":
+            text = (f"{tier} — opencode {_esc(st['model'])}, via your "
+                    "OpenCode server (no key here)")
+        elif st["usable"]:
             text = f"{tier} — {_esc(st['provider'])}/{_esc(st['model'])}, key set"
         elif st["configured"]:
             text = f"{tier} — configured, key missing ({_esc(st['api_key_env'] or 'no env name')})"
@@ -1216,19 +1219,40 @@ def _ladder_fields(data: dict) -> str:
         for value, label in (("", "None — tier off"),
                              ("openai", "OpenAI"),
                              ("anthropic", "Anthropic"),
+                             ("opencode", "OpenCode (your local server)"),
                              ("local", "Local server (no key needed)")):
             selected = " selected" if display == value else ""
             options += (f'<option value="{value}"{selected}>'
                         f"{label}</option>")
         key_env = str(entry.get("api_key_env") or "")
         st = statuses[tier]
-        if key_env:
-            key_state = "set" if st["key_present"] else "not set"
-            key_hint = (f'<p class="hint">{_esc(key_env)} — {key_state} '
-                        "in this app's environment.</p>")
+        if provider == "opencode":
+            # OpenCode holds its own provider credentials — there is
+            # no key field for this provider, by design.
+            key_block = ('<label>API key</label>'
+                         '<p class="hint">OpenCode holds its own '
+                         "provider credentials — Weaverbird never "
+                         "asks for, stores, or sends a key for this "
+                         "provider. The model is written the OpenCode "
+                         "way: provider/model.</p>")
+            model_placeholder = "provider/model — e.g. anthropic/claude-sonnet-4-5"
+            url_placeholder = "http://127.0.0.1:4096"
         else:
-            key_hint = ('<p class="hint">No key variable named — '
-                        "hosted providers need one.</p>")
+            if key_env:
+                key_state = "set" if st["key_present"] else "not set"
+                key_hint = (f'<p class="hint">{_esc(key_env)} — {key_state} '
+                            "in this app's environment.</p>")
+            else:
+                key_hint = ('<p class="hint">No key variable named — '
+                            "hosted providers need one.</p>")
+            key_block = (
+                f'<label for="m_{tier}_api_key_env">API key — '
+                'environment variable name</label>'
+                f'<input type="text" id="m_{tier}_api_key_env" '
+                f'name="m_{tier}_api_key_env" value="{_esc(key_env)}" '
+                f'placeholder="OPENAI_API_KEY">\n      {key_hint}')
+            model_placeholder = "model name"
+            url_placeholder = "https://…"
         cost = entry.get("cost_per_1k_tokens")
         blocks += f"""
     <fieldset class="tier"><legend>{tier} tier —
@@ -1236,12 +1260,10 @@ def _ladder_fields(data: dict) -> str:
       <label for="m_{tier}_provider">Provider</label>
       <select id="m_{tier}_provider" name="m_{tier}_provider">{options}</select>
       <label for="m_{tier}_model">Model</label>
-      <input type="text" id="m_{tier}_model" name="m_{tier}_model" value="{_esc(str(entry.get('model') or ''))}" placeholder="model name">
+      <input type="text" id="m_{tier}_model" name="m_{tier}_model" value="{_esc(str(entry.get('model') or ''))}" placeholder="{model_placeholder}">
       <label for="m_{tier}_base_url">Base URL <span class="hint">(blank = the provider's default)</span></label>
-      <input type="text" id="m_{tier}_base_url" name="m_{tier}_base_url" value="{_esc(base_url)}" placeholder="https://…">
-      <label for="m_{tier}_api_key_env">API key — environment variable name</label>
-      <input type="text" id="m_{tier}_api_key_env" name="m_{tier}_api_key_env" value="{_esc(key_env)}" placeholder="OPENAI_API_KEY">
-      {key_hint}
+      <input type="text" id="m_{tier}_base_url" name="m_{tier}_base_url" value="{_esc(base_url)}" placeholder="{url_placeholder}">
+      {key_block}
       <label for="m_{tier}_cost">Cost per 1k tokens <span class="hint">(your estimate, for the ledger)</span></label>
       <input type="number" step="0.0001" id="m_{tier}_cost" name="m_{tier}_cost_per_1k_tokens" value="{_esc('' if cost is None else cost)}">
     </fieldset>"""
@@ -2298,6 +2320,14 @@ class _Handler(BaseHTTPRequestHandler):
                 entry["model"] = model
                 entry["base_url"] = base_url or "http://localhost:11434/v1"
                 entry["api_key_env"] = key_env
+            elif provider == "opencode":
+                # OpenCode holds its own credentials: any key-env
+                # name is dropped on save, never stored for this
+                # provider.
+                entry["provider"] = "opencode"
+                entry["model"] = model
+                entry["base_url"] = base_url
+                entry["api_key_env"] = ""
             elif provider in brain_module.PROVIDERS:
                 entry["provider"] = provider
                 entry["model"] = model

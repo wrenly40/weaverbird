@@ -8,12 +8,20 @@ and the NAME of an environment variable that holds the user's key
 a call is made, used for that call's Authorization header, and never
 written anywhere — not to the ledger, not to a log, not to a report.
 
-Two provider kinds, both over the standard library only:
+Three provider kinds, all over the standard library only:
 
 - ``openai`` — OpenAI-compatible chat completions. Works for OpenAI
   itself, OpenRouter, Together, and local servers (Ollama, LM Studio)
   via ``base_url``.
 - ``anthropic`` — the Anthropic Messages API.
+- ``opencode`` — a local OpenCode server the maker runs themselves
+  (``opencode serve``, default http://127.0.0.1:4096). Weaverbird
+  talks to that server's HTTP API (create a session, post a message).
+  OpenCode holds its OWN provider credentials: Weaverbird never asks
+  for, stores, or sends any key for this provider — ``api_key_env``
+  is ignored entirely. The tier's model is written the way OpenCode
+  names it, ``provider/model`` (e.g. ``anthropic/claude-sonnet-4-5``),
+  and token/cost figures are the ones the server reports back.
 
 Every completed call is written to the project's ledger BEFORE the
 result is returned, with the real token counts from the provider's
@@ -38,12 +46,13 @@ from . import ledger as ledger_module
 from . import scope as scope_module
 from . import settings as settings_module
 
-PROVIDERS = ("openai", "anthropic")
+PROVIDERS = ("openai", "anthropic", "opencode")
 TIERS = ledger_module.TIERS
 
 _DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
+    "opencode": "http://127.0.0.1:4096",
 }
 _DEFAULT_KEY_ENVS = {
     "openai": "OPENAI_API_KEY",
@@ -141,9 +150,27 @@ def tier_config(data: dict | None, tier: str) -> dict:
 
 
 def _key_env_for(config: dict) -> str | None:
+    if config.get("provider") == "opencode":
+        # OpenCode holds its own credentials — a key env named in the
+        # settings for an opencode tier is ignored, never read, never
+        # sent. The server is the maker's own local process.
+        return None
     if config.get("api_key_env"):
         return config["api_key_env"]
     return _DEFAULT_KEY_ENVS.get(config.get("provider", ""))
+
+
+def _parse_opencode_model(model: str) -> tuple[str, str] | None:
+    """Split an OpenCode model name 'provider/model' into its parts.
+
+    OpenCode names models as providerID/modelID; the split is on the
+    FIRST slash (model ids may themselves contain slashes). Returns
+    None when the shape is wrong.
+    """
+    provider_id, sep, model_id = (model or "").partition("/")
+    if not sep or not provider_id.strip() or not model_id.strip():
+        return None
+    return provider_id.strip(), model_id.strip()
 
 
 def _is_local(base_url: str | None) -> bool:
@@ -164,6 +191,36 @@ def tier_status(data: dict | None, tier: str) -> dict:
     key_env = _key_env_for(config) if provider else config.get("api_key_env")
     key_present = bool(key_env and os.environ.get(key_env))
     base_url = config.get("base_url") or _DEFAULT_BASE_URLS.get(provider)
+    if provider == "opencode":
+        # No key is ever involved. The tier is configured when the
+        # model is written the OpenCode way ('provider/model'); the
+        # server being up is a live property — `brain check` probes
+        # it and a failed call reports it plainly.
+        configured = _parse_opencode_model(model) is not None
+        usable = configured
+        reason = ""
+        if not data:
+            reason = "No global settings file found."
+        elif not model:
+            reason = ("No model set for this tier — write it the "
+                      "OpenCode way, 'provider/model' (e.g. "
+                      "'anthropic/claude-sonnet-4-5').")
+        elif not configured:
+            reason = (f"The opencode model {model!r} is not in "
+                      "'provider/model' shape (e.g. "
+                      "'anthropic/claude-sonnet-4-5').")
+        return {
+            "tier": tier,
+            "provider": provider,
+            "model": model,
+            "base_url": base_url,
+            "api_key_env": None,
+            "key_present": False,
+            "key_required": False,
+            "configured": configured,
+            "usable": usable,
+            "reason": reason,
+        }
     configured = bool(provider in PROVIDERS and model)
     usable = configured and (key_present or _is_local(base_url))
     reason = ""
@@ -182,6 +239,7 @@ def tier_status(data: dict | None, tier: str) -> dict:
         "base_url": base_url,
         "api_key_env": key_env,
         "key_present": key_present,
+        "key_required": True,
         "configured": configured,
         "usable": usable,
         "reason": reason,
@@ -209,6 +267,50 @@ def _send(url: str, headers: dict, body: bytes, timeout: int = 60):
             return response.status, response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
+
+
+def _get(url: str, timeout: int = 5):
+    """GET url. Returns (status, response text); HTTP errors are
+    returned like `_send`'s, connection failures raise URLError."""
+    request = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+
+
+def opencode_health(base_url: str | None = None) -> dict:
+    """Probe an OpenCode server's documented health endpoint.
+
+    GET {base}/global/health answers ``{healthy, version}``. Returns
+    {reachable, version, error} — this is a live probe, used by
+    `brain check`; tier_status itself never touches the network.
+    """
+    base = (base_url or _DEFAULT_BASE_URLS["opencode"]).rstrip("/")
+    try:
+        status, text = _get(base + "/global/health", timeout=5)
+    except (urllib.error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, OSError) and reason.strerror:
+            detail = reason.strerror.lower()
+        else:
+            detail = str(reason)
+        return {"reachable": False, "version": None,
+                "error": f"could not connect ({detail})"}
+    if status != 200:
+        return {"reachable": False, "version": None,
+                "error": f"the server answered HTTP {status}"}
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return {"reachable": False, "version": None,
+                "error": "the health endpoint did not answer JSON"}
+    if payload.get("healthy") is False:
+        return {"reachable": False, "version": payload.get("version"),
+                "error": "the server reports itself unhealthy"}
+    return {"reachable": True, "version": payload.get("version"),
+            "error": ""}
 
 
 def _usage_openai(payload: dict) -> tuple[int, int]:
@@ -268,15 +370,28 @@ def _image_block_anthropic(image_bytes: bytes, media_type: str) -> dict:
     }
 
 
+def _image_block_opencode(image_bytes: bytes, media_type: str) -> dict:
+    """An OpenCode file part: the message API takes parts, and a
+    file part carries its bytes as a data URI in ``url``."""
+    import base64
+    data_uri = "data:%s;base64,%s" % (
+        media_type, base64.b64encode(image_bytes).decode("ascii"))
+    return {"type": "file", "mime": media_type,
+            "filename": "screenshot", "url": data_uri}
+
+
 def _with_image(messages: list, image_bytes: bytes, media_type: str,
                 provider: str) -> list:
     """Return a copy of messages with the image attached to the last
     user turn, shaped for the provider: OpenAI-compatible calls take
     a content-parts list with an image_url data URI; Anthropic takes
     content blocks with a base64 image source."""
-    block = (_image_block_anthropic(image_bytes, media_type)
-             if provider == "anthropic"
-             else _image_block_openai(image_bytes, media_type))
+    if provider == "anthropic":
+        block = _image_block_anthropic(image_bytes, media_type)
+    elif provider == "opencode":
+        block = _image_block_opencode(image_bytes, media_type)
+    else:
+        block = _image_block_openai(image_bytes, media_type)
     out = [dict(m) for m in messages]
     for index in range(len(out) - 1, -1, -1):
         if out[index].get("role") == "user":
@@ -293,12 +408,125 @@ _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg",
                 ".gif": "image/gif"}
 
 
+def _opencode_flatten(messages: list) -> tuple[str, list]:
+    """Flatten Weaverbird's chat messages into an OpenCode
+    (system, parts) pair. System turns join into the message call's
+    ``system`` field; every other turn becomes text parts (assistant
+    turns are labelled, since OpenCode takes one user message per
+    call); already-shaped list content (text/file parts from
+    `_with_image`) passes through as parts."""
+    system_bits: list[str] = []
+    parts: list = []
+    for message in messages:
+        content = message.get("content", "")
+        role = message.get("role", "user")
+        if role == "system":
+            if isinstance(content, str) and content:
+                system_bits.append(content)
+            continue
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in (
+                        "text", "file"):
+                    parts.append(part)
+            continue
+        text = str(content or "")
+        if not text:
+            continue
+        if role == "assistant":
+            text = "Assistant: " + text
+        parts.append({"type": "text", "text": text})
+    return "\n".join(system_bits), parts
+
+
+def _call_opencode(config: dict, messages: list) -> tuple[int, int, str, float | None]:
+    """One completion through the maker's own OpenCode server.
+
+    Per the server's documented API: POST /session creates a
+    session, POST /session/:id/message sends one message and waits
+    for the reply ``{info, parts}`` — the text lives in the reply's
+    text parts, and ``info`` carries the server's own ``tokens``
+    ({input, output}) and ``cost``. No credential of any kind is
+    sent: OpenCode holds its providers' keys itself.
+    """
+    base = (config.get("base_url")
+            or _DEFAULT_BASE_URLS["opencode"]).rstrip("/")
+    parsed = _parse_opencode_model(config.get("model", ""))
+    if parsed is None:
+        raise BrainError(
+            "the opencode model must be written as 'provider/model' "
+            f"(got {config.get('model', '')!r}).")
+    provider_id, model_id = parsed
+    headers = {"Content-Type": "application/json"}
+    try:
+        status, text = _send(base + "/session", headers,
+                             json.dumps({"title": "Weaverbird"}).encode("utf-8"),
+                             timeout=30)
+    except (urllib.error.URLError, OSError):
+        raise BrainError(
+            f"the OpenCode server at {base} could not be reached — "
+            "start it with `opencode serve` and check the tier's "
+            "base URL.")
+    if status != 200:
+        raise BrainError(
+            f"The OpenCode server answered HTTP {status} when "
+            "creating a session.")
+    try:
+        session = json.loads(text)
+    except ValueError:
+        raise BrainError("The OpenCode server's session reply was not JSON.")
+    session_id = session.get("id")
+    if not session_id:
+        raise BrainError("The OpenCode server's session reply had no id.")
+    system, parts = _opencode_flatten(messages)
+    body = {"model": {"providerID": provider_id, "modelID": model_id},
+            "parts": parts}
+    if system:
+        body["system"] = system
+    try:
+        status, text = _send(f"{base}/session/{session_id}/message",
+                             headers, json.dumps(body).encode("utf-8"),
+                             timeout=300)
+    except (urllib.error.URLError, OSError):
+        raise BrainError(
+            f"the OpenCode server at {base} could not be reached — "
+            "start it with `opencode serve` and check the tier's "
+            "base URL.")
+    if status != 200:
+        raise BrainError(
+            f"The OpenCode server answered HTTP {status} when "
+            "sending the message.")
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        raise BrainError("The OpenCode server's message reply was not JSON.")
+    info = payload.get("info") or {}
+    tokens = info.get("tokens") or {}
+    prompt = int(tokens.get("input", 0) or 0)
+    completion = int(tokens.get("output", 0) or 0)
+    api_cost = info.get("cost")
+    if not isinstance(api_cost, (int, float)) or isinstance(api_cost, bool):
+        api_cost = None
+    reply = "".join(
+        part.get("text", "")
+        for part in payload.get("parts") or []
+        if isinstance(part, dict) and part.get("type") == "text"
+    )
+    return prompt, completion, reply, (float(api_cost)
+                                       if api_cost is not None else None)
+
+
 def _call_provider(config: dict, key: str | None, messages: list,
-                   max_tokens: int | None) -> tuple[int, int, str]:
-    """Make the raw provider call. Returns (prompt, completion, text)."""
+                   max_tokens: int | None) -> tuple[int, int, str, float | None]:
+    """Make the raw provider call. Returns (prompt, completion, text,
+    api_cost) — api_cost is the provider's own reported cost when it
+    gives one (OpenCode does), else None and the caller prices the
+    tokens from the tier's configured rate."""
     provider = config["provider"]
     base = config.get("base_url") or _DEFAULT_BASE_URLS[provider]
     limit = max_tokens or 1024
+    if provider == "opencode":
+        return _call_opencode(config, messages)
     if provider == "openai":
         url = base + "/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -311,7 +539,7 @@ def _call_provider(config: dict, key: str | None, messages: list,
             raise BrainError(f"The provider answered HTTP {status}.")
         payload = json.loads(text)
         prompt, completion = _usage_openai(payload)
-        return prompt, completion, _text_openai(payload)
+        return prompt, completion, _text_openai(payload), None
     # anthropic
     url = base + "/v1/messages"
     headers = {
@@ -336,7 +564,7 @@ def _call_provider(config: dict, key: str | None, messages: list,
         raise BrainError(f"The provider answered HTTP {status}.")
     payload = json.loads(text)
     prompt, completion = _usage_anthropic(payload)
-    return prompt, completion, _text_anthropic(payload)
+    return prompt, completion, _text_anthropic(payload), None
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +661,7 @@ def _complete_core(project_dir, tier: str, messages: list, stage: str,
     key_env = _key_env_for(config)
     key = os.environ.get(key_env) if key_env else None
     try:
-        prompt_tokens, completion_tokens, text = _call_provider(
+        prompt_tokens, completion_tokens, text, api_cost = _call_provider(
             config, key, messages, max_tokens
         )
     except BrainError as exc:
@@ -448,9 +676,18 @@ def _complete_core(project_dir, tier: str, messages: list, stage: str,
 
     total = prompt_tokens + completion_tokens
     price = config.get("cost_per_1k_tokens")
-    cost = round(total / 1000.0 * price, 6) if price else 0.0
-    # The ledger entry lands before the caller sees the text.
-    ledger_module.add_entry(project_dir, stage, tier, total, cost)
+    if api_cost is not None:
+        # The provider reported the cost itself (OpenCode does) —
+        # record its figure, never an invented one.
+        cost = round(float(api_cost), 6)
+    else:
+        cost = round(total / 1000.0 * price, 6) if price else 0.0
+    # The ledger entry lands before the caller sees the text. For
+    # opencode the figures are the server's own report, and the
+    # entry says so — tokens are never estimated.
+    source = "opencode" if config["provider"] == "opencode" else None
+    ledger_module.add_entry(project_dir, stage, tier, total, cost,
+                            source=source)
     result.ok = True
     result.text = text
     result.prompt_tokens = prompt_tokens
