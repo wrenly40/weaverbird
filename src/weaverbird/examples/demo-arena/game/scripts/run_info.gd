@@ -9,5 +9,6 @@ extends RefCounted
 static var result: String = ""
 static var targets_collected: int = 0
 static var targets_total: int = 0
+static var targets_label: String = ""
 static var message: String = ""
 static var settings_return_scene: String = "res://scenes/main_menu.tscn"

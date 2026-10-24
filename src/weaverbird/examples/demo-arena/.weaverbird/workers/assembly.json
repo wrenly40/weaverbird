@@ -1,7 +1,7 @@
 {
   "worker": "assembly",
-  "ran_at": "2026-10-23T16:08:46+00:00",
-  "inputs_hash": "5d121a3a987c667439462a8c",
+  "ran_at": "2026-10-24T00:41:18+00:00",
+  "inputs_hash": "7447e7e718b3e3082510d340",
   "ok": true,
   "artifacts": [
     "game/game_config.json",

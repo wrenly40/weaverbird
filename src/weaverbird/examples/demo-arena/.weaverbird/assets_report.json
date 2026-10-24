@@ -1,24 +1,6 @@
 {
   "stage": "assets",
-  "generated_at": "2026-10-23T16:08:23+00:00",
-  "archetype": "arena_collector",
-  "composition": {
-    "dimension": "2d",
-    "movement": "top_down",
-    "objectives": [
-      "collect"
-    ],
-    "fail": [
-      "timer",
-      "hazard_contact"
-    ],
-    "structure": "rounds",
-    "interactions": [
-      "avoid",
-      "collect"
-    ]
-  },
-  "preset": "arena_collector",
+  "generated_at": "2026-10-24T00:40:53+00:00",
   "dimension": "2d",
   "requests": {
     "sprites": [
@@ -68,5 +50,9 @@
     "game/icon.svg"
   ],
   "icon": "game/icon.svg",
-  "icon_generated": true
+  "icon_generated": true,
+  "plan": {
+    "movement": "top_down_2d",
+    "objective": "collect"
+  }
 }

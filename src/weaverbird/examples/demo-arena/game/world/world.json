@@ -1,22 +1,56 @@
 {
-  "preset": "arena_collector",
-  "composition": {
+  "plan": {
     "dimension": "2d",
-    "movement": "top_down",
-    "objectives": [
-      "collect"
-    ],
+    "movement": "top_down_2d",
+    "objective": "collect",
     "fail": [
-      "timer",
-      "hazard_contact"
+      "hazard_contacts",
+      "timer"
     ],
-    "structure": "rounds",
-    "interactions": [
-      "avoid",
-      "collect"
-    ]
+    "lives": 1,
+    "entities": [
+      {
+        "kind": "player",
+        "label": "Player",
+        "behaviour": "player",
+        "derivation": "the one who moves"
+      },
+      {
+        "kind": "collectible",
+        "label": "Stars",
+        "behaviour": "static",
+        "derivation": "they wait to be collected",
+        "optional": false
+      },
+      {
+        "kind": "hazard",
+        "label": "Hazards",
+        "behaviour": "patrol",
+        "derivation": "they patrol their ground"
+      }
+    ],
+    "numbers": {
+      "units": 3,
+      "round_seconds": 75,
+      "world_seed": 2028044504,
+      "lives": 1,
+      "targets_per_round": 6,
+      "targets_pinned": true,
+      "player_speed": 330.0,
+      "hazard_speed": 1.4
+    },
+    "collectible_label": "Stars",
+    "derivations": [
+      "movement top_down_2d \u2014 no side-view, pushing or 3D signal in the scope; free top-down movement is the plain default",
+      "objective collect \u2014 scope: the Win condition states \u201cCollect 6\u201d",
+      "entity collectible \u201cStars\u201d (static) \u2014 scope: they wait to be collected",
+      "entity hazard \u201cHazards\u201d (patrol) \u2014 scope: they patrol their ground",
+      "fail hazard_contacts \u2014 hazards exist, so touching them costs the player",
+      "fail timer \u2014 the scope's lose condition is the clock",
+      "targets_per_round 6 \u2014 scope: \u201cCollect 6\u201d in the Win condition (a stated count pins every round)"
+    ],
+    "bespoke_required": null
   },
-  "bespoke": false,
   "entity_kinds": [
     "player",
     "collectible",
@@ -28,6 +62,7 @@
       "kind": "round",
       "round": 1,
       "targets_per_round": 6,
+      "targets_pinned": true,
       "round_seconds": 75,
       "arena": [
         1152,
@@ -36,6 +71,24 @@
       "spawn": [
         576,
         470
+      ],
+      "hazards": [
+        {
+          "pos": [
+            400,
+            330
+          ],
+          "range": 170,
+          "behaviour": "patrol"
+        },
+        {
+          "pos": [
+            740,
+            452
+          ],
+          "range": 140,
+          "behaviour": "patrol"
+        }
       ],
       "collectibles": [
         [
@@ -63,22 +116,6 @@
           451
         ]
       ],
-      "hazards": [
-        {
-          "pos": [
-            400,
-            330
-          ],
-          "range": 170
-        },
-        {
-          "pos": [
-            740,
-            452
-          ],
-          "range": 140
-        }
-      ],
       "layout": {
         "pattern": "zigzag",
         "seed": 2028044504,
@@ -90,6 +127,7 @@
       "kind": "round",
       "round": 2,
       "targets_per_round": 6,
+      "targets_pinned": true,
       "round_seconds": 75,
       "arena": [
         1152,
@@ -99,58 +137,57 @@
         576,
         470
       ],
-      "collectibles": [
-        [
-          663,
-          181
-        ],
-        [
-          785,
-          184
-        ],
-        [
-          847,
-          263
-        ],
-        [
-          828,
-          333
-        ],
-        [
-          694,
-          363
-        ],
-        [
-          639,
-          284
-        ],
-        [
-          582,
-          237
-        ]
-      ],
       "hazards": [
         {
           "pos": [
             400,
             330
           ],
-          "range": 170
+          "range": 170,
+          "behaviour": "patrol"
         },
         {
           "pos": [
             740,
             452
           ],
-          "range": 140
+          "range": 140,
+          "behaviour": "patrol"
         },
         {
           "pos": [
             300,
             200
           ],
-          "range": 130
+          "range": 130,
+          "behaviour": "patrol"
         }
+      ],
+      "collectibles": [
+        [
+          663,
+          181
+        ],
+        [
+          803,
+          192
+        ],
+        [
+          843,
+          290
+        ],
+        [
+          774,
+          359
+        ],
+        [
+          644,
+          318
+        ],
+        [
+          570,
+          248
+        ]
       ],
       "layout": {
         "pattern": "ring",
@@ -163,6 +200,7 @@
       "kind": "round",
       "round": 3,
       "targets_per_round": 6,
+      "targets_pinned": true,
       "round_seconds": 75,
       "arena": [
         1152,
@@ -172,69 +210,65 @@
         576,
         470
       ],
-      "collectibles": [
-        [
-          962,
-          444
-        ],
-        [
-          890,
-          356
-        ],
-        [
-          748,
-          301
-        ],
-        [
-          638,
-          211
-        ],
-        [
-          491,
-          217
-        ],
-        [
-          368,
-          263
-        ],
-        [
-          308,
-          386
-        ],
-        [
-          190,
-          446
-        ]
-      ],
       "hazards": [
         {
           "pos": [
             400,
             330
           ],
-          "range": 170
+          "range": 170,
+          "behaviour": "patrol"
         },
         {
           "pos": [
             740,
             452
           ],
-          "range": 140
+          "range": 140,
+          "behaviour": "patrol"
         },
         {
           "pos": [
             300,
             200
           ],
-          "range": 130
+          "range": 130,
+          "behaviour": "patrol"
         },
         {
           "pos": [
             850,
             240
           ],
-          "range": 120
+          "range": 120,
+          "behaviour": "patrol"
         }
+      ],
+      "collectibles": [
+        [
+          972,
+          456
+        ],
+        [
+          848,
+          315
+        ],
+        [
+          671,
+          241
+        ],
+        [
+          486,
+          236
+        ],
+        [
+          250,
+          258
+        ],
+        [
+          202,
+          431
+        ]
       ],
       "layout": {
         "pattern": "arc",

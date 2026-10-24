@@ -1,8 +1,9 @@
 {
   "stage": "headless_test",
-  "ran_at": "2026-10-23T16:09:57+00:00",
+  "ran_at": "2026-10-24T00:42:14+00:00",
   "godot_version": "4.7.2.stable.official.ed1daf0bf",
-  "archetype": "arena_collector",
+  "movement": "top_down_2d",
+  "objective": "collect",
   "scripted_players": true,
   "runs": [
     {
@@ -10,7 +11,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 4.51,
+      "duration_s": 6.31,
       "details": {}
     },
     {
@@ -18,7 +19,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 0.56,
+      "duration_s": 0.74,
       "details": {}
     },
     {
@@ -26,7 +27,7 @@
       "kind": "base",
       "ok": true,
       "errors": [],
-      "duration_s": 0.67,
+      "duration_s": 0.71,
       "details": {}
     },
     {
@@ -36,31 +37,32 @@
       "mode": "win",
       "ok": true,
       "errors": [],
-      "duration_s": 16.5,
+      "duration_s": 16.39,
       "details": {
         "deaths": 0,
         "findings": [],
-        "fps_avg": 144.6,
-        "load_ms": 329,
+        "fps_avg": 144.4,
+        "load_ms": 332,
         "reason": "",
-        "time_s": 15.52,
+        "recoveries": 0,
+        "time_s": 15.39,
         "units": [
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 7.3,
+            "time_s": 7.31,
             "unit": 1
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 2.88,
+            "time_s": 2.94,
             "unit": 2
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 5.3,
+            "time_s": 5.06,
             "unit": 3
           }
         ]
@@ -73,12 +75,12 @@
       "mode": "lose",
       "ok": true,
       "errors": [],
-      "duration_s": 1.8,
+      "duration_s": 1.87,
       "details": {
         "deaths": 1,
         "findings": [],
         "reason": "",
-        "time_s": 0.83
+        "time_s": 0.89
       }
     },
     {
@@ -88,14 +90,15 @@
       "mode": "fuzz",
       "ok": true,
       "errors": [],
-      "duration_s": 31.08,
+      "duration_s": 25.76,
       "details": {
         "deaths": 0,
         "findings": [
+          "fuzzing reached the game over screen",
           "pause overlay opened and closed under fuzz input"
         ],
         "reason": "",
-        "time_s": 30.0
+        "time_s": 24.83
       }
     },
     {
@@ -105,33 +108,21 @@
       "mode": "explore",
       "ok": true,
       "errors": [],
-      "duration_s": 16.28,
+      "duration_s": 3.82,
       "details": {
-        "deaths": 1,
+        "deaths": 0,
         "findings": [],
         "finished": false,
-        "first_objective_s": 0.98,
+        "first_objective_s": 1.52,
         "outcome": "lose",
         "reason": "",
-        "time_s": 15.25,
+        "time_s": 2.78,
         "units": [
           {
-            "completed": true,
-            "deaths": 0,
-            "time_s": 8.12,
-            "unit": 1
-          },
-          {
-            "completed": true,
-            "deaths": 0,
-            "time_s": 4.04,
-            "unit": 2
-          },
-          {
             "completed": false,
-            "deaths": 1,
-            "time_s": 3.08,
-            "unit": 3
+            "deaths": 0,
+            "time_s": 2.71,
+            "unit": 1
           }
         ]
       }
@@ -144,8 +135,8 @@
   "win_proven": true,
   "lose_proven": true,
   "performance": {
-    "avg_fps": 144.6,
-    "load_time_s": 0.329,
+    "avg_fps": 144.4,
+    "load_time_s": 0.332,
     "target_fps": 30,
     "ok": true
   },
@@ -154,27 +145,28 @@
       "win": {
         "deaths": 0,
         "findings": [],
-        "fps_avg": 144.6,
-        "load_ms": 329,
+        "fps_avg": 144.4,
+        "load_ms": 332,
         "reason": "",
-        "time_s": 15.52,
+        "recoveries": 0,
+        "time_s": 15.39,
         "units": [
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 7.3,
+            "time_s": 7.31,
             "unit": 1
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 2.88,
+            "time_s": 2.94,
             "unit": 2
           },
           {
             "completed": true,
             "deaths": 0,
-            "time_s": 5.3,
+            "time_s": 5.06,
             "unit": 3
           }
         ]
@@ -183,45 +175,34 @@
         "deaths": 1,
         "findings": [],
         "reason": "",
-        "time_s": 0.83
+        "time_s": 0.89
       },
       "ok": true
     },
     "breaker": {
       "deaths": 0,
       "findings": [
+        "fuzzing reached the game over screen",
         "pause overlay opened and closed under fuzz input"
       ],
       "reason": "",
-      "time_s": 30.0,
+      "time_s": 24.83,
       "ok": true
     },
     "first_time": {
-      "deaths": 1,
+      "deaths": 0,
       "findings": [],
       "finished": false,
-      "first_objective_s": 0.98,
+      "first_objective_s": 1.52,
       "outcome": "lose",
       "reason": "",
-      "time_s": 15.25,
+      "time_s": 2.78,
       "units": [
         {
-          "completed": true,
-          "deaths": 0,
-          "time_s": 8.12,
-          "unit": 1
-        },
-        {
-          "completed": true,
-          "deaths": 0,
-          "time_s": 4.04,
-          "unit": 2
-        },
-        {
           "completed": false,
-          "deaths": 1,
-          "time_s": 3.08,
-          "unit": 3
+          "deaths": 0,
+          "time_s": 2.71,
+          "unit": 1
         }
       ],
       "ok": true
@@ -233,45 +214,32 @@
       "source": "competent",
       "completed": true,
       "deaths": 0,
-      "time_s": 7.3
+      "time_s": 7.31
     },
     {
       "unit": 1,
       "source": "first_time",
-      "completed": true,
-      "deaths": 0,
-      "time_s": 8.12
-    },
-    {
-      "unit": 2,
-      "source": "competent",
-      "completed": true,
-      "deaths": 0,
-      "time_s": 2.88
-    },
-    {
-      "unit": 2,
-      "source": "first_time",
-      "completed": true,
-      "deaths": 0,
-      "time_s": 4.04
-    },
-    {
-      "unit": 3,
-      "source": "competent",
-      "completed": true,
-      "deaths": 0,
-      "time_s": 5.3
-    },
-    {
-      "unit": 3,
-      "source": "first_time",
       "completed": false,
-      "deaths": 1,
-      "time_s": 3.08
+      "deaths": 0,
+      "time_s": 2.71
+    },
+    {
+      "unit": 2,
+      "source": "competent",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 2.94
+    },
+    {
+      "unit": 3,
+      "source": "competent",
+      "completed": true,
+      "deaths": 0,
+      "time_s": 5.06
     }
   ],
   "warnings": [
+    "breaker: fuzzing reached the game over screen",
     "breaker: pause overlay opened and closed under fuzz input"
   ],
   "ok": true

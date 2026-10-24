@@ -1,13 +1,15 @@
 {
   "worker": "mechanics",
-  "ran_at": "2026-10-23T16:08:22+00:00",
-  "inputs_hash": "09e787c31c183acee5e45262",
+  "ran_at": "2026-10-24T00:40:52+00:00",
+  "inputs_hash": "049d182d41bf267e70bc44a3",
   "ok": true,
   "artifacts": [
     "game/scripts/asset_loader.gd",
+    "game/scripts/door_draw.gd",
     "game/scripts/game.gd",
     "game/scripts/marker.gd",
     "game/scripts/player.gd",
+    "game/scripts/star.gd",
     "game/smoke/smoke.gd",
     "game/tests/breaker.gd",
     "game/tests/competent_lose.gd",
@@ -17,9 +19,9 @@
     "game/tests/savecheck.gd"
   ],
   "metrics": {
-    "files": 11
+    "files": 13
   },
   "issues": [],
-  "summary": "Mechanics written: 11 script(s) interpreting the world data.",
+  "summary": "Mechanics written: 13 script(s) interpreting the world data.",
   "attempt": 0
 }

@@ -1,29 +1,46 @@
 {
   "stage": "build",
-  "built_at": "2026-10-23T16:08:23+00:00",
-  "archetype": "arena_collector",
-  "archetype_reason": "derived from the scope \u2014 no platform or puzzle signal in the scope \u2014 the arena collector is the default",
-  "preset": "arena_collector",
-  "composition": {
+  "built_at": "2026-10-24T00:40:53+00:00",
+  "movement": "top_down_2d",
+  "objective": "collect",
+  "plan": {
+    "movement": "top_down_2d",
+    "objective": "collect",
     "dimension": "2d",
-    "movement": "top_down",
-    "objectives": [
-      "collect"
-    ],
     "fail": [
-      "timer",
-      "hazard_contact"
+      "hazard_contacts",
+      "timer"
     ],
-    "structure": "rounds",
-    "interactions": [
-      "avoid",
-      "collect"
+    "entities": [
+      {
+        "kind": "player",
+        "label": "Player",
+        "behaviour": "player"
+      },
+      {
+        "kind": "collectible",
+        "label": "Stars",
+        "behaviour": "static"
+      },
+      {
+        "kind": "hazard",
+        "label": "Hazards",
+        "behaviour": "patrol"
+      }
+    ],
+    "derivations": [
+      "movement top_down_2d \u2014 no side-view, pushing or 3D signal in the scope; free top-down movement is the plain default",
+      "objective collect \u2014 scope: the Win condition states \u201cCollect 6\u201d",
+      "entity collectible \u201cStars\u201d (static) \u2014 scope: they wait to be collected",
+      "entity hazard \u201cHazards\u201d (patrol) \u2014 scope: they patrol their ground",
+      "fail hazard_contacts \u2014 hazards exist, so touching them costs the player",
+      "fail timer \u2014 the scope's lose condition is the clock",
+      "targets_per_round 6 \u2014 scope: \u201cCollect 6\u201d in the Win condition (a stated count pins every round)"
     ]
   },
   "bespoke": false,
   "world_manifest": {
     "path": "game/world/world.json",
-    "preset": "arena_collector",
     "bespoke": false,
     "units": 3,
     "unit_kinds": [
@@ -33,24 +50,81 @@
       "player",
       "collectible",
       "hazard"
-    ]
+    ],
+    "movement": "top_down_2d",
+    "objective": "collect"
   },
   "brain_used": false,
   "brain_note": "no usable mid-tier model (no settings file found)",
   "config": {
-    "archetype": "arena_collector",
     "accent_hex": "#9B8CF2",
     "target_hex": "#7FD6A4",
     "hazard_hex": "#F28B8B",
     "platform_hex": "#B8A99A",
     "crate_hex": "#D9B98A",
-    "objective_hint": "Collect every glowing target before the time runs out. Avoid the red hazards!",
+    "objective_hint": "Collect the Stars before the time runs out. Avoid the Hazards!",
+    "dimension": "2d",
+    "plan": {
+      "dimension": "2d",
+      "movement": "top_down_2d",
+      "objective": "collect",
+      "fail": [
+        "hazard_contacts",
+        "timer"
+      ],
+      "lives": 1,
+      "entities": [
+        {
+          "kind": "player",
+          "label": "Player",
+          "behaviour": "player",
+          "derivation": "the one who moves"
+        },
+        {
+          "kind": "collectible",
+          "label": "Stars",
+          "behaviour": "static",
+          "derivation": "they wait to be collected",
+          "optional": false
+        },
+        {
+          "kind": "hazard",
+          "label": "Hazards",
+          "behaviour": "patrol",
+          "derivation": "they patrol their ground"
+        }
+      ],
+      "numbers": {
+        "units": 3,
+        "round_seconds": 75,
+        "world_seed": 2028044504,
+        "lives": 1,
+        "targets_per_round": 6,
+        "targets_pinned": true,
+        "player_speed": 330.0,
+        "hazard_speed": 1.4
+      },
+      "collectible_label": "Stars",
+      "derivations": [
+        "movement top_down_2d \u2014 no side-view, pushing or 3D signal in the scope; free top-down movement is the plain default",
+        "objective collect \u2014 scope: the Win condition states \u201cCollect 6\u201d",
+        "entity collectible \u201cStars\u201d (static) \u2014 scope: they wait to be collected",
+        "entity hazard \u201cHazards\u201d (patrol) \u2014 scope: they patrol their ground",
+        "fail hazard_contacts \u2014 hazards exist, so touching them costs the player",
+        "fail timer \u2014 the scope's lose condition is the clock",
+        "targets_per_round 6 \u2014 scope: \u201cCollect 6\u201d in the Win condition (a stated count pins every round)"
+      ],
+      "bespoke_required": null
+    },
+    "collectible_label": "Stars",
+    "units": 3,
+    "world_seed": 2028044504,
+    "round_seconds": 75.0,
+    "lives": 1,
     "rounds": 3,
     "targets_per_round": 6,
-    "round_seconds": 75,
     "player_speed": 330.0,
     "hazard_speed": 1.4,
-    "world_seed": 2028044504,
     "scope_numbers": {
       "targets_per_round": {
         "stated": 6,
@@ -58,34 +132,18 @@
         "field": "Win condition",
         "matched": "Collect 6"
       }
-    },
-    "composition": {
-      "dimension": "2d",
-      "movement": "top_down",
-      "objectives": [
-        "collect"
-      ],
-      "fail": [
-        "timer",
-        "hazard_contact"
-      ],
-      "structure": "rounds",
-      "interactions": [
-        "avoid",
-        "collect"
-      ]
-    },
-    "preset": "arena_collector",
-    "dimension": "2d"
+    }
   },
   "units_delivered": 3,
   "units_requested": 3,
   "files": [
     "game/game_config.json",
     "game/scripts/asset_loader.gd",
+    "game/scripts/door_draw.gd",
     "game/scripts/game.gd",
     "game/scripts/marker.gd",
     "game/scripts/player.gd",
+    "game/scripts/star.gd",
     "game/smoke/smoke.gd",
     "game/tests/breaker.gd",
     "game/tests/competent_lose.gd",
@@ -102,36 +160,36 @@
     "godot_version": "4.7.2.stable.official.ed1daf0bf",
     "runs": [
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/wb-demo-55x0k5gb/demo-arena/game --import",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --import",
         "returncode": 0,
-        "duration_seconds": 5.44,
+        "duration_seconds": 7.31,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "import"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/wb-demo-55x0k5gb/demo-arena/game --quit-after 45",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --quit-after 45",
         "returncode": 0,
-        "duration_seconds": 0.57,
+        "duration_seconds": 0.68,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "main scene"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/wb-demo-55x0k5gb/demo-arena/game res://scenes/game.tscn --quit-after 45",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game res://scenes/game.tscn --quit-after 45",
         "returncode": 0,
-        "duration_seconds": 0.56,
+        "duration_seconds": 0.89,
         "errors": [],
         "ok": true,
         "smoke_pass": false,
         "name": "game scene"
       },
       {
-        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/wb-demo-55x0k5gb/demo-arena/game --script smoke/smoke.gd",
+        "command": "/home/hatch/workspace/tools/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path /tmp/demo-regen/demo-arena/game --script smoke/smoke.gd",
         "returncode": 0,
-        "duration_seconds": 16.48,
+        "duration_seconds": 16.57,
         "errors": [],
         "ok": true,
         "smoke_pass": true,
@@ -140,5 +198,5 @@
     ]
   },
   "known_good_tag": "known-good/build",
-  "commit": "7ddb43b9078d7e50fd72391c3e16cc509c84d73b"
+  "commit": "e461b2a970ec0b6ef0c9a9ffd3abbdd16ece1b68"
 }

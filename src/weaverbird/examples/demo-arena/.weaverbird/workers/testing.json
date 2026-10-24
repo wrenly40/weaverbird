@@ -1,14 +1,14 @@
 {
   "worker": "testing",
-  "ran_at": "2026-10-23T16:09:57+00:00",
-  "inputs_hash": "adb7da01f951e404c0f31b94",
+  "ran_at": "2026-10-24T00:42:14+00:00",
+  "inputs_hash": "eebfdc6ddabeae6c981ec00f",
   "ok": true,
   "artifacts": [
     ".weaverbird/test_report.json"
   ],
   "metrics": {
     "runs": 7,
-    "units": 6
+    "units": 4
   },
   "issues": [],
   "summary": "Test suite: PASS \u2014 win and lose proven.",

@@ -25,25 +25,60 @@
     "Target storefronts, in order (itch / Steam / Play / other)": "itch",
     "Price intent (free / paid + rough price / decide at approval gate)": "free"
   },
-  "preset": "arena_collector",
-  "composition": {
+  "plan": {
     "dimension": "2d",
-    "movement": "top_down",
-    "objectives": [
-      "collect"
-    ],
+    "movement": "top_down_2d",
+    "objective": "collect",
     "fail": [
-      "timer",
-      "hazard_contact"
+      "hazard_contacts",
+      "timer"
     ],
-    "structure": "rounds",
-    "interactions": [
-      "avoid",
-      "collect"
-    ]
+    "lives": 1,
+    "entities": [
+      {
+        "kind": "player",
+        "label": "Player",
+        "behaviour": "player",
+        "derivation": "the one who moves"
+      },
+      {
+        "kind": "collectible",
+        "label": "Stars",
+        "behaviour": "static",
+        "derivation": "they wait to be collected",
+        "optional": false
+      },
+      {
+        "kind": "hazard",
+        "label": "Hazards",
+        "behaviour": "patrol",
+        "derivation": "they patrol their ground"
+      }
+    ],
+    "numbers": {
+      "units": 3,
+      "round_seconds": 75,
+      "world_seed": 2028044504,
+      "lives": 1,
+      "targets_per_round": 6,
+      "targets_pinned": true,
+      "player_speed": 330.0,
+      "hazard_speed": 1.4
+    },
+    "collectible_label": "Stars",
+    "derivations": [
+      "movement top_down_2d \u2014 no side-view, pushing or 3D signal in the scope; free top-down movement is the plain default",
+      "objective collect \u2014 scope: the Win condition states \u201cCollect 6\u201d",
+      "entity collectible \u201cStars\u201d (static) \u2014 scope: they wait to be collected",
+      "entity hazard \u201cHazards\u201d (patrol) \u2014 scope: they patrol their ground",
+      "fail hazard_contacts \u2014 hazards exist, so touching them costs the player",
+      "fail timer \u2014 the scope's lose condition is the clock",
+      "targets_per_round 6 \u2014 scope: \u201cCollect 6\u201d in the Win condition (a stated count pins every round)"
+    ],
+    "bespoke_required": null
   },
   "bespoke": false,
-  "reason": "derived from the scope \u2014 no platform or puzzle signal in the scope \u2014 the arena collector is the default",
+  "reason": "plan derived from the scope \u2014 movement top_down_2d, objective collect, fail hazard_contacts, timer",
   "palette": {
     "accent_hex": "#9B8CF2",
     "target_hex": "#7FD6A4",
@@ -53,19 +88,74 @@
   },
   "units": 3,
   "config": {
-    "archetype": "arena_collector",
     "accent_hex": "#9B8CF2",
     "target_hex": "#7FD6A4",
     "hazard_hex": "#F28B8B",
     "platform_hex": "#B8A99A",
     "crate_hex": "#D9B98A",
-    "objective_hint": "Collect every glowing target before the time runs out. Avoid the red hazards!",
+    "objective_hint": "Collect the Stars before the time runs out. Avoid the Hazards!",
+    "dimension": "2d",
+    "plan": {
+      "dimension": "2d",
+      "movement": "top_down_2d",
+      "objective": "collect",
+      "fail": [
+        "hazard_contacts",
+        "timer"
+      ],
+      "lives": 1,
+      "entities": [
+        {
+          "kind": "player",
+          "label": "Player",
+          "behaviour": "player",
+          "derivation": "the one who moves"
+        },
+        {
+          "kind": "collectible",
+          "label": "Stars",
+          "behaviour": "static",
+          "derivation": "they wait to be collected",
+          "optional": false
+        },
+        {
+          "kind": "hazard",
+          "label": "Hazards",
+          "behaviour": "patrol",
+          "derivation": "they patrol their ground"
+        }
+      ],
+      "numbers": {
+        "units": 3,
+        "round_seconds": 75,
+        "world_seed": 2028044504,
+        "lives": 1,
+        "targets_per_round": 6,
+        "targets_pinned": true,
+        "player_speed": 330.0,
+        "hazard_speed": 1.4
+      },
+      "collectible_label": "Stars",
+      "derivations": [
+        "movement top_down_2d \u2014 no side-view, pushing or 3D signal in the scope; free top-down movement is the plain default",
+        "objective collect \u2014 scope: the Win condition states \u201cCollect 6\u201d",
+        "entity collectible \u201cStars\u201d (static) \u2014 scope: they wait to be collected",
+        "entity hazard \u201cHazards\u201d (patrol) \u2014 scope: they patrol their ground",
+        "fail hazard_contacts \u2014 hazards exist, so touching them costs the player",
+        "fail timer \u2014 the scope's lose condition is the clock",
+        "targets_per_round 6 \u2014 scope: \u201cCollect 6\u201d in the Win condition (a stated count pins every round)"
+      ],
+      "bespoke_required": null
+    },
+    "collectible_label": "Stars",
+    "units": 3,
+    "world_seed": 2028044504,
+    "round_seconds": 75.0,
+    "lives": 1,
     "rounds": 3,
     "targets_per_round": 6,
-    "round_seconds": 75,
     "player_speed": 330.0,
     "hazard_speed": 1.4,
-    "world_seed": 2028044504,
     "scope_numbers": {
       "targets_per_round": {
         "stated": 6,
