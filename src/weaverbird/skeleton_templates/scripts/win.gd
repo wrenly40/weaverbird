@@ -14,7 +14,8 @@ func _ready() -> void:
 	if message == "":
 		message = "Every target collected."
 	column.add_child(UiTheme.make_label(message, 18, UiTheme.TEXT_MUTED))
-	var score := "Targets: %d / %d" % [RunInfo.targets_collected, RunInfo.targets_total]
+	var label := RunInfo.targets_label if RunInfo.targets_label != "" else "Targets"
+	var score := "%s: %d / %d" % [label, RunInfo.targets_collected, RunInfo.targets_total]
 	column.add_child(UiTheme.make_label(score, 18))
 	var again := UiTheme.make_button("Play again")
 	again.pressed.connect(func() -> void: get_tree().change_scene_to_file(GAME_SCENE))

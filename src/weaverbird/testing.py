@@ -278,11 +278,21 @@ def run_tests(project_dir, godot_path=None, settings_path=None,
         except json.JSONDecodeError:
             generation = None
 
+    # Legacy builds are named by the archetype that produced
+    # them; genre-agnostic builds by their plan's movement and
+    # objective — the other key is not written at all.
+    if generation and generation.get("plan"):
+        identity = {"movement": generation.get("movement"),
+                    "objective": generation.get("objective")}
+    elif generation:
+        identity = {"archetype": generation.get("archetype")}
+    else:
+        identity = {}
     report = {
         "stage": "headless_test",
         "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "godot_version": version,
-        "archetype": generation.get("archetype") if generation else None,
+        **identity,
         "scripted_players": True,
         "runs": runs,
         "scenarios_pass": scenarios_pass,

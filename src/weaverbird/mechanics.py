@@ -3,25 +3,31 @@
 Split out of the old monolithic build stage in 0.7.0. The
 mechanics worker owns *how the game plays*: the player controller
 and game-logic scripts that interpret ``game/world/world.json``
-at runtime (the generated games load the world data — platformer
-levels, arena rounds, crate puzzles — rather than having layouts
-baked into code), plus the scripted test players shipped in
-``game/tests/``.
+at runtime (the generated games load the world data — rounds,
+levels, puzzles — rather than having layouts baked into code),
+plus the scripted test players shipped in ``game/tests/``.
+
+Since 0.11.0 there is exactly one runtime to write: the generic
+interpreter in game_templates/runtime/, which executes any game
+PLAN (plan.py) — four movements, four objectives, three fail
+rules, entity behaviours carried by the world data. The legacy
+per-preset template sets below serve only projects built before
+0.11.0 when their mechanics are re-written.
 
 Its gate is a rule-coverage check, run before assembly: every
 entity kind present in the world data must have a handler in
-this worker's rule set for the composition, or the run comes
+this worker's rule set for the runtime, or the run comes
 back with issues owned by "mechanics".
 
-Bespoke path: when the scope's core loop cannot be composed from
-the primitives (see generate.bespoke_reason), the mechanics are
-bespoke: one GDScript module written by the user's own brain
-(frontier tier first, then mid) against the documented contract
-in docs/MODULE_CONTRACT.md, stored at
+Bespoke path: when the scope's core mechanic cannot be expressed
+in the primitive vocabulary (see plan.bespoke_required), the
+mechanics are bespoke: one GDScript module written by the user's
+own brain (frontier tier first, then mid) against the documented
+contract in docs/MODULE_CONTRACT.md, stored at
 ``game/scripts/bespoke_mechanics.gd`` and hosted by the
 factory-written shell in game_templates/bespoke/. Without a
 usable brain the worker refuses plainly — it never substitutes
-an unrelated preset.
+a different game.
 """
 
 from __future__ import annotations
@@ -95,6 +101,63 @@ RULES: dict[str, dict[str, str]] = {
     },
 }
 
+# The generic runtime's rule set (0.11.0): entity kind -> the
+# handler in game_templates/runtime/ that interprets it. The
+# coverage gate checks plan-built worlds against this table.
+RUNTIME_RULES: dict[str, str] = {
+    "player": "scripts/player.gd — the runtime's controller for "
+              "the plan's movement (free top-down, gravity and "
+              "jump, or grid-stepped by scripts/game.gd)",
+    "collectible": "scripts/marker.gd (top-down) / scripts/star.gd "
+                   "(side view) pickups in group 'targets'; their "
+                   "behaviour comes from the world data",
+    "hazard": "scripts/marker.gd hazards in group 'hazards' (2D) "
+              "or the hazard areas of scripts/game3d.gd (3D), "
+              "moving per the behaviour the plan assigned",
+    "goal": "scripts/game.gd goal area in group 'goal' — touching "
+            "it completes a reach plan, or a collect plan once "
+            "everything is collected",
+    "pushable": "scripts/game.gd grid rules — a pushable moves "
+                "when the cell beyond is free",
+    "zone": "scripts/game.gd — a deliver unit is solved when "
+            "every zone holds a pushable, inside the move budget",
+    "wall": "scripts/game.gd — walls from the puzzle grids block "
+            "movement and pushes",
+    "platform": "scripts/game.gd level loader — static bodies "
+                "built from the world data's platform list",
+    "obstacle": "scripts/game3d.gd — static blocks built from the "
+                "world data, materials from the palette",
+    "ambient": "scripts/marker.gd ambient markers — decoration "
+               "that wanders; neither collectible nor hazard",
+}
+
+
+def _runtime_files(movement: str) -> dict:
+    """The generic runtime's files: {path relative to game/,
+    template parts}. One set for every plan; the 3D movement
+    swaps in its scene and controllers."""
+    files = {
+        "scripts/asset_loader.gd": ("shared", "asset_loader.gd"),
+        "tests/savecheck.gd": ("shared", "savecheck.gd"),
+        "tests/model_bridge.gd": ("shared", "model_bridge.gd"),
+        "tests/competent_win.gd": ("runtime", "competent_win.gd"),
+        "tests/competent_lose.gd": ("runtime", "competent_lose.gd"),
+        "tests/breaker.gd": ("runtime", "breaker.gd"),
+        "tests/first_time.gd": ("runtime", "first_time.gd"),
+        "smoke/smoke.gd": ("runtime", "competent_win.gd"),
+    }
+    if movement == "top_down_3d":
+        files["scripts/game.gd"] = ("runtime", "game3d.gd")
+        files["scripts/player.gd"] = ("runtime", "player3d.gd")
+        files["scenes/game.tscn"] = ("runtime", "game3d.tscn")
+    else:
+        files["scripts/game.gd"] = ("runtime", "game.gd")
+        files["scripts/player.gd"] = ("runtime", "player.gd")
+        files["scripts/marker.gd"] = ("runtime", "marker.gd")
+        files["scripts/star.gd"] = ("runtime", "star.gd")
+        files["scripts/door_draw.gd"] = ("runtime", "door_draw.gd")
+    return files
+
 
 class MechanicsError(Exception):
     """Raised when the mechanics worker cannot produce its scripts."""
@@ -116,6 +179,9 @@ def template_files(ctx: dict) -> dict:
             "scripts/game.gd": ("bespoke", "game.gd"),
         }
         return files
+    plan = ctx.get("plan")
+    if isinstance(plan, dict):
+        return _runtime_files(str(plan.get("movement") or ""))
     return generate_module._archetype_files(ctx["preset"])
 
 
@@ -152,16 +218,24 @@ def check_coverage(world_data: dict, ctx: dict) -> list[dict]:
     """The mechanics gate: every entity kind in the world data
     must have a handler in the rule set. Issues are owned by
     "mechanics"."""
-    preset = "bespoke" if ctx.get("bespoke") else ctx.get("preset")
-    rules = RULES.get(preset or "", {})
+    plan = world_data.get("plan")
+    if not isinstance(plan, dict):
+        plan = ctx.get("plan") if isinstance(ctx.get("plan"), dict) \
+            else None
+    if plan is not None and not ctx.get("bespoke"):
+        rules = RUNTIME_RULES
+        whose = "the generic runtime"
+    else:
+        preset = "bespoke" if ctx.get("bespoke") else ctx.get("preset")
+        rules = RULES.get(preset or "", {})
+        whose = f"the {preset} mechanics"
     issues = []
     for kind in world_data.get("entity_kinds", []):
         if kind not in rules:
             issues.append({
                 "kind": "unhandled_entity",
                 "detail": f"the world contains entity kind {kind!r}, "
-                          f"which the {preset} mechanics have no "
-                          "handler for",
+                          f"which {whose} have no handler for",
                 "owner": "mechanics",
             })
     return issues
@@ -247,7 +321,7 @@ def write_bespoke_module(project_dir, settings_path=None, brain_fn=None,
                 "Bespoke mechanics need a configured brain (frontier "
                 "or mid tier), and none is usable — see "
                 "'weaverbird brain status'. The factory will not "
-                "substitute an unrelated preset for this scope.")
+                "substitute a different game for this scope.")
         try:
             result = brain_module.complete(
                 project, tier,
