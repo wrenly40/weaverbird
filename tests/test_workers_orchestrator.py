@@ -364,6 +364,59 @@ class ScopeEditRederivationTests(unittest.TestCase):
             self.assertEqual(
                 data["plan"]["numbers"]["targets_per_round"], 5)
 
+    def test_context_saved_by_an_older_factory_is_rederived(self):
+        # 0.13.0 (D2-3's reach): the build-context cache was keyed
+        # on scope values only, so a plan derived by an older
+        # factory — Emberwatch's "Drift" hazard label, derived by
+        # 0.12.1 — survived a rebuild under the fixed factory
+        # untouched. A context whose factory_version is not the
+        # running version (or, like every pre-0.13.0 context, has
+        # none) is re-derived from the scope on the next run.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, COLLECTOR8)
+            skeleton.build_skeleton(project, validate=False)
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            from weaverbird import __version__ as running_version
+            self.assertEqual(saved["factory_version"], running_version)
+            derived_label = saved["plan"]["collectible_label"]
+            # Simulate an older factory's cache: same scope
+            # values, a stale derivation, no current stamp.
+            stale = dict(saved)
+            stale["factory_version"] = "0.12.1"
+            stale["plan"] = dict(saved["plan"],
+                                  collectible_label="Stale Label")
+            generate.build_context_path(project).write_text(
+                json.dumps(stale), encoding="utf-8")
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            self.assertEqual(saved["factory_version"], running_version)
+            self.assertEqual(saved["plan"]["collectible_label"],
+                             derived_label)
+
+    def test_current_context_is_reused(self):
+        # The control: same factory version + same scope values
+        # = the cache is trusted as-is (the stamp is the key,
+        # not a blanket re-derivation on every run).
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, COLLECTOR8)
+            skeleton.build_skeleton(project, validate=False)
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            tampered = dict(saved)
+            tampered["plan"] = dict(saved["plan"],
+                                     collectible_label="Kept Label")
+            generate.build_context_path(project).write_text(
+                json.dumps(tampered), encoding="utf-8")
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            self.assertEqual(saved["plan"]["collectible_label"],
+                             "Kept Label")
+
     def test_scope_hash_settles_after_an_edit(self):
         # No self-invalidation loop: the scope step never
         # writes SCOPE.md, so once it has recorded a run

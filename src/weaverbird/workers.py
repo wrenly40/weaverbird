@@ -272,15 +272,17 @@ def _build_ctx(project, ctx):
     prepare.
 
     The persisted copy is a cache keyed by the scope values it
-    was derived from: when the scope's values on disk differ
-    from the saved ones — a hand-edit to SCOPE.md is the
-    standing case — the context is re-prepared from the current
-    scope and re-saved, so a re-run of any generation worker
-    derives from the scope as it now reads, never from the
-    first parse."""
+    was derived from AND the factory version that derived it:
+    when the scope's values on disk differ from the saved ones
+    — a hand-edit to SCOPE.md is the standing case — or the
+    saved context was derived by a different Weaverbird than
+    the one now running, the context is re-prepared from the
+    current scope and re-saved, so a re-run of any generation
+    worker derives from the scope as it now reads, with the
+    derivation as it now works, never from the first parse."""
     from . import generate as generate_module
     saved = generate_module.load_build_context(project)
-    if saved is not None and saved.get("values") == scope_values(project):
+    if generate_module.build_context_current(saved, scope_values(project)):
         return saved
     fresh = generate_module.prepare_build(
         project, settings_path=ctx.settings_path,

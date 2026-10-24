@@ -1531,9 +1531,29 @@ def build_context_path(project_dir) -> Path:
 
 
 def save_build_context(project_dir, ctx: dict) -> None:
+    from . import __version__ as factory_version
     path = build_context_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ctx, indent=2) + "\n", encoding="utf-8")
+    stamped = dict(ctx)
+    stamped["factory_version"] = factory_version
+    path.write_text(json.dumps(stamped, indent=2) + "\n",
+                    encoding="utf-8")
+
+
+def build_context_current(saved, values) -> bool:
+    """Whether a saved build context may be reused as-is: it
+    must have been derived from the scope's current values AND
+    by this factory version. The version half matters as much
+    as the values half — when a release changes how a plan is
+    derived (0.13.0's hazard labels are one case), a context
+    cached by the older factory would otherwise silently keep
+    the old derivation for every project whose scope text did
+    not change. Contexts saved before the stamp existed carry
+    no version and are re-derived once."""
+    from . import __version__ as factory_version
+    return (isinstance(saved, dict)
+            and saved.get("values") == values
+            and saved.get("factory_version") == factory_version)
 
 
 def load_build_context(project_dir) -> dict | None:
