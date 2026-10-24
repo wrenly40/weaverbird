@@ -669,7 +669,7 @@ skipping sound.
 
 | Worker | Owns | Inputs (declared) | Outputs |
 | --- | --- | --- | --- |
-| scope | the scope gate: complete + approved | the scope file (completeness slice) | SCOPE.md |
+| scope | the scope gate: complete + approved | the scope file itself (content hash — any edit to SCOPE.md re-runs the gate, and the generation workers' build context is keyed to the scope values it was derived from, so a hand-edit re-derives what consumes it) | SCOPE.md |
 | skeleton | the grey-box shell | scope title/pitch/session/counts slice | game/project.godot, skeleton report |
 | world | the world's data + its gate | project.godot, scope design slice | game/world/world.json |
 | mechanics | player + game logic, rule coverage gate | world.json, scope verb slice | game/scripts/game.gd (+ the game's scripts/tests) |

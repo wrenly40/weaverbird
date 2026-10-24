@@ -70,6 +70,15 @@ CRATE = {
     COUNTS: f"{COUNTS} 1 puzzles",
 }
 
+COLLECTOR8 = {
+    TITLE: f"{TITLE} Orchard Run",
+    GENRE: f"{GENRE} top-down orchard adventure",
+    VERB: f"{VERB} gather apples while wasps patrol the orchard",
+    WIN: f"{WIN} Collect 8 apples in each round",
+    LOSE: f"{LOSE} the round timer runs out",
+    COUNTS: f"{COUNTS} 2 rounds",
+}
+
 BESPOKE = {
     GENRE: f"{GENRE} narrative duel",
     VERB: f"{VERB} negotiate dialogue with a rival debater",
@@ -304,10 +313,76 @@ class HashAndRecordTests(unittest.TestCase):
                 "neon #FF0000 and #00FF00")
             self.assertNotEqual(assets_before,
                                 workers.inputs_hash(project, assets_spec))
-            # The scope worker's slice is completeness, not wording.
+            # The scope worker declares SCOPE.md itself, hashed
+            # by content: a wording edit re-runs the gate too
+            # (before 0.12.1 its slice was completeness only, so
+            # hand-edits to filled values were silently ignored).
+            self.assertNotEqual(scope_before,
+                                workers.inputs_hash(project, scope_spec))
+            self.assertNotEqual(palette_line, "")
+            # Files no worker declares change nothing.
+            assets_before = workers.inputs_hash(project, assets_spec)
+            scope_before = workers.inputs_hash(project, scope_spec)
+            (project / "NOTES.txt").write_text("a maker note\n",
+                                               encoding="utf-8")
+            self.assertEqual(assets_before,
+                             workers.inputs_hash(project, assets_spec))
             self.assertEqual(scope_before,
                              workers.inputs_hash(project, scope_spec))
-            self.assertNotEqual(palette_line, "")
+
+
+class ScopeEditRederivationTests(unittest.TestCase):
+    """0.12.1: a hand-edit to a filled scope value is honoured
+    by incremental runs. The world worker's step is pure
+    derivation (no Godot), so these are fast; the full-chain
+    acceptance lives in FullRunTests."""
+
+    def test_world_rederives_after_a_scope_edit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, COLLECTOR8)
+            skeleton.build_skeleton(project, validate=False)
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            self.assertEqual(
+                saved["plan"]["numbers"]["targets_per_round"], 8)
+            # Hand-edit the pinned count in SCOPE.md, then run
+            # the world worker again the way an incremental
+            # orchestration would (its hash changed via the
+            # Win condition slice): the derivation must come
+            # from the scope as it now reads, not the first
+            # parse cached in the build context.
+            scope.set_field_value(project / "SCOPE.md",
+                                  "Win condition",
+                                  "Collect 5 apples in each round")
+            outcome = workers.run_worker("world", project)
+            self.assertTrue(outcome["ok"], outcome["summary"])
+            saved = generate.load_build_context(project)
+            self.assertEqual(
+                saved["plan"]["numbers"]["targets_per_round"], 5)
+            data = world.load_world(project)
+            self.assertEqual(
+                data["plan"]["numbers"]["targets_per_round"], 5)
+
+    def test_scope_hash_settles_after_an_edit(self):
+        # No self-invalidation loop: the scope step never
+        # writes SCOPE.md, so once it has recorded a run
+        # against the edited file, the hash is stable and the
+        # next incremental pass skips it.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, COLLECTOR8)
+            workers.run_worker("scope", project)
+            scope.set_field_value(project / "SCOPE.md",
+                                  "Win condition",
+                                  "Collect 5 apples in each round")
+            spec = workers.WORKERS["scope"]
+            self.assertNotEqual(
+                workers.load_record(project, "scope")["inputs_hash"],
+                workers.inputs_hash(project, spec))
+            workers.run_worker("scope", project)
+            self.assertEqual(
+                workers.load_record(project, "scope")["inputs_hash"],
+                workers.inputs_hash(project, spec))
 
 
 class PlanConstructionTests(unittest.TestCase):
@@ -489,8 +564,10 @@ class FullRunTests(unittest.TestCase):
             self.assertTrue(all(s["status"] == "skipped"
                                 for s in plan2["steps"]), plan2["steps"])
 
-            # Palette edit: only assets + assembly + testing (+ the
-            # finish check that reads their fresh reports) re-run.
+            # Palette edit: the scope gate re-runs (it declares
+            # SCOPE.md by content since 0.12.1), and only assets +
+            # assembly + testing (+ the finish check that reads
+            # their fresh reports) follow it.
             scope.set_field_value(project / "SCOPE.md", "Palette",
                                   "neon #FF0055 with #00FFCC accents")
             plan3 = orchestrator.run(project)
@@ -501,7 +578,43 @@ class FullRunTests(unittest.TestCase):
             self.assertEqual(statuses["world"], "skipped")
             self.assertEqual(statuses["mechanics"], "skipped")
             self.assertEqual(statuses["skeleton"], "skipped")
-            self.assertEqual(statuses["scope"], "skipped")
+            self.assertEqual(statuses["scope"], "done")
+
+    def test_hand_edited_scope_count_rebuilds_incrementally(self):
+        # The 0.12.1 acceptance, end to end: build a finished
+        # game, hand-edit the pinned count in SCOPE.md, run
+        # incrementally — the plan and the built game carry the
+        # new count; run again untouched — every step skips.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, COLLECTOR8)
+            plan = orchestrator.run(project)
+            self.assertEqual(plan["outcome"], "done", plan["escalation"])
+            config = json.loads(
+                (project / "game" / "game_config.json").read_text(
+                    encoding="utf-8"))
+            self.assertEqual(
+                config["plan"]["numbers"]["targets_per_round"], 8)
+            scope.set_field_value(
+                project / "SCOPE.md", "Win condition",
+                "Collect 5 apples in each round")
+            plan2 = orchestrator.run(project)
+            self.assertEqual(plan2["outcome"], "done",
+                             plan2["escalation"])
+            statuses = {s["worker"]: s["status"]
+                        for s in plan2["steps"]}
+            self.assertEqual(statuses["scope"], "done")
+            self.assertEqual(statuses["world"], "done")
+            config = json.loads(
+                (project / "game" / "game_config.json").read_text(
+                    encoding="utf-8"))
+            self.assertEqual(
+                config["plan"]["numbers"]["targets_per_round"], 5)
+            self.assertEqual(state.load_state(project)["stage"],
+                             "finished")
+            plan3 = orchestrator.run(project)
+            self.assertTrue(
+                all(s["status"] == "skipped" for s in plan3["steps"]),
+                plan3["steps"])
 
     def test_world_input_sabotage_stops_the_plan_at_world(self):
         with tempfile.TemporaryDirectory() as tmp:

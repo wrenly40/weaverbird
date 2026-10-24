@@ -124,22 +124,6 @@ def scope_values(project_dir) -> dict:
     return {f.name: f.value for f in parsed.fields}
 
 
-def _scope_completeness_slice(project_dir) -> str:
-    """The scope worker's slice: WHICH fields are filled and
-    whether the scope is approved — its gate is completeness,
-    not wording, so a palette wording edit does not un-skip it."""
-    scope_file = scope_module.scope_path_for(project_dir)
-    if not scope_file.exists():
-        return "no-scope"
-    try:
-        parsed = scope_module.load_scope(scope_file)
-    except scope_module.ScopeError:
-        return "unreadable"
-    filled = sorted(f.name for f in parsed.filled_fields)
-    return json.dumps({"filled": filled,
-                       "approved": parsed.is_approved}, sort_keys=True)
-
-
 def inputs_hash(project_dir, spec: WorkerSpec) -> str:
     """Hash of the worker's declared input files' contents plus
     its relevant config slice. Missing files hash as a marker —
@@ -285,10 +269,18 @@ def _build_ctx(project, ctx):
     assembly and retries consume exactly what the world worker
     derived — a retry differs only by its attempt number, e.g.
     the world worker's shifted platformer seed), else a fresh
-    prepare."""
+    prepare.
+
+    The persisted copy is a cache keyed by the scope values it
+    was derived from: when the scope's values on disk differ
+    from the saved ones — a hand-edit to SCOPE.md is the
+    standing case — the context is re-prepared from the current
+    scope and re-saved, so a re-run of any generation worker
+    derives from the scope as it now reads, never from the
+    first parse."""
     from . import generate as generate_module
     saved = generate_module.load_build_context(project)
-    if saved is not None:
+    if saved is not None and saved.get("values") == scope_values(project):
         return saved
     fresh = generate_module.prepare_build(
         project, settings_path=ctx.settings_path,
@@ -628,8 +620,6 @@ def _run_export(project, ctx):
 # ---------------------------------------------------------------------------
 # The registry
 
-_SCOPE_FIELDS_ALL = None  # scope uses its completeness slice
-
 WORKERS: dict[str, WorkerSpec] = {}
 
 
@@ -639,12 +629,17 @@ def _register(spec: WorkerSpec) -> None:
 
 _register(WorkerSpec(
     name="scope", title="Scope gate",
-    # Its input is the scope file, hashed through its
-    # completeness slice (which fields are filled + approval),
-    # not its raw contents — see _scope_completeness_slice.
-    inputs=(), outputs=("SCOPE.md",),
-    depends_on=(), run=_run_scope, scope_fields=None,
-    slice_fn=_scope_completeness_slice))
+    # Its input is the scope file itself, hashed by content
+    # like every declared input: ANY edit to SCOPE.md — a
+    # changed value, not just a newly filled field — re-runs
+    # the gate, and the downstream workers follow through their
+    # own declared slices (the field values each one reads) and
+    # the build context, which is keyed to the scope values it
+    # was derived from (see _build_ctx). An unchanged scope
+    # still skips: the scope step never writes SCOPE.md, so its
+    # own run cannot invalidate it.
+    inputs=("SCOPE.md",), outputs=("SCOPE.md",),
+    depends_on=(), run=_run_scope))
 _register(WorkerSpec(
     name="skeleton", title="Skeleton builder",
     inputs=(), outputs=("game/project.godot",
@@ -681,7 +676,8 @@ _register(WorkerSpec(
              "game/icon.svg"),
     depends_on=("skeleton",), run=_run_assets,
     scope_fields=("Palette",
-                  "Style sample chosen (id / link to approved sample)")))
+                  "Style sample chosen (id / link to approved sample)",
+                  "Audio mood (music + SFX character)")))
 _register(WorkerSpec(
     name="assembly", title="Assembly worker",
     inputs=("game/world/world.json", "game/scripts/game.gd",
