@@ -69,7 +69,7 @@ synthesis in the scope's mood.
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.12.0"
+__version__ = "0.12.1"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
