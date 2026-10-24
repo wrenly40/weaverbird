@@ -124,6 +124,91 @@ class TestZipappSwap(ZipappCase):
         self.assertEqual(self.target.read_bytes(), b"old-executable")
 
 
+class TestChecksums(ZipappCase):
+    """0.13.0 (F5): when the release carries SHA256SUMS, the
+    download's sha256 is verified BEFORE anything executes it.
+    The probe's attack — a tampered binary that prints the right
+    version string — must be refused by hash, with _run never
+    invoked on it."""
+
+    NEW_BYTES = b"tampered-but-prints-the-right-version"
+
+    def _info_with_sums(self, digest_for_new):
+        self.info = release("v99.0.0", {
+            "weaverbird": "https://example.invalid/weaverbird",
+            "SHA256SUMS": "https://example.invalid/SHA256SUMS"})
+        self._sums = f"{digest_for_new}  weaverbird\n"
+
+    def _download(self, url, dest):
+        if url.endswith("SHA256SUMS"):
+            Path(dest).write_text(self._sums, encoding="utf-8")
+        else:
+            Path(dest).write_bytes(self.NEW_BYTES)
+
+    def test_matching_checksum_swaps_and_then_version_checks(self):
+        import hashlib
+        self._info_with_sums(hashlib.sha256(self.NEW_BYTES).hexdigest())
+        ran = []
+
+        def run(cmd, cwd=None):
+            ran.append(cmd)
+            return 0, "weaverbird 99.0.0"
+
+        code, text = self.drive(download=self._download, run=run)
+        self.assertEqual(code, 0, text)
+        self.assertIn("Checksum verified", text)
+        self.assertEqual(self.target.read_bytes(), self.NEW_BYTES)
+        self.assertEqual(len(ran), 1)  # version run, after the hash
+
+    def test_tampered_binary_is_rejected_by_hash_and_never_run(self):
+        import hashlib
+        honest = hashlib.sha256(b"the-real-release-bytes").hexdigest()
+        self._info_with_sums(honest)  # sums name DIFFERENT bytes
+        ran = []
+
+        def run(cmd, cwd=None):
+            ran.append(cmd)
+            return 0, "weaverbird 99.0.0"  # right string, wrong file
+
+        code, text = self.drive(download=self._download, run=run)
+        self.assertEqual(code, 1)
+        self.assertIn("sha256 mismatch", text)
+        self.assertEqual(ran, [])  # never executed, not even to check
+        self.assertEqual(self.target.read_bytes(), b"old-executable")
+        self.assertFalse((self.tmp / "weaverbird.bak").exists())
+
+    def test_asset_missing_from_sums_is_refused_unrun(self):
+        import hashlib
+        self._info_with_sums(hashlib.sha256(b"x").hexdigest())
+        self._sums = f"{hashlib.sha256(b'x').hexdigest()}  other-asset\n"
+        ran = []
+
+        def run(cmd, cwd=None):
+            ran.append(cmd)
+            return 0, "weaverbird 99.0.0"
+
+        code, text = self.drive(download=self._download, run=run)
+        self.assertEqual(code, 1)
+        self.assertIn("does not list", text)
+        self.assertEqual(ran, [])
+        self.assertEqual(self.target.read_bytes(), b"old-executable")
+
+    def test_legacy_release_without_sums_says_so_plainly(self):
+        code, text = self.drive()  # ZipappCase info has no SHA256SUMS
+        self.assertEqual(code, 0, text)
+        self.assertIn("predates checksum files", text)
+        self.assertIn("TLS/GitHub chain alone", text)
+
+    def test_parse_checksums_formats(self):
+        sums = update._parse_checksums(
+            "a" * 64 + "  weaverbird\n"
+            + "b" * 64 + " *weaverbird-linux\n"
+            + "not a checksum line\n"
+            + "zz" * 32 + "  bogus-hex\n")
+        self.assertEqual(sums, {"weaverbird": "a" * 64,
+                                "weaverbird-linux": "b" * 64})
+
+
 class TestNativeAssetSelection(unittest.TestCase):
     """The fake-release-payload tests for native asset choice:
     a frozen install prefers its platform's native asset and

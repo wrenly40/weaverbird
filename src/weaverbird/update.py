@@ -6,12 +6,19 @@ its tag (leading "v" stripped) is compared with the installed
 version. What an update does depends on how Weaverbird is installed:
 
 - The standalone executable (the zipapp file): the release asset
-  named ``weaverbird`` is downloaded next to the installed file,
-  run once to prove it works and reports the new version, and only
-  then swapped in atomically. The previous version is kept as
-  ``weaverbird.bak``. A download that fails verification changes
-  nothing. A release with no ``weaverbird`` asset is reported
-  plainly — it exists, but carries no executable yet.
+  named ``weaverbird`` is downloaded next to the installed file
+  and — when the release carries a ``SHA256SUMS`` asset — its
+  sha256 is verified against that file BEFORE the download is
+  executed for anything (0.13.0, finding F5: the version-string
+  run used to be the only check, so a hostile asset executed
+  during "verification" itself). A checksum mismatch aborts with
+  the old binary untouched. Only then is it run once to prove it
+  works and reports the new version, and swapped in atomically.
+  The previous version is kept as ``weaverbird.bak``. A release
+  old enough to have no ``SHA256SUMS`` falls back to the version
+  check alone, and says plainly that its integrity rests on the
+  TLS/GitHub chain. A release with no ``weaverbird`` asset is
+  reported plainly — it exists, but carries no executable yet.
 - A native install (a PyInstaller binary, ``sys.frozen``): the
   platform-matching native asset is preferred —
   ``weaverbird-linux``, ``weaverbird-windows.exe`` or
@@ -19,7 +26,8 @@ version. What an update does depends on how Weaverbird is installed:
   bundle is swapped, kept as ``.app.bak``) — falling back to the
   zipapp asset when the release carries no native build for this
   platform. The swap semantics are the zipapp's: verify first
-  (the download must run and report the new version), keep a
+  (checksum against the release's SHA256SUMS when offered, then
+  the download must run and report the new version), keep a
   backup, change nothing on failure.
 - A source checkout (a .git directory above the package): refused
   while the working tree is dirty; otherwise ``git pull --ff-only``
@@ -35,6 +43,7 @@ real executable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -50,6 +59,7 @@ from . import __version__
 GITHUB_REPO = "wrenly40/weaverbird"
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ASSET_NAME = "weaverbird"
+CHECKSUMS_ASSET = "SHA256SUMS"
 # The native release assets, by platform family (see
 # docs/RELEASING.md). The macOS asset is a zip holding the .app
 # bundle; the others are the bare binary.
@@ -142,6 +152,88 @@ def update_available(info: dict, current: str = None) -> bool:
         current or __version__)
 
 
+# ---------------------------------------------------------------------------
+# Download integrity (F5)
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 256), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _parse_checksums(text: str) -> dict:
+    """A SHA256SUMS file's {asset name: hex digest}. Lines are
+    the sha256sum format: '<hex>  <name>' (or '<hex> *<name>')."""
+    sums = {}
+    for line in str(text or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        hex_digest, name = parts
+        name = name.strip().lstrip("*").strip()
+        if len(hex_digest) == 64 and name:
+            try:
+                int(hex_digest, 16)
+            except ValueError:
+                continue
+            sums[Path(name).name] = hex_digest.lower()
+    return sums
+
+
+def _verify_integrity(path: Path, info: dict, asset_name: str,
+                      scratch_dir: Path) -> bool:
+    """Check a downloaded asset against the release's SHA256SUMS
+    BEFORE anything executes it. Prints what it did; returns True
+    only when the update may proceed:
+
+    - the release carries SHA256SUMS and the digest matches →
+      proceed (the version run may still follow);
+    - digest mismatch, an unreadable SHA256SUMS, or no entry for
+      this asset → False: abort, nothing was executed;
+    - the release predates SHA256SUMS → proceed on the legacy
+      version check alone, saying plainly that integrity rests
+      on the TLS/GitHub chain.
+    """
+    sums_url = (info.get("assets") or {}).get(CHECKSUMS_ASSET)
+    if not sums_url:
+        print(f"Note: the {info.get('tag', 'release')} release "
+              "predates checksum files (it carries no SHA256SUMS "
+              "asset), so this update's integrity rests on the "
+              "TLS/GitHub chain alone — the version check is the "
+              "only verification.")
+        return True
+    sums_path = Path(scratch_dir) / (CHECKSUMS_ASSET + ".download")
+    try:
+        _download(sums_url, sums_path)
+        sums = _parse_checksums(
+            sums_path.read_text(encoding="utf-8", errors="replace"))
+    except (UpdateError, OSError):
+        print("Update stopped: the release's SHA256SUMS file could "
+              "not be read, so the download cannot be verified. "
+              "Nothing was changed and the download was not run.")
+        return False
+    finally:
+        sums_path.unlink(missing_ok=True)
+    expected = sums.get(asset_name)
+    if expected is None:
+        print(f"Update stopped: the release's SHA256SUMS does not "
+              f"list {asset_name}, so the download cannot be "
+              "verified. Nothing was changed and the download "
+              "was not run.")
+        return False
+    if _sha256_of(path) != expected:
+        print(f"Update stopped: the downloaded {asset_name} does "
+              "not match its SHA256SUMS entry (sha256 mismatch). "
+              "It was not run, and the installed Weaverbird is "
+              "untouched.")
+        return False
+    print(f"Checksum verified: {asset_name} matches the release's "
+          "SHA256SUMS.")
+    return True
+
+
 def native_asset_name(platform: str = None) -> str | None:
     """The native release asset for a platform (sys.platform
     spelling), or None for a platform with no native build."""
@@ -207,10 +299,12 @@ def detect_install(argv0=None, package_file=None, frozen=None,
 # The update behaviours
 
 def _swap_executable(target: Path, info: dict, selected) -> int:
-    """Download one executable asset, verify it reports the new
-    version, then swap it in, keeping the old file as ``.bak``.
-    Shared by the zipapp and native (single-file) update paths."""
-    _name, url = selected
+    """Download one executable asset, verify it (checksum first,
+    when the release offers one — the download is never executed
+    before its integrity passes), then swap it in, keeping the
+    old file as ``.bak``. Shared by the zipapp and native
+    (single-file) update paths."""
+    name, url = selected
     handle, tmp_name = tempfile.mkstemp(dir=str(target.parent),
                                         prefix=target.name + ".new-")
     os.close(handle)
@@ -220,6 +314,9 @@ def _swap_executable(target: Path, info: dict, selected) -> int:
     except UpdateError as exc:
         tmp.unlink(missing_ok=True)
         print(f"Update stopped: {exc} The installed Weaverbird is untouched.")
+        return 1
+    if not _verify_integrity(tmp, info, name, target.parent):
+        tmp.unlink(missing_ok=True)
         return 1
     tmp.chmod(0o755)
     code, out = _run([str(tmp), "--version"])
@@ -268,7 +365,7 @@ def _swap_macos_bundle(target: Path, info: dict, selected) -> int:
     new one put in its place."""
     import zipfile
 
-    _name, url = selected
+    name, url = selected
     app_dir = None
     for parent in (target, *target.parents):
         if parent.suffix == ".app":
@@ -288,6 +385,8 @@ def _swap_macos_bundle(target: Path, info: dict, selected) -> int:
         except UpdateError as exc:
             print(f"Update stopped: {exc} The installed Weaverbird "
                   "is untouched.")
+            return 1
+        if not _verify_integrity(archive, info, name, stage):
             return 1
         try:
             with zipfile.ZipFile(archive) as bundle:

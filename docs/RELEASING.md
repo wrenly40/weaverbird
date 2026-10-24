@@ -1,13 +1,18 @@
 # Releasing Weaverbird
 
-A release carries four assets: the single-file zipapp
-(`weaverbird`, built locally) and one native binary per platform
+A release carries five assets: the single-file zipapp
+(`weaverbird`, built locally), one native binary per platform
 (`weaverbird-linux`, `weaverbird-windows.exe`,
-`weaverbird-macos.zip`), built by the manual GitHub workflow.
-Installed copies update themselves from these assets
-(`weaverbird update`): a native install takes its platform's
-native asset first and falls back to the zipapp; a zipapp
-install takes the zipapp.
+`weaverbird-macos.zip`), built by the manual GitHub workflow —
+and `SHA256SUMS`, the sha256 of each of the other four, in
+sha256sum format. Installed copies update themselves from these
+assets (`weaverbird update`): a native install takes its
+platform's native asset first and falls back to the zipapp; a
+zipapp install takes the zipapp. Since 0.13.0 the updater
+verifies the downloaded asset against `SHA256SUMS` BEFORE
+executing it for anything (older releases without the file fall
+back to the version check, and the updater says plainly that
+their integrity rests on the TLS/GitHub chain alone).
 
 ## How a release is cut
 
@@ -28,7 +33,21 @@ install takes the zipapp.
    `weaverbird-linux`, `weaverbird-windows.exe`,
    `weaverbird-macos.zip` (a zip holding `Weaverbird.app`) — and
    attach them to the release.
-5. Sanity-check the published release the way a user would:
+5. With all four executables attached, generate the checksums
+   over the EXACT files just attached and attach the result as
+   the fifth asset:
+
+   ```sh
+   sha256sum weaverbird weaverbird-linux weaverbird-windows.exe \
+       weaverbird-macos.zip > SHA256SUMS
+   gh release upload vX.Y.Z SHA256SUMS
+   ```
+
+   Updaters refuse a download whose sha256 is not the listed one
+   and never execute an unverified download — a release without
+   `SHA256SUMS` still updates, but every updating user sees the
+   "predates checksum files" caveat.
+6. Sanity-check the published release the way a user would:
    on any machine, run the previous version's `weaverbird update`
    and confirm it lands on the new one.
 
