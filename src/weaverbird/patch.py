@@ -36,6 +36,7 @@ from pathlib import Path
 
 from . import assets_gen as assets_module
 from . import brain as brain_module
+from . import plan as plan_module
 from . import feedback as feedback_module
 from . import generate as generate_module
 from . import godot as godot_module
@@ -148,7 +149,13 @@ def save_config(project_dir, config: dict) -> None:
 
 
 def patch_bounds(archetype: str) -> dict:
-    bounds = dict(generate_module.BOUNDS.get(archetype, {}))
+    """Tunable bounds for a game. The key is a legacy build name
+    for old projects, or the plan's movement for genre-agnostic
+    builds — both resolve to the same shape."""
+    if archetype in plan_module.PLAN_BOUNDS:
+        bounds = dict(plan_module.PLAN_BOUNDS[archetype])
+    else:
+        bounds = dict(generate_module.BOUNDS.get(archetype, {}))
     bounds.update(EXTRA_BOUNDS)
     return bounds
 
@@ -209,6 +216,71 @@ _EASE_WORDS = ("too hard", "difficult", "impossible", "frustrating",
 _HARDEN_WORDS = ("too easy", "boring", "trivial", "no challenge")
 
 
+def _plan_balance(movement: str, config: dict, lowered: str,
+                  ease: bool, harden: bool) -> tuple[dict, list[str], str]:
+    """The nudge table for genre-agnostic builds, keyed by the
+    plan's movement. The tunables are the plan-derived config
+    numbers: speeds, round seconds, lives, jump/gravity, and the
+    grid move-budget multiplier."""
+    if "too slow" in lowered or "sluggish" in lowered:
+        if movement == "grid_step":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "move_budget_multiplier": float(
+                    config.get("move_budget_multiplier", 2.5)) * 1.15})
+            return new, lines, "gave more moves per puzzle (feedback: too slow)"
+        new, lines = _apply_numeric_changes(config, movement, {
+            "player_speed": float(config.get("player_speed", 300)) * 1.15})
+        return new, lines, "made the player faster (feedback: too slow)"
+    if "too fast" in lowered:
+        if movement == "grid_step":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "move_budget_multiplier": float(
+                    config.get("move_budget_multiplier", 2.5)) * 1.15})
+            return new, lines, "gave more moves per puzzle (feedback: too fast)"
+        if "hazard_speed" in config:
+            new, lines = _apply_numeric_changes(config, movement, {
+                "hazard_speed": float(config.get("hazard_speed", 1.4)) * 0.85})
+            return new, lines, "slowed the hazards (feedback: too fast)"
+        new, lines = _apply_numeric_changes(config, movement, {
+            "gravity": float(config.get("gravity", 1400)) * 0.95})
+        return new, lines, "softened gravity (feedback: too fast)"
+    if ease and not harden:
+        if movement == "grid_step":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "move_budget_multiplier": float(
+                    config.get("move_budget_multiplier", 2.5)) * 1.2})
+            return new, lines, "eased the game — more moves per puzzle (feedback: too hard)"
+        if movement == "side_view":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "gravity": float(config.get("gravity", 1400)) * 0.95,
+                "jump_strength": float(config.get("jump_strength", 545)) * 1.05,
+                "lives": int(config.get("lives", 3)) + 1})
+            return new, lines, "eased the game (feedback: too hard)"
+        proposals = {"round_seconds": float(config.get("round_seconds", 60)) * 1.15}
+        if "hazard_speed" in config:
+            proposals["hazard_speed"] = float(config.get("hazard_speed", 1.4)) * 0.85
+        new, lines = _apply_numeric_changes(config, movement, proposals)
+        return new, lines, "eased the game (feedback: too hard)"
+    if harden and not ease:
+        if movement == "grid_step":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "move_budget_multiplier": float(
+                    config.get("move_budget_multiplier", 2.5)) * 0.85})
+            return new, lines, "toughened the game — fewer moves per puzzle (feedback: too easy)"
+        if movement == "side_view":
+            new, lines = _apply_numeric_changes(config, movement, {
+                "gravity": float(config.get("gravity", 1400)) * 1.05,
+                "jump_strength": float(config.get("jump_strength", 545)) * 0.97,
+                "lives": int(config.get("lives", 3)) - 1})
+            return new, lines, "toughened the game (feedback: too easy)"
+        proposals = {"round_seconds": float(config.get("round_seconds", 60)) * 0.9}
+        if "hazard_speed" in config:
+            proposals["hazard_speed"] = float(config.get("hazard_speed", 1.4)) * 1.15
+        new, lines = _apply_numeric_changes(config, movement, proposals)
+        return new, lines, "toughened the game (feedback: too easy)"
+    return config, [], "no deterministic nudge matched the feedback wording"
+
+
 def deterministic_balance(archetype: str, config: dict,
                           text: str) -> tuple[dict, list[str], str]:
     """The nudge table: plain phrases → bounded numeric changes.
@@ -216,6 +288,8 @@ def deterministic_balance(archetype: str, config: dict,
     lowered = text.lower()
     ease = any(word in lowered for word in _EASE_WORDS)
     harden = any(word in lowered for word in _HARDEN_WORDS)
+    if archetype in plan_module.PLAN_BOUNDS:
+        return _plan_balance(archetype, config, lowered, ease, harden)
     if "too slow" in lowered or "sluggish" in lowered:
         if archetype in ("arena_collector", "arena_3d", "platformer"):
             new, lines = _apply_numeric_changes(
@@ -288,10 +362,12 @@ def brain_balance(project, archetype: str, config: dict, item: dict,
         return config, [], f"no usable mid-tier model ({reason})"
     bounds = {k: v for k, v in patch_bounds(archetype).items() if k in config}
     if not bounds:
-        return config, [], "no tunable numeric fields for this archetype"
+        return config, [], "no tunable numeric fields for this game"
+    kind_line = ("Movement: " + archetype if archetype in plan_module.PLAN_BOUNDS
+                 else "Archetype: " + archetype)
     prompt = (
         "Feedback: " + item.get("text", "") + "\n"
-        "Archetype: " + archetype + "\n"
+        + kind_line + "\n"
         "Current values and allowed ranges:\n"
         + json.dumps({k: {"current": config[k], "min": v[0], "max": v[1]}
                       for k, v in bounds.items()})
@@ -633,13 +709,19 @@ def start_patch(project_dir, item_id: str, settings_path=None,
         return {"outcome": "planned", "item": item_id,
                 "plan": str(path), "reason": reason}
     config = load_config(project)
-    archetype = config.get("archetype", "")
-    if archetype not in generate_module.PRESET_NAMES:
-        gen_report = generate_module.load_report(project)
-        archetype = (gen_report or {}).get("archetype", archetype)
-    if archetype not in generate_module.PRESET_NAMES:
-        raise PatchError("The game's archetype is unknown, so no safe "
-                         "patch can be computed.")
+    plan = config.get("plan")
+    if isinstance(plan, dict) and plan.get("movement"):
+        # Genre-agnostic build: the tunables key off the plan's
+        # movement, and the patch loop works exactly as before.
+        archetype = str(plan["movement"])
+    else:
+        archetype = config.get("archetype", "")
+        if archetype not in generate_module.PRESET_NAMES:
+            gen_report = generate_module.load_report(project)
+            archetype = (gen_report or {}).get("archetype", archetype)
+        if archetype not in generate_module.PRESET_NAMES:
+            raise PatchError("The game's build is unknown, so no safe "
+                             "patch can be computed.")
     if reporter is not None:
         reporter(f"Planning a patch for [{item_id}] ({category})",
                  done=0, total=4)

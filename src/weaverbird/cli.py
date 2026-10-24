@@ -658,8 +658,13 @@ def cmd_assets_generate(args) -> int:
         report = assets_module.generate_assets(args.dir)
     except assets_module.AssetsError as exc:
         return _fail(str(exc))
-    print(f"Generated {len(report['files'])} asset files for the "
-          f"{report['archetype']} game (palette "
+    if report.get("plan"):
+        kind = (f"the {report['plan'].get('movement', '')} / "
+                f"{report['plan'].get('objective', '')} game")
+    else:
+        kind = f"the {report.get('archetype', '')} game"
+    print(f"Generated {len(report['files'])} asset files for "
+          f"{kind} (palette "
           f"{report['palette']['accent_hex']} / "
           f"{report['palette']['target_hex']} from the style lock):")
     for rel in report["files"]:
@@ -703,11 +708,23 @@ def cmd_assets_regenerate(args) -> int:
 def cmd_build_game(args) -> int:
     try:
         report = generate_module.build_game(
-            args.dir, archetype=args.archetype, settings_path=args.settings)
+            args.dir, settings_path=args.settings)
     except generate_module.GenerationError as exc:
         return _fail(str(exc))
-    print(f"Generated the real game: archetype {report['archetype']} "
-          f"({report['archetype_reason']}).")
+    if report.get("bespoke_required"):
+        bespoke = report["bespoke_required"]
+        print(f"No game was built: the plan marks this scope "
+              f"bespoke — {bespoke.get('mechanic', '')} "
+              f"({bespoke.get('because', '')}).")
+        return 0
+    if report.get("plan"):
+        plan = report["plan"]
+        print(f"Generated the real game: plan "
+              f"{plan.get('movement', '')} / {plan.get('objective', '')} "
+              f"from the scope.")
+    else:
+        print(f"Generated the real game: archetype {report['archetype']} "
+              f"({report['archetype_reason']}).")
     print(f"Content: {report['units_delivered']} units delivered "
           f"(scope asked for {report['units_requested']}).")
     print(f"Brain: {'used — ' if report['brain_used'] else 'not used — '}"
@@ -1364,13 +1381,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_sub = build_cmd.add_subparsers(dest="build_command")
     bgame = build_sub.add_parser(
-        "game", help="Pick the archetype from the scope, generate the "
-                     "game, validate it in Godot, tag it known-good."
+        "game", help="Derive the game plan from the scope, generate "
+                     "the game, validate it in Godot, tag it known-good."
     )
     bgame.add_argument("dir")
-    bgame.add_argument("--archetype", default=None,
-                       choices=list(generate_module.ARCHETYPES),
-                       help="Override archetype detection.")
     bgame.add_argument("--settings", default=None,
                        help="Global settings file for the optional "
                             "mid-tier tuning proposal.")

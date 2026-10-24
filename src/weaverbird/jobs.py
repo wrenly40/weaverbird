@@ -454,9 +454,8 @@ def _run_generate_assets(ctx: JobContext) -> str:
     from . import assets_gen as assets_module
     report = assets_module.generate_assets(
         ctx.project_dir, reporter=ctx.reporter)
-    return (f"Assets generated: {len(report['files'])} files for the "
-            f"{report['archetype']} game, every one recorded in the "
-            "provenance log. Cost: 0 tokens.")
+    return (f"Assets generated: {len(report['files'])} files, every "
+            "one recorded in the provenance log. Cost: 0 tokens.")
 
 
 def _run_build_game(ctx: JobContext) -> str:
@@ -464,7 +463,12 @@ def _run_build_game(ctx: JobContext) -> str:
     report = generate_module.build_game(
         ctx.project_dir, settings_path=ctx.settings_path,
         reporter=ctx.reporter)
-    return (f"Game built: archetype {report['archetype']}, "
+    if report.get("plan"):
+        kind = (f"plan {report['plan'].get('movement', '')} / "
+                f"{report['plan'].get('objective', '')}")
+    else:
+        kind = f"archetype {report.get('archetype', '')}"
+    return (f"Game built: {kind}, "
             f"{report['units_delivered']} content units, Godot "
             "validation passed, tagged known-good/build.")
 

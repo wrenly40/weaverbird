@@ -152,7 +152,7 @@ like "A."), and recaps never double sentence punctuation.
   state, ledger (its model calls are logged).
 
 ### 2. Design and skeleton
-- Inputs: the approved scope file, the archetype templates.
+- Inputs: the approved scope file, the scope templates.
 - Outputs: a grey-box Godot project — the full loop playable with
   placeholder shapes, menus, save, settings, pause and input wired.
 - Built in v0.1: the pipeline stage and its place in the order,
@@ -161,7 +161,7 @@ like "A."), and recaps never double sentence punctuation.
 - Built in v0.2: the skeleton builder itself (`skeleton.py`, with
   the templates packaged in `skeleton_templates/`). It refuses an
   incomplete or unapproved scope, renders one generic grey-box
-  archetype (arena, collect-the-targets, hazards, a round timer)
+  game (arena, collect-the-targets, hazards, a round timer)
   with the scope's title, pitch, target count, round length and
   style colours filled in, records every generated file in the
   provenance log, adds a zero-cost ledger entry, and validates the
@@ -173,8 +173,7 @@ like "A."), and recaps never double sentence punctuation.
   stage handler (`register_stage_handlers()` in `skeleton.py`), so
   advancing out of the scope stage runs it through the gates, and
   `weaverbird skeleton build <dir>` runs it directly.
-- Future: more archetypes (the builder takes the archetype from the
-  scope), and design work beyond the grey-box loop. It plugs into:
+- Future: design work beyond the grey-box loop. It plugs into:
   pipeline state (registered as a stage handler), the stage
   registry in `state.py`, git commits per iteration.
 
@@ -203,16 +202,16 @@ like "A."), and recaps never double sentence punctuation.
   zero-token. Games load the assets when present and fall back to
   code-drawn shapes when they are not.
 - Built in v0.7: asset generation is a worker, and what it
-  generates is selected by the game's composition and world
-  manifest, not by an archetype name — the entity kinds present
+  generates is selected by the game's plan and world
+  manifest, not by a game name — the entity kinds present
   in `game/world/world.json` decide the sprites, the movement
-  and fail kinds decide the sounds. Preset games keep the
+  and fail rules decide the sounds. Games keep the
   factory's shared asset set (their templates load it
   opportunistically, as before); bespoke games get exactly
   their derived requests. The assets report records the
-  requests and what they were based on (world or composition).
+  requests and what they were based on (world or plan).
 - Future: model-provided art through connectors with the user's own
-  keys, richer palettes per archetype, 3D assets. It plugs into:
+  keys, richer palettes, 3D assets. It plugs into:
   provenance, connectors (asset providers), ledger.
 
 ### 4. Build loop
@@ -273,17 +272,36 @@ like "A."), and recaps never double sentence punctuation.
   positions for the testers, win/lose signalled through the
   shell host), assembled and tested like any other mechanics;
   without a brain the orchestrator stops at the plan with a
-  plain explanation. The bespoke matcher is conservative —
-  bespoke needs positive evidence (a negotiation/dialogue/
-  detective-style core loop) and no primitive signal at all — so
-  ordinary scopes keep composing. `weaverbird build game`
+  plain explanation. `weaverbird build game`
   remains, running the three workers in order.
+- Built in v0.11: generation is **genre-agnostic** — the
+  composition/preset layer is gone from new builds. The world
+  worker derives a **game plan** from the scope's own fields
+  (`plan.py`): entities (kinds, counts, behaviours), movement,
+  objective rule, fail rule and numbers, each with a derivation
+  note quoting the scope, recorded in `game_config.json` and
+  `world.json`. One generic runtime executes any plan from a
+  small primitive vocabulary — movements `top_down_2d`,
+  `side_view`, `grid_step`, `top_down_3d`; objectives
+  `collect`, `reach`, `survive`, `deliver`; fail rules
+  `timer`, `hazard_contacts`, `fall`; behaviours static,
+  wander, patrol, chase, flee, pushable, ambient. The scripted
+  players drive the runtime through the state it exposes, so
+  win and lose stay provable per plan, and the HUD speaks the
+  maker's own nouns (the plan's collectible label). A scope
+  whose core mechanic the vocabulary cannot express carries
+  `bespoke_required` in its plan, naming the mechanic and the
+  scope words behind it; the bespoke path above takes it from
+  there, and without a brain generation stops at the plan.
+  Projects built by older versions are untouched: their game
+  files, test stage, patch loop and exports run as before
+  (the legacy generation code remains for exactly that).
 - Built in v0.8: the composition gains a **dimension** —
   `2d` (the default; every existing behaviour unchanged) or
   `3d`. The scope's Dimension field decides, with a "3D"
   mention in the genre/title/pitch text as the fallback signal.
-  One 3D preset exists today: **arena_3d**, the arena
-  composition lifted onto a 3D ground plane — top-down-follow
+  The 3D form is a top-down game on a 3D ground plane —
+  top-down-follow
   camera, a `CharacterBody3D` player, spinning `Area3D`
   collectible orbs, hazards patrolling waypoint paths, and
   `StaticBody3D` obstacle blocks, all built from primitive
@@ -455,7 +473,7 @@ like "A."), and recaps never double sentence punctuation.
   evidence. The finish report's "What was built" section now
   describes the generated game, its assets and its test verdict,
   and the app's project view shows the same in the browser: the
-  archetype and delivery lines, Generate assets / Build game /
+  plan and delivery lines, Generate assets / Build game /
   Run tests buttons under the CLI's rules, and a test summary
   card.
 - Future: the approval view itself (captured playthrough, drafts,

@@ -226,12 +226,17 @@ def analyse(units: list[dict]) -> list[dict]:
 # Suggestions — only the patch loop's bounded knobs
 
 def _archetype_for(project: Path, config: dict) -> str:
+    """The tuning key for a project: the plan's movement for
+    genre-agnostic builds, the legacy build name for old ones."""
+    plan = config.get("plan")
+    if isinstance(plan, dict) and plan.get("movement"):
+        return str(plan["movement"])
     archetype = config.get("archetype", "")
     if archetype not in generate_module.PRESET_NAMES:
         report = generate_module.load_report(project)
         archetype = (report or {}).get("archetype", archetype)
     if archetype not in generate_module.PRESET_NAMES:
-        raise BalanceError("The game's archetype is unknown, so no "
+        raise BalanceError("The game's build is unknown, so no "
                            "safe suggestion can be computed.")
     return archetype
 

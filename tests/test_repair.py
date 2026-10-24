@@ -24,11 +24,19 @@ GODOT_PRESENT = godot_module.find_godot()[0] is not None
 COUNTS = ("- REQUIRED Content counts (levels / waves / rooms / items, "
           "as applicable): Filled in for the test")
 GENRE = "- REQUIRED Genre / archetype: Filled in for the test"
+VERB = ("- REQUIRED Core verb (what the player does most): "
+        "Filled in for the test")
+WIN = "- REQUIRED Win condition: Filled in for the test"
+LOSE = "- REQUIRED Lose / fail condition: Filled in for the test"
 
 
-def scoped_project(tmp, genre="puzzle", counts="2 puzzles"):
+def scoped_project(tmp, genre="puzzle", counts="2 puzzles",
+                   verb=None, win=None, lose=None):
     text = filled_scope_text().replace(COUNTS, COUNTS.split(":")[0] + f": {counts}")
     text = text.replace(GENRE, GENRE.split(":")[0] + f": {genre}")
+    for prefix, line in ((VERB, verb), (WIN, win), (LOSE, lose)):
+        if line is not None:
+            text = text.replace(prefix, prefix.split(":")[0] + f": {line}")
     project = Path(tmp)
     (project / "SCOPE.md").write_text(text, encoding="utf-8")
     state.init_state(project)
@@ -180,7 +188,13 @@ class SabotageEndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmp = tempfile.TemporaryDirectory()
-        cls.project = scoped_project(cls._tmp.name)
+        # A scope whose words derive the grid deliver plan — the
+        # move-budget sabotage below only bites there.
+        cls.project = scoped_project(
+            cls._tmp.name,
+            verb="push crates onto the dock pads",
+            win="push every crate onto a pad",
+            lose="run out of moves")
         skeleton.build_skeleton(cls.project)
         assets_gen.generate_assets(cls.project)
         generate.build_game(cls.project, use_brain=False)
@@ -193,8 +207,10 @@ class SabotageEndToEndTests(unittest.TestCase):
     def test_sabotage_then_repair(self):
         self.assertTrue(self.baseline["ok"], self.baseline["warnings"])
         config = patch_module.load_config(self.project)
-        for puzzle in config["puzzles"]:
-            puzzle["budget"] = max(1, len(puzzle["solution"]) - 5)
+        # The runtime derives each puzzle's move budget from this
+        # multiplier (budget = solution length x multiplier);
+        # 0.85 puts every budget below its solution length.
+        config["move_budget_multiplier"] = 0.85
         patch_module.save_config(self.project, config)
         vcs.commit_all(self.project, "sabotage: budgets below solution")
 
@@ -202,12 +218,16 @@ class SabotageEndToEndTests(unittest.TestCase):
         self.assertFalse(broken["ok"])
         self.assertFalse(broken["win_proven"])
 
-        result = repair.run_repair(self.project, max_attempts=3)
+        result = repair.run_repair(self.project, max_attempts=5)
         self.assertEqual(result["outcome"], "repaired", result["note"])
         healed = patch_module.load_config(self.project)
-        for puzzle in healed["puzzles"]:
-            self.assertGreaterEqual(puzzle["budget"],
-                                    len(puzzle["solution"]) + 5)
+        multiplier = healed["move_budget_multiplier"]
+        world = json.loads(
+            (self.project / "game" / "world" / "world.json").read_text(
+                encoding="utf-8"))
+        for unit in world["units"]:
+            budget = max(1, int(len(unit["solution"]) * multiplier))
+            self.assertGreaterEqual(budget, len(unit["solution"]))
         final = testing.load_report(self.project)
         self.assertTrue(final["ok"])
         self.assertIn("known-good/repair", vcs.list_tags(self.project))

@@ -36,6 +36,7 @@ from . import assets_gen as assets_module
 from . import brain as brain_module
 from . import generate as generate_module
 from . import patch as patch_module
+from . import plan as plan_module
 from . import testing as testing_module
 from . import vcs as vcs_module
 
@@ -156,6 +157,32 @@ def _ease_config(project, config: dict, archetype: str) -> str:
 
 
 def _harden_config(project, config: dict, archetype: str) -> str:
+    if archetype in plan_module.PLAN_BOUNDS:
+        # Genre-agnostic build: archetype carries the plan's
+        # movement; harden through the same named tunables.
+        if archetype in ("top_down_2d", "top_down_3d"):
+            new_config, lines = patch_module._apply_numeric_changes(
+                config, archetype, {
+                    "hazard_speed": float(config.get("hazard_speed", 1.4)) * 1.2,
+                    "round_seconds": float(config.get("round_seconds", 60)) * 0.85})
+            note = "hardened the game so a loss is reachable"
+        elif archetype == "side_view":
+            new_config, lines = patch_module._apply_numeric_changes(
+                config, archetype, {
+                    "gravity": float(config.get("gravity", 1400)) * 1.05,
+                    "jump_strength": float(config.get("jump_strength", 545)) * 0.97,
+                    "lives": 1})
+            note = "hardened the game so a loss is reachable"
+        else:
+            new_config, lines = patch_module._apply_numeric_changes(
+                config, archetype, {
+                    "move_budget_multiplier": float(
+                        config.get("move_budget_multiplier", 2.5)) * 0.8})
+            note = "tightened move budgets so a loss is reachable"
+        if not lines:
+            raise RepairError("config is already at its hardest bounds")
+        patch_module.save_config(project, new_config)
+        return note + ": " + "; ".join(lines)
     if archetype in ("arena_collector", "arena_3d"):
         new_config, lines = patch_module._apply_numeric_changes(
             config, archetype, {
@@ -182,7 +209,23 @@ def _harden_config(project, config: dict, archetype: str) -> str:
 
 def _reduce_load(project, config: dict, archetype: str) -> str:
     proposals: dict = {}
-    if archetype in ("arena_collector", "arena_3d"):
+    if archetype in ("top_down_2d", "top_down_3d"):
+        current = int(config.get("targets_per_round", 5))
+        floor = patch_module.patch_bounds(archetype)["targets_per_round"][0]
+        if current <= floor:
+            raise RepairError(
+                "load is already at its floor — cannot repair performance "
+                "by config alone")
+        proposals["targets_per_round"] = max(floor, int(current * 0.8))
+    elif archetype == "side_view":
+        raise RepairError(
+            "side-view load is level geometry, not a config number — "
+            "cannot repair performance by config alone")
+    elif archetype == "grid_step":
+        raise RepairError(
+            "grid puzzles have no load knob — cannot repair performance "
+            "by config alone")
+    elif archetype in ("arena_collector", "arena_3d"):
         current = int(config.get("targets_per_round", 5))
         floor = patch_module.patch_bounds(archetype)["targets_per_round"][0]
         if current <= floor:
@@ -224,7 +267,7 @@ def _regenerate_game(project, _config, _archetype, settings_path=None) -> str:
             "error in a generated script) — escalating instead of "
             "blind-editing")
     generate_module.build_game(project, settings_path=settings_path)
-    return "regenerated the game from its archetype templates"
+    return "regenerated the game from its scope"
 
 
 _STRATEGY_FUNCS = {
@@ -369,7 +412,11 @@ def run_repair(project_dir, settings_path=None, godot_path=None,
         archetype = ""
         try:
             config = patch_module.load_config(project)
-            archetype = config.get("archetype", "")
+            game_plan = config.get("plan")
+            if isinstance(game_plan, dict) and game_plan.get("movement"):
+                archetype = str(game_plan["movement"])
+            else:
+                archetype = config.get("archetype", "")
         except patch_module.PatchError:
             archetype = (generate_module.load_report(project) or {}).get(
                 "archetype", "")

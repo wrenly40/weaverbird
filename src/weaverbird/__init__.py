@@ -40,12 +40,26 @@ preset, the flat-ground arena_3d, with materials instead of
 sprites), and native installers (PyInstaller binaries per
 platform, built by build-native.sh and the manual workflow;
 `update` prefers the platform's native asset when frozen).
+Since 0.11.0: generation is genre-agnostic. No scope is matched
+into a named game any more: the world worker derives a game
+plan from the scope's own words (plan.py — movement, objective,
+fail rules, entities with behaviours, numbers, each with a
+derivation note quoting the scope), and one generic runtime
+executes any plan from a small primitive vocabulary (movements
+top_down_2d / side_view / grid_step / top_down_3d; objectives
+collect / reach / survive / deliver; fail rules timer /
+hazard_contacts / fall). A scope whose core mechanic the
+vocabulary cannot express is marked bespoke_required in the
+plan: with a brain, the bespoke-module path takes it; without
+one, generation stops at the plan and says so plainly. Projects
+built by older versions keep working untouched — their files,
+test stage, patch loop and exports are unchanged.
 """
 
 from importlib import resources
 from pathlib import Path
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 

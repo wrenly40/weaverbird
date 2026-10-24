@@ -441,37 +441,71 @@ changed. Every step can also be run on its own.</p>
 
 
 def _build_summary_card(server, project: dict) -> str:
-    """The Build summary card (0.10.0): what WILL be built,
-    derived from the scope before any run — the composition, the
-    key numbers with their source ("from your scope" vs
-    "default"), the style lock and the planned asset kinds. This
-    is where a scope-stated number shows up pre-build, so an F7
-    surprise surfaces before generation, not after."""
+    """The Build summary card: what WILL be built, derived from
+    the scope before any run — the game plan (movement,
+    objective, fail rules, entities with their behaviours and
+    the derivation notes that quote the scope), the key numbers
+    with their source ("from your scope" vs "default"), the
+    style lock and the planned asset kinds. This is where a
+    scope-stated number — and a bespoke-required mechanic —
+    shows up pre-build, not after generation."""
     try:
         summary = generate_module.build_summary(project["path"])
     except Exception:
         return ""
     if not summary.get("scope_present"):
         return ""
-    comp = summary.get("composition") or {}
-    if summary.get("bespoke"):
-        comp_line = ("Bespoke mechanics — the scope's core loop "
-                     "cannot be composed from the factory's "
-                     "primitives, so a model-written module "
-                     "implements it.")
-    elif comp:
+    plan = summary.get("plan") or {}
+    bespoke_required = summary.get("bespoke_required")
+    entity_line = ""
+    notes_line = ""
+    if bespoke_required:
         comp_line = (
-            f"{_esc(comp.get('dimension', '2d'))} · movement: "
-            f"{_esc(comp.get('movement', ''))} · objective: "
-            f"{_esc(', '.join(comp.get('objectives') or []))} · "
-            f"fail: {_esc(', '.join(comp.get('fail') or []))} · "
-            f"structure: {_esc(comp.get('structure', ''))} · "
-            f"interactions: "
-            f"{_esc(', '.join(comp.get('interactions') or []))}")
+            "This game's core mechanic needs bespoke work — "
+            f"{_esc(bespoke_required.get('mechanic', ''))} "
+            f"({_esc(bespoke_required.get('because', ''))}). "
+            "Generation stops at the plan unless a brain is "
+            "configured to write the mechanics module. No "
+            "substitute game will be built.")
+    elif plan:
+        comp_line = (
+            f"{_esc(plan.get('dimension', '2d'))} · movement: "
+            f"{_esc(plan.get('movement', ''))} · objective: "
+            f"{_esc(plan.get('objective', ''))} · "
+            f"fail: {_esc(', '.join(plan.get('fail') or []) or 'none')}")
+        entities = plan.get("entities") or []
+        if entities:
+            entity_line = ("<p class='hint' style='margin-top:6px'>"
+                           "Entities: " + ", ".join(
+                               f"{_esc(e.get('label', e.get('kind', '')))} "
+                               f"({_esc(e.get('behaviour', ''))})"
+                               for e in entities) + ".</p>")
+        derivations = plan.get("derivations") or []
+        if derivations:
+            notes_line = ("<p class='hint' style='margin-top:6px'>"
+                          "How the plan reads your scope: "
+                          + " · ".join(_esc(d) for d in derivations)
+                          + "</p>")
     else:
-        comp_line = ""
+        comp = summary.get("composition") or {}
+        if summary.get("bespoke"):
+            comp_line = ("Bespoke mechanics — the scope's core loop "
+                         "cannot be composed from the factory's "
+                         "primitives, so a model-written module "
+                         "implements it.")
+        elif comp:
+            comp_line = (
+                f"{_esc(comp.get('dimension', '2d'))} · movement: "
+                f"{_esc(comp.get('movement', ''))} · objective: "
+                f"{_esc(', '.join(comp.get('objectives') or []))} · "
+                f"fail: {_esc(', '.join(comp.get('fail') or []))} · "
+                f"structure: {_esc(comp.get('structure', ''))} · "
+                f"interactions: "
+                f"{_esc(', '.join(comp.get('interactions') or []))}")
+        else:
+            comp_line = ""
     preset_line = ""
-    if summary.get("preset"):
+    if not plan and summary.get("preset"):
         preset_line = (f"<p style='margin-top:6px'>Preset: "
                        f"<b>{_esc(summary['preset'])}</b> "
                        f"<span class='hint'>— "
@@ -498,7 +532,7 @@ def _build_summary_card(server, project: dict) -> str:
                      'firms up as the scope fills in.</p>')
     return f"""
 <div class="card" style="margin-top:20px"><h3>Build summary — what will be built</h3>
-<p style="margin-top:8px">{comp_line}</p>{preset_line}
+<p style="margin-top:8px">{comp_line}</p>{preset_line}{entity_line}{notes_line}
 <table style="margin-top:10px"><tr><th>Number</th><th>Value</th><th>Source</th></tr>{rows}</table>
 <p class="hint" style="margin-top:8px">Style lock: {style_line} · Palette accent {_esc(palette.get('accent_hex', ''))}, target {_esc(palette.get('target_hex', ''))}</p>
 {kinds_line}{firm_line}</div>"""
@@ -666,10 +700,22 @@ def render_project(server, name: str, notice: str = "",
                 f"(palette {_esc(assets_report.get('palette', {}).get('accent_hex', ''))} / "
                 f"{_esc(assets_report.get('palette', {}).get('target_hex', ''))}), "
                 f"icon at game/icon.svg.</p>")
-        generation_card = f"""
-<div class="card" style="margin-top:20px"><h3>The game</h3>
+        if isinstance(generation.get("plan"), dict):
+            gen_plan = generation["plan"]
+            plan_entities = ", ".join(
+                f"{_esc(e.get('label', e.get('kind', '')))} "
+                f"({_esc(e.get('behaviour', ''))})"
+                for e in gen_plan.get("entities", []))
+            game_line = f"""
+<p style="margin-top:8px">Plan: <b>{_esc(gen_plan.get('movement', ''))} · {_esc(gen_plan.get('objective', ''))}</b>
+<span class="hint">— fail: {_esc(', '.join(gen_plan.get('fail') or []) or 'none')}</span></p>
+<p class="hint" style="margin-top:6px">Entities: {plan_entities}</p>"""
+        else:
+            game_line = f"""
 <p style="margin-top:8px">Archetype: <b>{_esc(generation.get('archetype', ''))}</b>
-<span class="hint">— {_esc(generation.get('archetype_reason', ''))}</span></p>
+<span class="hint">— {_esc(generation.get('archetype_reason', ''))}</span></p>"""
+        generation_card = f"""
+<div class="card" style="margin-top:20px"><h3>The game</h3>{game_line}
 <p class="hint" style="margin-top:6px">Content delivered: <b>{_esc(generation.get('units_delivered', '?'))}</b> units (scope asked for {_esc(generation.get('units_requested', '?'))}) ·
 Tuning: {'proposed by the mid-tier model, validated and clamped' if generation.get('brain_used') else 'deterministic — ' + _esc(generation.get('brain_note', 'no model used'))} ·
 Validation: {'passed in Godot' if generation.get('validation', {}).get('passed') else 'not passed'}</p>{assets_line}</div>"""

@@ -221,16 +221,16 @@ class PatchEndToEndTests(unittest.TestCase):
         self.assertTrue(self.baseline["ok"], self.baseline["warnings"])
         item = self._approved_balance_item("It is too hard, I keep failing")
         self.assertEqual(item["category"], "balance")
-        before = [p["budget"] for p in
-                  patch.load_config(self.project)["puzzles"]]
+        before = patch.load_config(self.project)[
+            "move_budget_multiplier"]
         version_before = patch.game_version(self.project)
         result = patch.start_patch(self.project, item["id"])
         self.assertEqual(result["outcome"], "patched", result)
         self.assertEqual(result["version"],
                          patch.bump_version(version_before))
-        after = [p["budget"] for p in
-                 patch.load_config(self.project)["puzzles"]]
-        self.assertTrue(any(a > b for a, b in zip(after, before)), (before, after))
+        after = patch.load_config(self.project)[
+            "move_budget_multiplier"]
+        self.assertGreater(after, before, (before, after))
         changelog = (self.project / "CHANGELOG.md").read_text(encoding="utf-8")
         self.assertIn(result["version"], changelog)
         self.assertIn(item["id"], changelog)

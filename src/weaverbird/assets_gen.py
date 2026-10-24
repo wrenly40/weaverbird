@@ -30,6 +30,7 @@ from pathlib import Path
 
 from . import generate as generate_module
 from . import ledger as ledger_module
+from . import plan as plan_module
 from . import provenance as provenance_module
 from . import scope as scope_module
 from . import skeleton as skeleton_module
@@ -165,13 +166,13 @@ def _sprite_background(p: dict) -> str:
 def _icon(p: dict, archetype: str) -> str:
     accent, target, hazard = p["accent_hex"], p["target_hex"], p["hazard_hex"]
     crate = p["crate_hex"]
-    if archetype == "platformer":
+    if archetype in ("platformer", "side_view"):
         motif = (
             f'<rect x="18" y="86" width="52" height="12" rx="5" fill="{accent}"/>'
             f'<rect x="52" y="60" width="52" height="12" rx="5" fill="{accent}" opacity="0.75"/>'
             f'<circle cx="82" cy="34" r="13" fill="{target}"/>'
         )
-    elif archetype == "crate_pusher":
+    elif archetype in ("crate_pusher", "grid_step"):
         motif = (
             f'<rect x="24" y="46" width="44" height="44" rx="7" fill="{crate}"/>'
             f'<path d="M26 48 L66 88 M66 48 L26 88" stroke="#000000" '
@@ -336,50 +337,94 @@ _ENTITY_SPRITES = {
     "hazard": ["hazard", "spikes"],
     "platform": ["platform_tile"],
     "exit": ["exit_door"],
+    "goal": ["exit_door"],
     "crate": ["crate"],
+    "pushable": ["crate"],
     "pad": ["pad"],
+    "zone": ["pad"],
     "wall": ["wall"],
+    "obstacle": [],
+    "ambient": [],
 }
-_MOVEMENT_AUDIO = {"platform": ["jump"], "grid": ["push"]}
-_FAIL_AUDIO = {"hazard_contact": ["hurt"], "timer": ["hurt"],
+_MOVEMENT_AUDIO = {"platform": ["jump"], "grid": ["push"],
+                   "side_view": ["jump"], "grid_step": ["push"]}
+_FAIL_AUDIO = {"hazard_contact": ["hurt"], "hazard_contacts": ["hurt"],
+               "timer": ["hurt"], "fall": ["hurt"],
                "lives": ["hurt"], "move_budget": ["push"]}
 
 
+def _project_plan(project: Path, values: dict) -> tuple[dict, bool]:
+    """(plan, is_legacy) for a project: the plan recorded in its
+    world (or derived from its scope), and whether the project
+    is a legacy build (world/config names a preset and no plan).
+    """
+    from . import world as world_module
+
+    world_data = world_module.load_world(project)
+    if world_data and isinstance(world_data.get("plan"), dict):
+        return world_data["plan"], False
+    config_path = project / GAME_DIR_NAME / "game_config.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            config = {}
+        if isinstance(config.get("plan"), dict):
+            return config["plan"], False
+        if config.get("archetype"):
+            return {}, True
+    if world_data and world_data.get("preset"):
+        return {}, True
+    return plan_module.derive_plan(values), False
+
+
 def asset_requests(project: Path, values: dict) -> dict:
-    """The assets this game needs, derived from its composition
+    """The assets this game needs, derived from its game plan
     and — when the world worker has run — the entity kinds
     actually present in game/world/world.json:
     {sprites, audio, based_on, bespoke}.
 
-    Preset games additionally keep the factory's shared asset
-    set (their templates opportunistically load any of it, as
-    they always have); bespoke games get exactly their requests
-    — there is no preset set to fall back on.
+    Legacy projects (built by older versions) keep the
+    composition-based derivation they always had; bespoke games
+    get exactly their requests — there is no set to fall back on.
     """
     from . import world as world_module
 
-    derived = generate_module.derive_composition(
-        values, override=None)
-    bespoke = bool(derived["bespoke"])
-    composition = derived["composition"] or {}
-    dimension = composition.get("dimension", "2d")
+    plan, legacy = _project_plan(project, values)
     world_data = world_module.load_world(project)
+    composition = None
+    preset = None
+    if legacy:
+        derived = generate_module.derive_composition(
+            values, override=None)
+        bespoke = bool(derived["bespoke"])
+        composition = derived["composition"] or {}
+        preset = derived["preset"]
+        dimension = composition.get("dimension", "2d")
+        movement = composition.get("movement")
+        fails = composition.get("fail") or []
+    else:
+        bespoke = plan.get("bespoke_required") is not None
+        dimension = plan.get("dimension", "2d")
+        movement = plan.get("movement")
+        fails = plan.get("fail") or []
     kinds: list[str] = []
-    based_on = "composition"
+    based_on = "plan"
     if world_data and world_data.get("entity_kinds"):
         kinds = list(world_data["entity_kinds"])
         based_on = "world"
-    elif derived["composition"]:
-        preset = derived["preset"]
+    elif legacy and composition:
         kinds = list(world_module.ENTITY_KINDS.get(preset, []))
+    elif not legacy:
+        kinds = plan_module.entity_kinds(plan)
     sprites = {"background"}
     for kind in kinds:
         sprites.update(_ENTITY_SPRITES.get(kind, []))
     if bespoke:
         sprites.update(["player", "target"])
     audio = {"click", "collect", "win", "lose", "music"}
-    audio.update(_MOVEMENT_AUDIO.get(composition.get("movement"), []))
-    for fail in composition.get("fail") or []:
+    audio.update(_MOVEMENT_AUDIO.get(movement, []))
+    for fail in fails:
         audio.update(_FAIL_AUDIO.get(fail, []))
     if bespoke:
         audio.update(["hurt"])
@@ -409,8 +454,11 @@ def asset_requests(project: Path, values: dict) -> dict:
         "audio": sorted(audio),
         "based_on": based_on,
         "bespoke": bespoke,
-        "composition": derived["composition"],
-        "preset": derived["preset"],
+        "plan": ({"movement": plan.get("movement"),
+                  "objective": plan.get("objective")}
+                 if plan else None),
+        "composition": composition,
+        "preset": preset,
         "dimension": dimension,
         "materials": materials,
     }
@@ -418,12 +466,12 @@ def asset_requests(project: Path, values: dict) -> dict:
 
 def _preflight(project: Path,
                archetype: str | None = None) -> tuple[dict, str, dict]:
-    """(palette, archetype, scope values) for a project whose
+    """(palette, motif key, scope values) for a project whose
     skeleton game exists — the shared start of every asset
-    operation. The 'archetype' returned is the composition's
-    preset name (kept for the icon motif and the report's
-    history); asset selection itself goes through
-    asset_requests()."""
+    operation. The motif key is the plan's movement for
+    genre-agnostic builds, or the legacy build name for old
+    projects (kept for the icon motif); asset selection itself
+    goes through asset_requests()."""
     game_dir = project / GAME_DIR_NAME
     if not (game_dir / "project.godot").exists():
         raise AssetsError(
@@ -439,8 +487,12 @@ def _preflight(project: Path,
     if archetype:
         chosen = generate_module._normalise_archetype(archetype)
     else:
-        derived = generate_module.derive_composition(values)
-        chosen = derived["preset"] or "arena_collector"
+        plan, legacy = _project_plan(project, values)
+        if legacy:
+            derived = generate_module.derive_composition(values)
+            chosen = derived["preset"] or "arena_collector"
+        else:
+            chosen = plan.get("movement") or "top_down_2d"
     return generate_module._palette(values), chosen, values
 
 
@@ -516,7 +568,7 @@ def generate_assets(project_dir, archetype: str | None = None,
     requests = asset_requests(project, values)
     producers = _producers(palette, chosen, requests)
     if reporter is not None:
-        reporter(f"Generating assets for the {chosen} game — palette "
+        reporter(f"Generating assets for the game — palette "
                  f"{palette['accent_hex']} / {palette['target_hex']} "
                  "from the style lock", done=0, total=len(producers))
     written: list[str] = []
@@ -541,9 +593,6 @@ def generate_assets(project_dir, archetype: str | None = None,
     report = {
         "stage": "assets",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "archetype": chosen,
-        "composition": requests["composition"],
-        "preset": requests["preset"],
         "dimension": requests.get("dimension", "2d"),
         "requests": {"sprites": requests["sprites"],
                      "audio": requests["audio"],
@@ -554,6 +603,13 @@ def generate_assets(project_dir, archetype: str | None = None,
         "icon": f"{GAME_DIR_NAME}/icon.svg",
         "icon_generated": True,
     }
+    if requests.get("preset"):
+        # Legacy build: keep the historical report keys.
+        report["archetype"] = chosen
+        report["composition"] = requests["composition"]
+        report["preset"] = requests["preset"]
+    else:
+        report["plan"] = requests.get("plan")
     path = report_path_for(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

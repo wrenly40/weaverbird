@@ -35,6 +35,7 @@ from pathlib import Path
 
 from . import brain as brain_module
 from . import ledger as ledger_module
+from . import plan as plan_module
 from . import provenance as provenance_module
 from . import scope as scope_module
 from . import skeleton as skeleton_module
@@ -185,6 +186,7 @@ def scope_number_reconciliation(project_dir) -> dict | None:
     facts = _facts(project)
     values = facts["values"]
     built = None
+    unit_plural = "rounds"
     config_path = (project / skeleton_module.GAME_DIR_NAME
                    / "game_config.json")
     if config_path.exists():
@@ -196,12 +198,21 @@ def scope_number_reconciliation(project_dir) -> dict | None:
                 and isinstance(config.get("targets_per_round"),
                                (int, float)):
             built = int(config["targets_per_round"])
+        if isinstance(config, dict) \
+                and isinstance(config.get("plan"), dict):
+            unit_plural = plan_module.unit_word(config["plan"])
     found = generate_module.scope_target_count(values)
     if found is None:
         stated_text = " ".join(
             str(values.get(name, "") or "")
             for name in generate_module.TARGET_COUNT_FIELDS)
-        if _re.search(r"\d", stated_text):
+        # A lives statement ("lose all 3 lives") is a number the
+        # factory DOES read — the plan derives lives from it — so
+        # it is not an unread target count.
+        unread_text = _re.sub(
+            r"\b\d{1,3}\s*(?:lives|life)\b", "", stated_text,
+            flags=_re.IGNORECASE)
+        if _re.search(r"\d", unread_text):
             return {
                 "status": "unparseable", "stated": None, "built": built,
                 "line": "The scope's Win/Lose text states a number "
@@ -238,7 +249,7 @@ def scope_number_reconciliation(project_dir) -> dict | None:
                         f"{stated} targets per round, the built "
                         f"config uses {built}, and the world places "
                         f"exactly {used} collectibles in every one "
-                        f"of its {len(world_counts)} rounds.",
+                        f"of its {len(world_counts)} {unit_plural}.",
             }
         return {
             "status": "mismatch", "stated": stated, "built": built,
@@ -249,7 +260,7 @@ def scope_number_reconciliation(project_dir) -> dict | None:
                     f"{found['field']}) and the built config uses "
                     f"{built}, but the world actually places "
                     f"{counts_text} collectibles across its "
-                    f"{len(world_counts)} rounds — rounds that "
+                    f"{len(world_counts)} {unit_plural} — units that "
                     f"place more than {used} require more than "
                     "the scope states.",
         }
@@ -444,13 +455,20 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
                 requested = None
         if isinstance(delivered, int) and isinstance(requested, int) \
                 and requested >= 1 and delivered >= requested:
-            unit_word = {"platformer": "levels",
-                         "crate_pusher": "puzzles"}.get(
-                             generation.get("archetype"), "rounds/waves")
+            if isinstance(generation.get("plan"), dict):
+                unit_word = plan_module.unit_word(generation["plan"])
+                kind_text = (f"plan {generation['plan'].get('movement')} / "
+                             f"{generation['plan'].get('objective')}")
+            else:
+                unit_word = {"platformer": "levels",
+                             "crate_pusher": "puzzles"}.get(
+                                 generation.get("archetype"), "rounds/waves")
+                kind_text = generation.get("archetype",
+                                           "unknown archetype")
             note = (
                 f"Generation report: {delivered} {unit_word} delivered "
                 f"against the scope's count of {requested} "
-                f"({generation.get('archetype', 'unknown archetype')}), "
+                f"({kind_text}), "
                 "and the test report confirms the game runs."
             )
             if recon and recon["status"] == "match":
@@ -482,7 +500,7 @@ def _evaluate(project_dir) -> tuple[dict, dict]:
             marks["icon_and_polish_gate_passed"] = (
                 "Asset generation produced a real icon for this game "
                 "(game/icon.svg, drawn from the style-lock palette "
-                "with the archetype's motif — not the skeleton "
+                "for this game's plan — not the skeleton "
                 "placeholder), and the test report's runs are all "
                 "clean, so the first run is polish-checked."
             )
@@ -675,10 +693,18 @@ def build_finish_report(project_dir, settings_path=None,
     generation_report = _load_stage_report(project, "generation_report.json")
     if generation_report:
         lines.append("")
+        if isinstance(generation_report.get("plan"), dict):
+            gen_plan = generation_report["plan"]
+            kind_text = (
+                f"plan **{gen_plan.get('movement', '?')} / "
+                f"{gen_plan.get('objective', '?')}**")
+        else:
+            kind_text = (
+                f"archetype "
+                f"**{generation_report.get('archetype', 'unknown')}** "
+                f"({generation_report.get('archetype_reason', '')})")
         lines.append(
-            f"Real game generated by the build stage: archetype "
-            f"**{generation_report.get('archetype', 'unknown')}** "
-            f"({generation_report.get('archetype_reason', '')}), "
+            f"Real game generated by the build stage: {kind_text}, "
             f"{generation_report.get('units_delivered', '?')} content "
             f"units delivered. "
             + ("Tuning was proposed by the configured mid-tier model "

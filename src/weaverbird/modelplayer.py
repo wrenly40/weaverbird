@@ -62,6 +62,15 @@ ACTION_SETS = {
                    "wait", "start"],
     "crate_pusher": ["move_left", "move_right", "move_up", "move_down",
                      "interact", "wait", "start"],
+    # Genre-agnostic builds key by the plan's movement.
+    "top_down_2d": ["move_left", "move_right", "move_up",
+                    "move_down", "pause", "wait", "start"],
+    "top_down_3d": ["move_left", "move_right", "move_up",
+                    "move_down", "pause", "wait", "start"],
+    "side_view": ["move_left", "move_right", "jump", "pause",
+                  "wait", "start"],
+    "grid_step": ["move_left", "move_right", "move_up", "move_down",
+                  "interact", "wait", "start"],
 }
 
 
@@ -179,6 +188,11 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
 
     gen_report = generate_module.load_report(project) or {}
     archetype = gen_report.get("archetype") or ""
+    plan = gen_report.get("plan")
+    if isinstance(plan, dict) and plan.get("movement"):
+        # Genre-agnostic build: the action set keys off the
+        # plan's movement; the record names the plan instead.
+        archetype = str(plan["movement"])
     scope_values = {}
     scope_file = scope_module.scope_path_for(project)
     if scope_file.exists():
@@ -371,7 +385,11 @@ def run_model_playtest(project_dir, settings_path=None, godot_path=None,
     record = {
         "ran_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "tier": tier,
-        "archetype": archetype,
+        "archetype": (archetype if not isinstance(plan, dict) else None),
+        "movement": (plan.get("movement") if isinstance(plan, dict)
+                     else None),
+        "objective": (plan.get("objective") if isinstance(plan, dict)
+                      else None),
         "outcome": outcome,
         "finished": finished,
         "result": result_kind,

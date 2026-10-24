@@ -1,9 +1,12 @@
 # The bespoke mechanics module contract
 
 When a game's scope describes a core loop that Weaverbird's
-composition primitives (movement × objective × fail × structure ×
-interactions) cannot express, the factory does not force it into
-an unrelated preset. The mechanics worker marks the build
+primitive vocabulary (movements top_down_2d / side_view /
+grid_step / top_down_3d; objectives collect / reach / survive /
+deliver; fail rules timer / hazard_contacts / fall) cannot
+express, the game plan marks it `bespoke_required` — the factory
+does not force it into a near match. The mechanics worker marks
+the build
 **bespoke** and — with the user's own brain configured — a model
 writes ONE GDScript module implementing this contract. Without a
 brain, the orchestrator stops at the plan and says so plainly.

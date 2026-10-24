@@ -29,12 +29,22 @@ bounds; and a model-driven playtester — your own vision model,
 playing through a bridge inside the game — joins the scripted
 players, filing its confusions straight back into the feedback
 queue. v0.6 put every app action on a background job runner and
-added the balance lab and the asset studio. This release (v0.7)
-rebuilds the factory's insides around the user's direction: every
+added the balance lab and the asset studio. v0.7
+rebuilt the factory's insides around the user's direction: every
 step is an independent worker coordinated by an orchestrator, and
-generation composes primitives instead of picking an archetype —
-the archetypes survive as presets, and scopes no composition can
-express take a bespoke, brain-written mechanics path. Publishing
+generation composed primitives instead of picking an archetype.
+This release (v0.11) removes the named games altogether:
+generation is genre-agnostic. The factory derives a **game plan**
+from the scope's own words — movement, objective, fail rules,
+entities with behaviours, numbers, each with a short note quoting
+the scope line that caused it — and one generic runtime executes
+any plan from a small primitive vocabulary. There is no preset
+registry and no matcher. A scope whose core mechanic the
+vocabulary cannot express (a tower-defence economy, match-3
+cascades, a dialogue tree) is marked as needing bespoke work:
+with a brain configured, a model writes the mechanics module;
+without one, generation stops at the plan and says so plainly —
+no substitute game is ever built. Publishing
 stays last, on purpose: the store connectors are still to come.
 
 ## Quickstart
@@ -267,25 +277,24 @@ New in v0.8:
   the style lock and the palette into the scope. Turns run as
   jobs under the scope worker, so a slow brain call shows
   progress like everything else.
-- Games have a dimension. The composition now carries
+- Games have a dimension. The plan carries
   `dimension: 2d | 3d` (from the scope's Dimension field, or a
-  "3D" mention in the genre/title/pitch), defaulting to 2d with
-  every existing behaviour unchanged. One 3D preset ships:
-  **arena_3d**, the arena composition on a 3D ground plane — a
-  `CharacterBody3D` player under a follow camera, spinning
-  collectible orbs, patrolling hazards and obstacle blocks, all
-  primitive meshes coloured from the style-lock palette with an
-  ambient-lit environment (no external assets). The world
+  "3D" mention in the genre/title/pitch), defaulting to 2d.
+  The 3D movement is `top_down_3d`: a game on a 3D ground
+  plane — a `CharacterBody3D` player under a follow camera,
+  spinning collectible orbs, hazards with the plan's
+  behaviours and obstacle blocks, all primitive meshes coloured
+  from the style-lock palette with an ambient-lit environment
+  (no external assets). The world
   worker emits the 3D world data and gates it on the XZ plane;
   the assets worker emits a material palette spec instead of
   sprites (the icon and audio are generated as usual); the
   shell, the bridge facts (positions gain a y the testers
   ignore) and the scripted testers all work as they do in 2D,
   and the full test stage passes on a generated 3D game with
-  win and lose proven. Asking for 3D with any other composition
-  is recorded honestly in the derivation and built in 2D — 3D
-  covers one flat-ground preset today; 3D platforming is not
-  claimed.
+  win and lose proven. Asking for 3D with side-view movement
+  is marked bespoke required in the plan — 3D platforming is
+  not claimed.
 - Native installers. `./build-native.sh` freezes Weaverbird
   with PyInstaller into `dist/native/weaverbird-<platform>` —
   the same app with its Python bundled in, so the machine
@@ -336,22 +345,33 @@ New in v0.7:
   owner and the issues. Pipeline advance runs through the same
   worker adapters, so the CLI, the app and the orchestrator
   cannot diverge.
-- Generation is composition-based, and the factory is archetype
-  independent. A game is described by composing primitives —
-  movement (top-down, platform, grid), objectives (collect,
-  reach the exit, push to targets, survive), fail conditions,
-  structure (levels, rounds) and interactions — derived
-  deterministically from the scope, with the derivation recorded
-  in `game_config.json`. The three archetypes are now **presets**:
-  named compositions you can pick with a `preset:` note in the
-  scope. When a scope's core loop cannot be composed from the
-  primitives at all (the matcher is deliberately conservative),
-  the build is **bespoke**: with a brain configured, a model
-  writes one GDScript module against the documented contract in
-  `docs/MODULE_CONTRACT.md`, hosted by a factory shell and held
-  to the same assembly validation and test stage as any other
-  game. Without a brain, the orchestrator stops at the plan and
-  says plainly what it cannot compose yet.
+- Generation is genre-agnostic (v0.11). No scope is matched
+  into a named game: the world worker derives a **game plan**
+  from the scope's own fields — entities (kinds, counts,
+  behaviours), movement, objective rule, fail rule, numbers —
+  and records it in `game_config.json` and `world.json`, each
+  choice with a derivation note quoting the scope. One generic
+  runtime executes any plan; the vocabulary is the factory's
+  honest capability statement:
+  movements `top_down_2d`, `side_view` (gravity + jump),
+  `grid_step`, `top_down_3d`; objectives `collect`, `reach`,
+  `survive`, `deliver` (pushables onto target zones); fail
+  rules `timer`, `hazard_contacts` (with lives), `fall`;
+  entity behaviours static, wander, patrol, chase, flee,
+  pushable, ambient. When a scope's core mechanic cannot be
+  expressed in that vocabulary (tower-defence economy/building,
+  match-3 cascades, dialogue trees, ordered-checkpoint racing),
+  the plan is marked **bespoke required**, naming the mechanic
+  and the scope words behind it: with a brain configured, a
+  model writes one GDScript module against the documented
+  contract in `docs/MODULE_CONTRACT.md`, hosted by a factory
+  shell and held to the same assembly validation and test
+  stage as any other game. Without a brain, generation stops
+  at the plan with a plain explanation — no substitute game
+  is built. The build summary in the app shows the plan before
+  anything runs, so the bespoke state (and every number, with
+  its source) is visible up front. Games built by older
+  versions keep working exactly as before.
 
 New in v0.6:
 
@@ -483,14 +503,14 @@ New in v0.4:
 
 - Real game generation (`weaverbird build game <dir>`, and the
   pipeline's build stage). The scope's genre, core verb and win/lose
-  text pick the archetype — or say `archetype: platformer` in a scope
-  field, or pass `--archetype`: **arena collector** (rounds of
-  targets against the clock, hazards that grow per round),
-  **platformer** (gravity, run and jump with a coyote window,
-  procedurally varied levels with star staircases, spike pits,
-  lives), and **crate pusher** (grid puzzles with move budgets and
-  undo — every shipped puzzle verified solvable by the solver in
-  this codebase, its verified solution recorded in the config). The
+  text are read as a game plan (see the genre-agnostic generation
+  note above): a top-down collector is rounds of the maker's own
+  collectibles against the clock with hazards that grow per round;
+  a side-view game is gravity, run and jump with a coyote window,
+  procedurally varied levels with staircases, spike pits, lives;
+  a grid pushing game is puzzles with move budgets and undo —
+  every shipped puzzle verified solvable by the solver in this
+  codebase, its verified solution recorded in the world data. The
   scope's content counts become levels, rounds or puzzles; all
   tuning lives in `game/game_config.json`, which the games read at
   runtime. When a brain is configured, the mid tier may propose
@@ -503,8 +523,9 @@ New in v0.4:
   pipeline's assets stage). Deterministic, no model: flat vector
   sprites drawn from the scope's style-lock palette (player, target,
   hazard, platform tile, spikes, exit door, crate, pad, wall,
-  background), a real game icon with the archetype's motif — not
-  the skeleton placeholder — and audio synthesised with the standard
+  background), a real game icon with a motif from the game's plan —
+  not the skeleton placeholder — and audio synthesised with the
+  standard
   library: click, collect, hurt, jump, push, a win jingle, a lose
   tone, and a looping music track. The games use the assets when
   present and fall back to code-drawn shapes when not. Every file
@@ -536,8 +557,8 @@ New in v0.4:
   with the numbers in the reason. The finish report describes the
   generated game, its assets and its test verdict alongside
   everything from before.
-- The app grew with the stages: the project view shows the chosen
-  archetype and what was delivered, a test summary card (verdict,
+- The app grew with the stages: the project view shows the game's
+  plan and what was delivered, a test summary card (verdict,
   win/lose proven, performance, the three players' results), and
   working Generate assets / Build game / Run tests buttons, enabled
   exactly when the CLI would allow them.
