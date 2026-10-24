@@ -16,6 +16,15 @@ arena bounds sanity. A gate failure comes back as issues owned
 by "world"; the orchestrator routes them here, and a retry
 regenerates platformer levels with a different seed (see
 generate.run_world_step).
+
+Since 0.11.0 the world is built from the scope's PLAN (plan.py)
+rather than a named preset: world_from_plan derives the units
+from the plan's movement — top-down rounds with generated
+layouts, 3D rounds on the ground plane, side-view levels,
+grid puzzles — stamping the plan's entity behaviours onto the
+units. world_from_config below remains for projects built by
+older versions, whose worlds validate exactly as they always
+did.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ import json
 from pathlib import Path
 
 from . import generate as generate_module
+from . import plan as plan_module
 from . import skeleton as skeleton_module
 
 GAME_DIR_NAME = skeleton_module.GAME_DIR_NAME
@@ -545,6 +555,198 @@ def _arena3d_units(config: dict) -> list[dict]:
     return units
 
 
+# ---------------------------------------------------------------------------
+# Plan-built worlds (0.11.0) — the units a scope's plan produces.
+# The shapes deliberately match the legacy units the runtime has
+# always consumed (rounds with generated layouts, round3d units,
+# levels, puzzles); what changed is who decides: the plan's
+# movement, objective, entity behaviours and numbers — never a
+# preset name.
+
+def _plan_entity(plan: dict, kind: str) -> dict | None:
+    for entity in plan.get("entities", []):
+        if entity.get("kind") == kind:
+            return entity
+    return None
+
+
+def _plan_goal_2d(collectibles: list) -> list:
+    """A goal position for a reach plan: a layout-box corner that
+    clears the collectibles and the spawn."""
+    for cand in ([988.0, 130.0], [150.0, 130.0], [988.0, 520.0],
+                 [576.0, 120.0]):
+        if all(_dist(cand, c) >= 110.0 for c in collectibles) \
+                and _dist(cand, SPAWN_2D) >= 200.0:
+            return list(cand)
+    return [988.0, 130.0]
+
+
+def _plan_rounds_2d(plan: dict) -> list[dict]:
+    numbers = plan.get("numbers", {})
+    units = int(numbers.get("units", 5))
+    seed = int(numbers.get("world_seed", 0))
+    objective = plan.get("objective")
+    pinned = bool(numbers.get("targets_pinned"))
+    base = int(numbers.get("targets_per_round", 5))
+    hazard = _plan_entity(plan, "hazard")
+    behaviour = str((hazard or {}).get("behaviour", "patrol"))
+    has_goal = _plan_entity(plan, "goal") is not None
+    rounds: list[dict] = []
+    for index in range(units):
+        count = base if pinned else min(base + index, 12)
+        unit: dict = {
+            "index": index, "kind": "round", "round": index + 1,
+            "targets_per_round": base,
+            "targets_pinned": pinned,
+            "round_seconds": numbers.get("round_seconds", 60),
+            "arena": list(ARENA_SIZE),
+            "spawn": list(SPAWN_2D),
+        }
+        if hazard is not None:
+            unit["hazards"] = [
+                {**spot, "behaviour": behaviour}
+                for spot in HAZARD_SPOTS_2D[:min(2 + index, 5)]]
+        if objective in ("collect", "reach"):
+            positions, layout = arena_layout(count, seed, index)
+            unit["collectibles"] = positions
+            unit["layout"] = layout
+        if has_goal:
+            unit["goal"] = _plan_goal_2d(unit.get("collectibles") or [])
+        rounds.append(unit)
+    return rounds
+
+
+def _plan_rounds_3d(plan: dict) -> list[dict]:
+    numbers = plan.get("numbers", {})
+    objective = plan.get("objective")
+    hazard = _plan_entity(plan, "hazard")
+    behaviour = str((hazard or {}).get("behaviour", "patrol"))
+    has_goal = _plan_entity(plan, "goal") is not None
+    shim = {
+        "rounds": int(numbers.get("units", 5)),
+        "world_seed": int(numbers.get("world_seed", 0)),
+        "targets_per_round": int(numbers.get("targets_per_round", 5)),
+        "round_seconds": numbers.get("round_seconds", 60),
+    }
+    if numbers.get("targets_pinned"):
+        shim["scope_numbers"] = {"targets_per_round": {}}
+    units = _arena3d_units(shim)
+    import random as _random
+    for unit in units:
+        if hazard is None:
+            unit["hazards"] = []
+        else:
+            for entry in unit.get("hazards", []):
+                entry["behaviour"] = behaviour
+        if objective == "survive":
+            unit["collectibles"] = []
+        if has_goal:
+            rng = _random.Random(
+                int(numbers.get("world_seed", 0))
+                + int(unit.get("index", 0)) * 733)
+            gx, gz = GROUND_3D
+            goal = None
+            taken = [list(c) for c in unit.get("collectibles") or []]
+            taken += [list(h["waypoints"][0])
+                      for h in unit.get("hazards", [])
+                      if h.get("waypoints")]
+            for _try in range(200):
+                cand = [round(rng.uniform(-gx / 2 + 2, gx / 2 - 2), 1),
+                        round(rng.uniform(-gz / 2 + 2, gz / 2 - 2), 1)]
+                if _dist(cand, SPAWN_3D) < 8.0:
+                    continue
+                if any(_dist(cand, other) < 3.0 for other in taken):
+                    continue
+                if any(_inside_obstacle(cand, ob, 0.8)
+                       for ob in unit.get("obstacles", [])):
+                    continue
+                goal = cand
+                break
+            unit["goal"] = goal or [16.0, 8.0]
+    return units
+
+
+def _plan_levels(plan: dict, attempt: int = 0) -> list[dict]:
+    import random
+    numbers = plan.get("numbers", {})
+    units = int(numbers.get("units", 5))
+    seed = int(numbers.get("world_seed", 0)) + attempt * 7919
+    rng = random.Random(seed)
+    levels = []
+    for index in range(units):
+        level = generate_module._platformer_level(rng, index)
+        levels.append({"index": index, "kind": "level", **level})
+    return levels
+
+
+def _plan_puzzles(plan: dict, config: dict) -> list[dict]:
+    numbers = plan.get("numbers", {})
+    units = int(numbers.get("units", 5))
+    multiplier = float(config.get(
+        "move_budget_multiplier",
+        numbers.get("move_budget_multiplier", 2.5)))
+    puzzles = generate_module.crate_puzzles(
+        units, budget_multiplier=multiplier)
+    return [{"index": index, "kind": "puzzle", **puzzle}
+            for index, puzzle in enumerate(puzzles)]
+
+
+def plan_entity_issues(plan: dict) -> list[dict]:
+    """The plan's declared entities must be able to serve its
+    objective and fail rules — a collect plan with no collectible
+    entity (or a deliver plan with no pushable) is a scope/plan
+    disagreement the world gate refuses, rather than a game that
+    quietly lacks its objective."""
+    kinds = {e.get("kind") for e in plan.get("entities", [])}
+    required: list[tuple[str, str]] = []
+    objective = plan.get("objective")
+    if objective == "collect":
+        required.append(("collectible", "its objective is collect"))
+    elif objective == "reach":
+        required.append(("goal", "its objective is reach"))
+    elif objective == "deliver":
+        required.append(("pushable", "its objective is deliver"))
+        required.append(("zone", "its objective is deliver"))
+    elif objective == "survive":
+        required.append(("hazard", "its objective is survive"))
+    if "hazard_contacts" in plan.get("fail", []):
+        required.append(("hazard", "its fail rule is hazard_contacts"))
+    return [
+        {"kind": "world_gate", "owner": "world",
+         "detail": f"the plan declares no {kind} entity, but "
+                   f"{why} — the scope and the plan disagree"}
+        for kind, why in required if kind not in kinds]
+
+
+def world_from_plan(plan: dict, config: dict | None = None,
+                    attempt: int = 0) -> dict:
+    """The world data for a scope's plan (0.11.0)."""
+    config = config or {}
+    if plan.get("bespoke_required"):
+        return {
+            "plan": None,
+            "bespoke": True,
+            "entity_kinds": ["bespoke"],
+            "units": [{"index": 0, "kind": "bespoke"}],
+        }
+    movement = plan_module.plan_movement(plan)
+    if movement == "top_down_2d":
+        units = _plan_rounds_2d(plan)
+    elif movement == "top_down_3d":
+        units = _plan_rounds_3d(plan)
+    elif movement == "side_view":
+        units = _plan_levels(plan, attempt)
+    elif movement == "grid_step":
+        units = _plan_puzzles(plan, config)
+    else:
+        units = []
+    return {
+        "plan": plan,
+        "entity_kinds": plan_module.entity_kinds(plan),
+        "units": units,
+    }
+
+
 def bespoke_world(ctx: dict) -> dict:
     """A bespoke game's world is declared by its mechanics
     module, not by the factory: one open unit, no factory
@@ -564,14 +766,22 @@ def world_manifest(world_data: dict) -> dict:
     read by the mechanics and assets workers: what the world
     contains, in counts."""
     units = world_data.get("units", [])
-    return {
+    manifest = {
         "path": WORLD_REL,
-        "preset": world_data.get("preset"),
         "bespoke": bool(world_data.get("bespoke")),
         "units": len(units),
         "unit_kinds": sorted({str(u.get("kind", "")) for u in units}),
         "entity_kinds": list(world_data.get("entity_kinds", [])),
     }
+    if world_data.get("preset"):
+        # Legacy worlds only: plan worlds carry movement and
+        # objective below instead of a preset name.
+        manifest["preset"] = world_data.get("preset")
+    plan = world_data.get("plan")
+    if isinstance(plan, dict):
+        manifest["movement"] = plan.get("movement")
+        manifest["objective"] = plan.get("objective")
+    return manifest
 
 
 def _issue(detail: str) -> dict:
@@ -590,6 +800,9 @@ def validate_world(world_data: dict) -> list[dict]:
     preset = world_data.get("preset")
     if world_data.get("bespoke"):
         return issues
+    plan = world_data.get("plan")
+    if isinstance(plan, dict):
+        return _validate_plan_world(world_data, plan)
     for unit in units:
         index = unit.get("index", "?")
         if preset == "platformer":
@@ -602,6 +815,79 @@ def validate_world(world_data: dict) -> list[dict]:
             issues.extend(_validate_round3d(unit, index))
         else:
             issues.append(_issue(f"unit {index}: unknown preset {preset!r}"))
+    return issues
+
+
+def _validate_round3d_survive(unit: dict, index) -> list[dict]:
+    """The 3D gate for a survive round: no collectibles to count,
+    but the ground, spawn, obstacles and patrol waypoints must
+    all sit on the plane (the collect-round gate additionally
+    requires its collectibles, which a survive round has none
+    of by design)."""
+    issues = []
+    ground = unit.get("ground") or []
+    if len(ground) != 2 or ground[0] <= 0 or ground[1] <= 0:
+        return [_issue(f"round {index}: ground plane missing")]
+    gx, gz = ground
+
+    def inside(point, margin: float) -> bool:
+        return (abs(point[0]) <= gx / 2 - margin
+                and abs(point[1]) <= gz / 2 - margin)
+
+    spawn = unit.get("spawn") or []
+    if len(spawn) != 2 or not inside(spawn, 0.5):
+        issues.append(_issue(f"round {index}: spawn outside the ground"))
+    for obstacle in unit.get("obstacles") or []:
+        pos = obstacle.get("pos") or []
+        if len(pos) != 2 or not inside(pos, 0.0):
+            issues.append(_issue(
+                f"round {index}: an obstacle sits outside the ground"))
+            break
+    for hazard in unit.get("hazards") or []:
+        for waypoint in hazard.get("waypoints") or []:
+            if len(waypoint) != 2 or not inside(waypoint, 0.5):
+                issues.append(_issue(
+                    f"round {index}: a hazard waypoint leaves the ground"))
+                return issues
+    return issues
+
+
+def _validate_plan_world(world_data: dict, plan: dict) -> list[dict]:
+    """The gate for a plan-built world: the plan's units and
+    entity kinds, then the per-movement structural checks (the
+    same validators the legacy presets answer to)."""
+    issues: list[dict] = []
+    issues.extend(plan_entity_issues(plan))
+    units = world_data.get("units") or []
+    have = set(world_data.get("entity_kinds", []))
+    for kind in plan_module.entity_kinds(plan):
+        if kind not in have:
+            issues.append(_issue(
+                f"the world is missing the plan's {kind} entity kind"))
+    numbers = plan.get("numbers", {})
+    stated = numbers.get("units")
+    if isinstance(stated, int) and len(units) != stated:
+        issues.append(_issue(
+            f"the world has {len(units)} units; the plan states "
+            f"{stated}"))
+    movement = plan_module.plan_movement(plan)
+    objective = plan_module.plan_objective(plan)
+    for unit in units:
+        index = unit.get("index", "?")
+        if movement == "top_down_2d":
+            issues.extend(_validate_round(unit, index))
+        elif movement == "top_down_3d":
+            if objective == "survive":
+                issues.extend(_validate_round3d_survive(unit, index))
+            else:
+                issues.extend(_validate_round3d(unit, index))
+        elif movement == "side_view":
+            issues.extend(_validate_level(unit, index))
+        elif movement == "grid_step":
+            issues.extend(_validate_puzzle(unit, index))
+        else:
+            issues.append(_issue(
+                f"unit {index}: unknown movement {movement!r}"))
     return issues
 
 

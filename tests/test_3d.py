@@ -1,12 +1,12 @@
-"""Pass 6, Workstream P — 3D support.
+"""3D support (0.11.0: plan-based).
 
-The dimension is part of the composition: a scope asking for 3D
-lifts the arena composition into the arena_3d preset; everything
-else stays exactly as it was (the 2D freeze is the rest of the
-suite). The 3D world is data (world.json on the XZ plane) with
-its own gate, the assets worker emits a material palette spec
-instead of sprites, and a generated 3D game must pass the full
-testing stage — win AND lose proven — under Godot.
+The scope's dimension is part of the game plan: a scope asking
+for 3D derives the top_down_3d movement, executed by the same
+generic runtime as every other plan. The 3D world is data
+(world.json on the XZ plane) with its own gate, the assets
+worker emits a material palette spec instead of sprites, and a
+generated 3D game must pass the full testing stage — win AND
+lose proven — under Godot.
 """
 
 import json
@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from helpers import filled_scope_text  # noqa: E402
 
 from weaverbird import assets_gen, generate, godot, orchestrator  # noqa: E402
+from weaverbird import plan as plan_module  # noqa: E402
 from weaverbird import scope, state, world  # noqa: E402
 
 VALIDATE = godot.find_godot()[0] is not None
@@ -67,24 +68,23 @@ class DimensionDerivationTests(unittest.TestCase):
     def test_dimension_field_lifts_arena_to_3d(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = scoped_project(tmp, ARENA_3D)
-            derived = generate.derive_composition(self._values(project))
-            self.assertEqual(derived["preset"], "arena_3d")
-            self.assertEqual(derived["composition"]["dimension"], "3d")
-            self.assertEqual(derived["composition"]["movement"], "top_down")
+            derived = plan_module.derive_plan(self._values(project))
+            self.assertEqual(derived["dimension"], "3d")
+            self.assertEqual(derived["movement"], "top_down_3d")
 
     def test_3d_in_genre_text_also_lifts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = scoped_project(tmp, {
                 **ARENA_3D, DIM: f"{DIM} 2D"})
             # Dimension says 2D, genre says 3D: the field wins.
-            derived = generate.derive_composition(self._values(project))
-            self.assertEqual(derived["preset"], "arena_collector")
+            derived = plan_module.derive_plan(self._values(project))
+            self.assertEqual(derived["movement"], "top_down_2d")
             project = scoped_project(tmp, {
                 **ARENA_3D, DIM: f"{DIM} (either)"})
-            derived = generate.derive_composition(self._values(project))
-            self.assertEqual(derived["preset"], "arena_3d")
+            derived = plan_module.derive_plan(self._values(project))
+            self.assertEqual(derived["movement"], "top_down_3d")
 
-    def test_default_is_2d_and_frozen(self):
+    def test_default_is_2d(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = scoped_project(tmp, {
                 TITLE: f"{TITLE} Orb Fields",
@@ -94,11 +94,14 @@ class DimensionDerivationTests(unittest.TestCase):
                 LOSE: f"{LOSE} the timer runs out",
                 COUNTS: f"{COUNTS} 3 rounds",
             })
-            derived = generate.derive_composition(self._values(project))
-            self.assertEqual(derived["preset"], "arena_collector")
-            self.assertEqual(derived["composition"]["dimension"], "2d")
+            derived = plan_module.derive_plan(self._values(project))
+            self.assertEqual(derived["movement"], "top_down_2d")
+            self.assertEqual(derived["dimension"], "2d")
 
     def test_3d_platformer_request_is_honest(self):
+        # 3D + side-view signals cannot be expressed in the
+        # vocabulary: the plan says so instead of silently
+        # building a different (2D) game.
         with tempfile.TemporaryDirectory() as tmp:
             project = scoped_project(tmp, {
                 **ARENA_3D,
@@ -107,28 +110,28 @@ class DimensionDerivationTests(unittest.TestCase):
                 WIN: f"{WIN} collect every star and reach the door",
                 LOSE: f"{LOSE} lose all 3 lives",
             })
-            derived = generate.derive_composition(self._values(project))
-            self.assertEqual(derived["preset"], "platformer")
-            self.assertEqual(derived["composition"]["dimension"], "2d")
-            self.assertIn("only the arena composition supports 3D",
-                          derived["reason"])
-
-    def test_preset_roundtrip_includes_dimension(self):
-        comp = generate.composition_for_preset("arena_3d")
-        self.assertEqual(generate.preset_for_composition(comp), "arena_3d")
-        comp2d = generate.composition_for_preset("arena_collector")
-        self.assertEqual(generate.preset_for_composition(comp2d),
-                         "arena_collector")
+            derived = plan_module.derive_plan(self._values(project))
+            self.assertIsNotNone(derived["bespoke_required"])
+            self.assertIn("3D platforming",
+                          derived["bespoke_required"]["mechanic"])
 
 
 class World3DTests(unittest.TestCase):
     def _world(self):
-        values = {"Title (working)": "Orb Fields",
-                  "Palette": "accent #FF7A1A"}
-        config, _ = generate.deterministic_config(
-            "arena_3d", values, generate._palette(values), 3)
-        return world.world_from_config(
-            "arena_3d", config, generate.composition_for_preset("arena_3d"))
+        values = {
+            "Title (working)": "Orb Fields",
+            "Palette": "accent #FF7A1A",
+            "Dimension": "3D",
+            "Core verb (what the player does most)": "collect orbs",
+            "Win condition": "collect every orb in each round",
+            "Lose / fail condition": "the timer runs out or a hazard "
+                                     "touches you",
+            "Content counts (levels / waves / rooms / items, as "
+            "applicable)": "3 rounds",
+        }
+        derived = plan_module.derive_plan(values)
+        self.assertEqual(derived["movement"], "top_down_3d")
+        return world.world_from_plan(derived)
 
     def test_world_shape_and_gate(self):
         data = self._world()
@@ -145,18 +148,12 @@ class World3DTests(unittest.TestCase):
     def test_units_record_their_layout(self):
         # D5: the 3D path writes the same provenance the 2D
         # path does — placer name, per-round seed, gate outcome.
-        values = {"Title (working)": "Orb Fields",
-                  "Palette": "accent #FF7A1A"}
-        config, _ = generate.deterministic_config(
-            "arena_3d", values, generate._palette(values), 3)
-        data = world.world_from_config(
-            "arena_3d", config,
-            generate.composition_for_preset("arena_3d"))
+        data = self._world()
+        seed = data["plan"]["numbers"]["world_seed"]
         for index, unit in enumerate(data["units"]):
             layout = unit["layout"]
             self.assertEqual(layout["pattern"], "scatter3d")
-            self.assertEqual(layout["seed"],
-                             config["world_seed"] + index * 101)
+            self.assertEqual(layout["seed"], seed + index * 101)
             self.assertEqual(layout["gate"], "passed")
 
     def test_gate_catches_collectible_inside_obstacle(self):
@@ -202,9 +199,8 @@ class Full3DBuildTests(unittest.TestCase):
             generation = json.loads(
                 (project / ".weaverbird" / "generation_report.json")
                 .read_text(encoding="utf-8"))
-            self.assertEqual(generation["preset"], "arena_3d")
-            self.assertEqual(
-                generation["composition"]["dimension"], "3d")
+            self.assertEqual(generation["plan"]["movement"], "top_down_3d")
+            self.assertEqual(generation["plan"]["dimension"], "3d")
             config = json.loads(
                 (project / "game" / "game_config.json").read_text(
                     encoding="utf-8"))
@@ -254,26 +250,26 @@ class PaletteSkyTests(unittest.TestCase):
 
     def _template(self, name):
         path = (Path(generate.__file__).parent / "game_templates"
-                / "arena3d" / name)
+                / "runtime" / name)
         return path.read_text(encoding="utf-8")
 
     def test_no_hardcoded_default_sky(self):
-        self.assertNotIn("#BFE3F2", self._template("game.gd"))
+        self.assertNotIn("#BFE3F2", self._template("game3d.gd"))
 
     def test_background_derives_from_the_palette_accent(self):
-        text = self._template("game.gd")
+        text = self._template("game3d.gd")
         env_body = text.split("func _build_environment()")[1]
         self.assertIn("accent", env_body)
         self.assertIn("darkened", env_body)
         self.assertIn("background_color", env_body)
 
     def test_palette_is_read_from_the_config_top_level(self):
-        text = self._template("game.gd")
+        text = self._template("game3d.gd")
         # The old line, as a statement of its own, is gone.
         self.assertNotIn('\n\tpalette = config.get("palette", {})',
                          text)
         self.assertIn('"accent_hex"', text)
-        player = self._template("player.gd")
+        player = self._template("player3d.gd")
         self.assertIn('parsed.get("accent_hex"', player)
 
 

@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text  # noqa: E402
 
 from weaverbird import cli, generate, godot, mechanics, orchestrator  # noqa: E402
+from weaverbird import plan as plan_module  # noqa: E402
 from weaverbird import scope, skeleton, state, workers, world  # noqa: E402
 
 VALIDATE = godot.find_godot()[0] is not None
@@ -162,56 +163,55 @@ class RegistryTests(unittest.TestCase):
 
 
 class CompositionTests(unittest.TestCase):
+    """The derivation layer (0.11.0): the plan module, plus the
+    legacy composition mapping old projects still carry."""
+
     def test_presets_round_trip(self):
+        # Legacy internal mapping, kept for old projects.
         for name in generate.ARCHETYPES:
             comp = generate.composition_for_preset(name)
             self.assertEqual(generate.preset_for_composition(comp), name)
 
-    def test_derivation_picks_the_platformer_preset(self):
+    def test_derivation_picks_side_view(self):
         values = {
             "Genre / archetype": "2D platformer",
             "Core verb (what the player does most)": "jump and collect",
             "Win condition": "reach the door",
             "Lose / fail condition": "3 lives",
         }
-        derived = generate.derive_composition(values)
-        self.assertEqual(derived["preset"], "platformer")
-        self.assertEqual(derived["composition"]["movement"], "platform")
-        self.assertFalse(derived["bespoke"])
+        derived = plan_module.derive_plan(values)
+        self.assertEqual(derived["movement"], "side_view")
+        self.assertIsNone(derived["bespoke_required"])
 
-    def test_explicit_preset_in_scope_wins(self):
-        values = {"Genre / archetype": "preset: crate_pusher, a quiet game"}
-        derived = generate.derive_composition(values)
-        self.assertEqual(derived["preset"], "crate_pusher")
-
-    def test_bespoke_detection_is_conservative(self):
-        bespoke = generate.derive_composition({
+    def test_bespoke_detection(self):
+        bespoke = plan_module.derive_plan({
             "Genre / archetype": "narrative duel",
             "Core verb (what the player does most)":
                 "negotiate dialogue with a rival",
             "Win condition": "win the debate",
             "Lose / fail condition": "lose the argument",
         })
-        self.assertTrue(bespoke["bespoke"])
-        self.assertIsNone(bespoke["composition"])
-        # A vague scope keeps the historical default, never bespoke.
-        vague = generate.derive_composition({
+        self.assertIsNotNone(bespoke["bespoke_required"])
+        self.assertIsNone(bespoke["movement"])
+        # A vague scope keeps the plain default, never bespoke.
+        vague = plan_module.derive_plan({
             "Genre / archetype": "Filled in for the test",
             "Core verb (what the player does most)": "Filled in for the test",
             "Win condition": "Filled in for the test",
             "Lose / fail condition": "Filled in for the test",
         })
-        self.assertFalse(vague["bespoke"])
-        self.assertEqual(vague["preset"], "arena_collector")
-        # A bespoke signal WITH a primitive signal still composes.
-        mixed = generate.derive_composition({
+        self.assertIsNone(vague["bespoke_required"])
+        self.assertEqual(vague["movement"], "top_down_2d")
+        # An inexpressible mechanic stays bespoke even beside a
+        # primitive signal — no silent funnel into a near match.
+        mixed = plan_module.derive_plan({
             "Genre / archetype": "detective platformer",
             "Core verb (what the player does most)":
                 "jump between rooftops and interrogate suspects",
             "Win condition": "reach the courthouse",
             "Lose / fail condition": "fall",
         })
-        self.assertFalse(mixed["bespoke"])
+        self.assertIsNotNone(mixed["bespoke_required"])
 
 
 class WorldGateTests(unittest.TestCase):
@@ -255,11 +255,27 @@ class MechanicsGateTests(unittest.TestCase):
         self.assertEqual(issues[0]["owner"], "mechanics")
         self.assertEqual(issues[0]["kind"], "unhandled_entity")
 
-    def test_preset_worlds_are_fully_handled(self):
+    def test_legacy_worlds_are_fully_handled(self):
         for preset in generate.ARCHETYPES:
             data = {"entity_kinds": world.ENTITY_KINDS[preset]}
             self.assertEqual(
                 mechanics.check_coverage(data, {"preset": preset}), [])
+
+    def test_plan_worlds_are_fully_handled(self):
+        for replacements in (PLATFORMER, CRATE, {}):
+            text = filled_scope_text()
+            for prefix, line in replacements.items():
+                lines = text.splitlines()
+                text = "\n".join(
+                    line if existing.startswith(prefix) else existing
+                    for existing in lines) + "\n"
+            parsed = scope.parse_scope_text(text)
+            values = {f.name: f.value for f in parsed.fields}
+            derived = plan_module.derive_plan(values)
+            data = world.world_from_plan(derived)
+            self.assertEqual(
+                mechanics.check_coverage(data, {"plan": derived}), [],
+                derived["movement"])
 
 
 class HashAndRecordTests(unittest.TestCase):
@@ -437,15 +453,16 @@ class FullRunTests(unittest.TestCase):
             generation = json.loads(
                 (project / ".weaverbird" / "generation_report.json")
                 .read_text(encoding="utf-8"))
-            self.assertEqual(generation["preset"], "platformer")
-            self.assertEqual(generation["composition"]["movement"],
-                             "platform")
+            self.assertEqual(generation["plan"]["movement"], "side_view")
+            self.assertNotIn("preset", generation)
+            self.assertNotIn("composition", generation)
             self.assertIn("world_manifest", generation)
             self.assertEqual(generation["world_manifest"]["units"], 2)
             config = json.loads(
                 (project / "game" / "game_config.json").read_text(
                     encoding="utf-8"))
-            self.assertEqual(config["composition"]["structure"], "levels")
+            self.assertEqual(config["plan"]["movement"], "side_view")
+            self.assertNotIn("composition", config)
 
     def test_orchestrated_crate_run_skips_and_cascades(self):
         # The crate game is the one the existing suite exercises
@@ -461,9 +478,8 @@ class FullRunTests(unittest.TestCase):
             generation = json.loads(
                 (project / ".weaverbird" / "generation_report.json")
                 .read_text(encoding="utf-8"))
-            self.assertEqual(generation["preset"], "crate_pusher")
-            self.assertEqual(generation["composition"]["movement"],
-                             "grid")
+            self.assertEqual(generation["plan"]["movement"], "grid_step")
+            self.assertEqual(generation["plan"]["objective"], "deliver")
             final = state.load_state(project)
             self.assertEqual(final["stage"], "finished")
             self.assertTrue(all(final["definition_of_done"].values()))
@@ -491,13 +507,11 @@ class FullRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = scoped_project(tmp, CRATE)
             skeleton.build_skeleton(project, validate=False)
-            # Corrupt the world's source data: a crate already
-            # cornered in the build context the world worker
-            # generates from, mirrored into world.json.
+            # Corrupt the world's source data: strip the plan's
+            # entities in the build context the world worker
+            # generates from — the world gate must refuse it.
             build = generate.prepare_build(project, use_brain=False)
-            build["config"]["puzzles"][0]["grid"] = [
-                "#####", "#$  #", "# .@#", "#####"]
-            build["config"]["puzzles"][0]["solution"] = ""
+            build["plan"]["entities"] = []
             generate.save_build_context(project, build)
             plan = orchestrator.run(project, target="assembly")
             self.assertEqual(plan["outcome"], "failed")

@@ -98,7 +98,7 @@ _REASONS = {
              "game/world/world.json",
     "mechanics": "the player + game logic scripts that interpret "
                  "the world data",
-    "assets": "sprites, icon and audio from the composition + "
+    "assets": "sprites, icon and audio from the plan + "
               "world requests and the style-lock palette",
     "assembly": "wire shell + mechanics + world + assets into the "
                 "runnable game and validate it in Godot",
@@ -212,17 +212,32 @@ def plan(project_dir, target: str = "finished",
     return data
 
 
+def _params_carry_brain_fn(params: dict | None) -> bool:
+    """An injected brain function unblocks the bespoke path —
+    at the top level of the run params or nested under a
+    worker's own params (the mechanics step carries it)."""
+    if not params:
+        return False
+    if params.get("brain_fn") is not None:
+        return True
+    return any(isinstance(v, dict) and v.get("brain_fn") is not None
+               for v in params.values())
+
+
 def blocked_reason(project_dir, name: str,
                    settings_path=None, params: dict | None = None) -> str | None:
     """Why a worker is known-blocked before it starts, or None.
-    The standing case: bespoke mechanics with no usable brain —
-    the plan stops here, with the plain explanation, instead of
-    burning a run. An injected brain function (the test seam, or
-    an embedder's own writer) unblocks it."""
+    The standing case: the scope's plan requires bespoke
+    mechanics and no usable brain is configured — the plan
+    stops at the world step (before any game content exists)
+    with the plain explanation, instead of burning a run or
+    quietly building a different game. An injected brain
+    function (the test seam, or an embedder's own writer)
+    unblocks it."""
     project = Path(project_dir)
-    if name != "mechanics":
+    if name not in ("world", "mechanics"):
         return None
-    if params and params.get("brain_fn") is not None:
+    if _params_carry_brain_fn(params):
         return None
     from . import generate as generate_module
     from . import mechanics as mechanics_module
@@ -230,7 +245,8 @@ def blocked_reason(project_dir, name: str,
     if module.exists():
         return None
     values = workers_module.scope_values(project)
-    if not values or not generate_module.bespoke_reason(values):
+    why = generate_module.bespoke_reason(values) if values else None
+    if not why:
         return None
     from . import brain as brain_module
     _, data = brain_module.resolve_settings(settings_path, project)
@@ -238,12 +254,13 @@ def blocked_reason(project_dir, name: str,
         status = brain_module.tier_status(data, tier) if data else None
         if status and status["usable"]:
             return None
-    return ("This game's mechanics are bespoke — its core loop "
-            "cannot be composed from the factory's primitives — "
-            "and no usable brain (frontier or mid tier) is "
-            "configured to write the module. Configure one with "
-            "'weaverbird brain status' and re-run the plan, or "
-            "change the scope so the loop composes.")
+    return (f"This game's core mechanic needs bespoke work — "
+            f"{why} — and no usable brain (frontier or mid tier) "
+            "is configured to write the mechanics module. "
+            "Configure one with 'weaverbird brain status' and "
+            "re-run the plan, or change the scope so its "
+            "mechanic fits the vocabulary. No substitute game "
+            "has been built.")
 
 
 def _sync_state(project: Path, worker_name: str, reporter=None) -> None:

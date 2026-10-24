@@ -17,9 +17,26 @@ import helpers  # noqa: E402,F401  (puts src/ on sys.path)
 from weaverbird import world  # noqa: E402
 
 
-def arena_config(rounds=3, targets=5, seed=1234):
-    return {"rounds": rounds, "targets_per_round": targets,
-            "round_seconds": 60, "world_seed": seed}
+def arena_plan(rounds=3, targets=5, seed=1234):
+    """A top-down collect plan, as derive_plan would record it."""
+    return {
+        "movement": "top_down_2d", "objective": "collect",
+        "fail": ["timer", "hazard_contacts"], "lives": 1,
+        "entities": [
+            {"kind": "player", "label": "Player", "behaviour": "player"},
+            {"kind": "collectible", "label": "Targets",
+             "behaviour": "static"},
+            {"kind": "hazard", "label": "Hazards",
+             "behaviour": "patrol"},
+        ],
+        "numbers": {"units": rounds, "targets_per_round": targets,
+                    "targets_pinned": False, "round_seconds": 60,
+                    "world_seed": seed},
+    }
+
+
+def arena_world(rounds=3, targets=5, seed=1234):
+    return world.world_from_plan(arena_plan(rounds, targets, seed))
 
 
 def collinear(points) -> bool:
@@ -33,8 +50,7 @@ def collinear(points) -> bool:
 
 class ArenaLayoutTests(unittest.TestCase):
     def test_rounds_carry_positions_hazards_and_a_layout_record(self):
-        data = world.world_from_config(
-            "arena_collector", arena_config(), None)
+        data = arena_world()
         self.assertEqual(len(data["units"]), 3)
         for index, unit in enumerate(data["units"]):
             self.assertEqual(len(unit["collectibles"]),
@@ -48,8 +64,7 @@ class ArenaLayoutTests(unittest.TestCase):
     def test_the_app_test_case_is_not_a_straight_row(self):
         # The app-test game placed its 5 round-1 targets in a
         # dead-straight row (all at y≈110). That exact case:
-        data = world.world_from_config(
-            "arena_collector", arena_config(rounds=1, targets=5), None)
+        data = arena_world(rounds=1, targets=5)
         points = data["units"][0]["collectibles"]
         self.assertEqual(len(points), 5)
         self.assertFalse(collinear(points), points)
@@ -57,25 +72,20 @@ class ArenaLayoutTests(unittest.TestCase):
 
     def test_generated_worlds_pass_the_world_gate(self):
         for seed in (1, 42, 1234, 987654):
-            data = world.world_from_config(
-                "arena_collector", arena_config(seed=seed), None)
+            data = arena_world(seed=seed)
             self.assertEqual(world.validate_world(data), [],
                              f"seed {seed}")
 
     def test_same_seed_same_layout(self):
-        one = world.world_from_config(
-            "arena_collector", arena_config(seed=77), None)
-        two = world.world_from_config(
-            "arena_collector", arena_config(seed=77), None)
+        one = arena_world(seed=77)
+        two = arena_world(seed=77)
         self.assertEqual(
             [u["collectibles"] for u in one["units"]],
             [u["collectibles"] for u in two["units"]])
 
     def test_different_seed_different_layout(self):
-        one = world.world_from_config(
-            "arena_collector", arena_config(seed=77), None)
-        two = world.world_from_config(
-            "arena_collector", arena_config(seed=78), None)
+        one = arena_world(seed=77)
+        two = arena_world(seed=78)
         self.assertNotEqual(
             [u["collectibles"] for u in one["units"]],
             [u["collectibles"] for u in two["units"]])

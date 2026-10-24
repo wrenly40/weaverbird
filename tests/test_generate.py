@@ -1,9 +1,10 @@
 """Tests for real game generation (generate.py).
 
-Pure-logic tests (archetype detection, the crate solver, level
+Pure-logic tests (plan derivation, the crate solver, level
 invariants, brain-proposal clamping) run everywhere; the builds
 that validate in Godot run when Godot is available, like the
-skeleton tests.
+skeleton tests. The legacy deterministic-config path that old
+projects still build through is covered as compatibility.
 """
 
 import io
@@ -17,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text, template_scope_text  # noqa: E402
 
-from weaverbird import generate, ledger, provenance, scope, skeleton, state  # noqa: E402
+from weaverbird import generate, ledger, plan, provenance, scope, skeleton, state  # noqa: E402
 from weaverbird import brain as brain_module  # noqa: E402
 from weaverbird import godot as godot_module  # noqa: E402
 
@@ -46,6 +47,9 @@ COUNTS = ("- REQUIRED Content counts (levels / waves / rooms / items, "
 
 
 class DetectionTests(unittest.TestCase):
+    """The plan derivation that replaced archetype detection:
+    the same scope words, read as movement + objective."""
+
     def values(self, **overrides):
         base = {
             "Genre / archetype": "", "Core verb (what the player does most)": "",
@@ -54,43 +58,28 @@ class DetectionTests(unittest.TestCase):
         base.update(overrides)
         return base
 
-    def test_platform_words_choose_platformer(self):
-        archetype, why = generate.detect_archetype(
+    def test_platform_words_choose_side_view(self):
+        derived = plan.derive_plan(
             self.values(**{"Genre / archetype": "2D platformer"}))
-        self.assertEqual(archetype, "platformer")
-        self.assertTrue(why)
+        self.assertEqual(derived["movement"], "side_view")
+        self.assertTrue(derived["derivations"])
 
-    def test_jump_verb_chooses_platformer(self):
-        archetype, _ = generate.detect_archetype(self.values(
+    def test_jump_verb_chooses_side_view(self):
+        derived = plan.derive_plan(self.values(
             **{"Core verb (what the player does most)": "run and jump"}))
-        self.assertEqual(archetype, "platformer")
+        self.assertEqual(derived["movement"], "side_view")
 
-    def test_crate_puzzle_words_choose_crate_pusher(self):
-        archetype, _ = generate.detect_archetype(self.values(
+    def test_crate_puzzle_words_choose_grid_step(self):
+        derived = plan.derive_plan(self.values(
             **{"Genre / archetype": "puzzle game with crates to push"}))
-        self.assertEqual(archetype, "crate_pusher")
+        self.assertEqual(derived["movement"], "grid_step")
+        self.assertEqual(derived["objective"], "deliver")
 
-    def test_no_signal_defaults_to_arena(self):
-        archetype, why = generate.detect_archetype(
+    def test_no_signal_defaults_to_top_down(self):
+        derived = plan.derive_plan(
             self.values(**{"Genre / archetype": "arena survivor"}))
-        self.assertEqual(archetype, "arena_collector")
-        self.assertIn("default", why)
-
-    def test_scope_note_beats_detection(self):
-        archetype, _ = generate.detect_archetype(self.values(
-            **{"Genre / archetype": "platformer — archetype: crate_pusher"}))
-        self.assertEqual(archetype, "crate_pusher")
-
-    def test_override_beats_everything(self):
-        archetype, why = generate.detect_archetype(
-            self.values(**{"Genre / archetype": "platformer"}),
-            override="arena")
-        self.assertEqual(archetype, "arena_collector")
-        self.assertIn("override", why)
-
-    def test_unknown_override_is_refused(self):
-        with self.assertRaises(generate.GenerationError):
-            generate.detect_archetype(self.values(), override="shmup")
+        self.assertEqual(derived["movement"], "top_down_2d")
+        self.assertIn("default", " ".join(derived["derivations"]))
 
     def test_content_units_parse_and_clamp(self):
         field = "Content counts (levels / waves / rooms / items, as applicable)"
@@ -248,6 +237,10 @@ class PlatformerLevelTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    """Legacy compatibility: projects built by older versions
+    still resolve their deterministic configs (the repair loop
+    rebuilds them through this path)."""
+
     def test_deterministic_configs_carry_units(self):
         values = {
             "Content counts (levels / waves / rooms / items, as applicable)":
@@ -318,6 +311,41 @@ class BrainProposalTests(unittest.TestCase):
             self.assertEqual(tuned, config)
             self.assertIn("failed", note)
 
+    def test_plan_tuning_is_validated_and_clamped(self):
+        # The genre-agnostic path: the brain tunes the plan's
+        # numbers, clamped to the plan bounds for its movement.
+        brain_module.complete = lambda *a, **k: brain_module.BrainResult(
+            ok=True, text='{"player_speed": 9999, "hazard_speed": 0.01}',
+            provider="openai", model="fake")
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, {
+                "- REQUIRED Core verb (what the player does most): Filled in for the test":
+                    "- REQUIRED Core verb (what the player does most): gather apples while wasps patrol the orchard",
+                "- REQUIRED Win condition: Filled in for the test":
+                    "- REQUIRED Win condition: Collect 6 apples in each round",
+                COUNTS: "- REQUIRED Content counts (levels / waves / rooms / items, as applicable): 1 rounds",
+            })
+            skeleton.build_skeleton(project, validate=False)
+            ctx = generate.prepare_build(project)
+            self.assertTrue(ctx["brain_used"], ctx["brain_note"])
+            self.assertEqual(ctx["config"]["player_speed"], 420.0)
+            self.assertEqual(ctx["config"]["hazard_speed"], 0.6)
+            self.assertEqual(ctx["plan"]["numbers"]["player_speed"], 420.0)
+
+    def test_plan_tuning_never_moves_a_pinned_count(self):
+        brain_module.complete = lambda *a, **k: brain_module.BrainResult(
+            ok=True, text='{"targets_per_round": 2}',
+            provider="openai", model="fake")
+        with tempfile.TemporaryDirectory() as tmp:
+            project = scoped_project(tmp, {
+                "- REQUIRED Win condition: Filled in for the test":
+                    "- REQUIRED Win condition: Collect 6 apples in each round",
+                COUNTS: "- REQUIRED Content counts (levels / waves / rooms / items, as applicable): 1 rounds",
+            })
+            skeleton.build_skeleton(project, validate=False)
+            ctx = generate.prepare_build(project)
+            self.assertEqual(ctx["config"]["targets_per_round"], 6)
+
 
 class BuildRefusalTests(unittest.TestCase):
     def test_refuses_without_a_skeleton(self):
@@ -354,16 +382,22 @@ class BuildShapeTests(unittest.TestCase):
             skeleton.build_skeleton(project, validate=False)
             report = generate.build_game(project, validate=False,
                                          use_brain=False)
-            self.assertEqual(report["archetype"], "platformer")
+            self.assertEqual(report["plan"]["movement"], "side_view")
+            self.assertNotIn("archetype", report)
             self.assertEqual(report["units_delivered"], 2)
             game = project / "game"
             config = json.loads((game / "game_config.json").read_text())
-            self.assertEqual(config["archetype"], "platformer")
-            self.assertEqual(len(config["levels"]), 2)
+            self.assertEqual(config["plan"]["movement"], "side_view")
+            self.assertNotIn("archetype", config)
+            self.assertNotIn("levels", config)
+            world = json.loads((game / "world" / "world.json").read_text())
+            self.assertEqual(len(world["units"]), 2)
+            self.assertEqual(world["plan"]["movement"], "side_view")
             for rel in ("tests/competent_win.gd", "tests/competent_lose.gd",
                         "tests/breaker.gd", "tests/first_time.gd",
                         "smoke/smoke.gd", "scripts/asset_loader.gd",
-                        "scripts/star.gd", "scripts/player.gd"):
+                        "scripts/star.gd", "scripts/player.gd",
+                        "scripts/marker.gd", "scripts/door_draw.gd"):
                 self.assertTrue((game / rel).exists(), rel)
             game_gd = (game / "scripts/game.gd").read_text()
             self.assertIn("game_config.json", game_gd)
@@ -375,7 +409,7 @@ class BuildShapeTests(unittest.TestCase):
 
 @unittest.skipUnless(VALIDATE, "Godot validation not available")
 class BuildValidationTests(unittest.TestCase):
-    """One real validated build per archetype, small scopes."""
+    """One real validated build per movement family, small scopes."""
 
     def _build(self, tmp, replacements):
         project = scoped_project(tmp, replacements)
@@ -401,7 +435,7 @@ class BuildValidationTests(unittest.TestCase):
                 GENRE: "- REQUIRED Genre / archetype: puzzle — push crates onto pads",
                 COUNTS: "- REQUIRED Content counts (levels / waves / rooms / items, as applicable): 1 puzzles",
             })
-            self.assertEqual(report["archetype"], "crate_pusher")
+            self.assertEqual(report["plan"]["movement"], "grid_step")
             self.assertTrue(report["validation"]["passed"],
                             report["validation"])
 
@@ -410,7 +444,7 @@ class BuildValidationTests(unittest.TestCase):
             _project, report = self._build(tmp, {
                 COUNTS: "- REQUIRED Content counts (levels / waves / rooms / items, as applicable): 1 rounds",
             })
-            self.assertEqual(report["archetype"], "arena_collector")
+            self.assertEqual(report["plan"]["movement"], "top_down_2d")
             self.assertTrue(report["validation"]["passed"],
                             report["validation"])
 

@@ -313,8 +313,13 @@ def _run_world(project, ctx):
                       + "; ".join(i["detail"] for i in issues),
                       artifacts=[world_module.WORLD_REL], issues=issues)
     manifest = world_module.world_manifest(world_data)
+    plan_line = ""
+    if manifest.get("movement"):
+        plan_line = (f"Plan: {manifest['movement']} / "
+                     f"{manifest.get('objective', '')} — ")
     return result(True,
-                  f"World written: {manifest['units']} unit(s), "
+                  plan_line
+                  + f"World written: {manifest['units']} unit(s), "
                   f"entity kinds {', '.join(manifest['entity_kinds'])}; "
                   "its gate passes.",
                   artifacts=[world_module.WORLD_REL],
@@ -382,7 +387,7 @@ def _run_assets(project, ctx):
         return result(False, str(exc),
                       issues=[issue("assets_failed", str(exc), "assets")])
     requests = report.get("requests", {})
-    based_on = requests.get("based_on", "the composition")
+    based_on = requests.get("based_on", "the plan")
     return result(True,
                   f"Assets generated: {len(report['files'])} files "
                   f"(requests from {based_on}), every one in the "
@@ -656,6 +661,7 @@ _register(WorkerSpec(
     scope_fields=("Title (working)", "Dimension", "Genre / archetype",
                   "Core verb (what the player does most)",
                   "Win condition", "Lose / fail condition",
+                  "One-line pitch", "Must-have features (max 3)",
                   "Session length (one sitting)",
                   "Difficulty target (who it is for, how hard)",
                   "Content counts (levels / waves / rooms / items, as applicable)"),

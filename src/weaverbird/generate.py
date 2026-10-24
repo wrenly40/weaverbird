@@ -2,12 +2,27 @@
 
 The skeleton (stage 2) is one generic grey-box loop for every game.
 This stage is where the game the scope actually describes gets
-built. It picks an archetype from the scope — arena collector,
-platformer, or crate pusher — generates that game's core into
-``<project>/game/`` on top of the skeleton's shell (menus, settings,
-pause and save are the skeleton's and stay), tunes it from a config
-derived from the scope, and validates the result with the same
-Godot headless discipline as the skeleton.
+built, into ``<project>/game/`` on top of the skeleton's shell
+(menus, settings, pause and save are the skeleton's and stay),
+tuned from a config derived from the scope, and validated with
+the same Godot headless discipline as the skeleton.
+
+Since 0.11.0 generation is genre-agnostic: plan.py derives a
+GAME PLAN from the scope's own words (a movement and objective
+from the primitive vocabulary, entities with the maker's labels
+and behaviours, the scope's numbers), world.py builds the world
+from the plan, and mechanics.py writes the ONE generic runtime
+that executes any plan. No scope is matched into a named preset
+any more. When the plan finds the scope's core mechanic outside
+the vocabulary, the build takes the bespoke path (a brain-written
+mechanics module) or stops at the plan — never a substitute game.
+
+The preset machinery below (PRESETS, derive_composition,
+deterministic_config, the archetype override in prepare_build)
+is the LEGACY route, retained only so projects built before
+0.11.0 can still be rebuilt, repaired and patched; repair.py
+supplies the old archetype explicitly for those projects. No new
+scope is ever routed through it.
 
 Design rules, in keeping with the factory's token economy:
 
@@ -19,11 +34,11 @@ Design rules, in keeping with the factory's token economy:
   reads its tuning from ``game/game_config.json`` at runtime —
   tuning is data, not template surgery.
 - Content units come from the scope's content counts (first integer,
-  clamped 1–20): platformer levels, arena rounds, crate puzzles.
-- Crate puzzles ship only when a solver in this module has verified
+  clamped 1–20): levels, rounds or puzzles, as the plan says.
+- Grid puzzles ship only when a solver in this module has verified
   them solvable; the verified solution (and, for the first puzzle, a
-  sabotage line that corners a crate, when one exists) travels in
-  the config so the scripted playtesters can play them.
+  sabotage line that corners a pushable, when one exists) travels in
+  the world data so the scripted playtesters can play them.
 """
 
 from __future__ import annotations
@@ -236,19 +251,22 @@ def _scope_text(values: dict) -> str:
 def bespoke_reason(values: dict) -> str | None:
     """Why this scope needs bespoke mechanics, or None.
 
-    Conservative by design (see _BESPOKE_SIGNALS): a bespoke signal
-    with no primitive signal anywhere in the genre/verb/win/lose
-    text. Anything else composes — or falls back to the arena
-    preset exactly as detection always has.
-    """
-    text = _scope_text(values)
-    hits = [signal for signal in _BESPOKE_SIGNALS if signal in text]
-    if not hits:
+    Since 0.11.0 this is the plan derivation's verdict: a named
+    mechanic the primitive vocabulary cannot express (tower
+    defence, match-3, dialogue trees, ordered-checkpoint racing,
+    3D platforming, …), or a core loop built on an unbuildable
+    signal with no primitive signal at all. Anything the
+    vocabulary CAN express returns None — there is no fallback
+    preset any more."""
+    from . import plan as plan_module
+
+    plan = plan_module.derive_plan(values)
+    required = plan.get("bespoke_required")
+    if not required:
         return None
-    if any(signal in text for signal in _PRIMITIVE_SIGNALS):
-        return None
-    return (f"the scope's core loop ({hits[0]!r}) cannot be composed "
-            "from the movement/objective/fail primitives")
+    return (f"{required['mechanic']} — {required['because']}; "
+            "the primitive vocabulary (four movements, four "
+            "objectives, three fail rules) cannot express it")
 
 
 def _apply_dimension(derived: dict, values: dict) -> dict:
@@ -1066,21 +1084,19 @@ def brain_proposal(project, archetype: str, config: dict,
 # The build summary — what WILL be built, before anything runs
 #
 # The project page shows this ahead of the first run (0.10.0): the
-# composition generation derives from the scope, and the key
+# PLAN generation derives from the scope (0.11.0), and the key
 # numbers it will use, each flagged "from your scope" or "default"
 # — so a scope-stated number (F7) is visible before generation,
 # not discovered after it. Everything here is derived from the
-# scope plus the same defaults deterministic_config uses; nothing
+# scope plus the same defaults the plan derivation uses; nothing
 # is built and nothing is spent.
-
-_UNIT_WORDS = {"platformer": "levels", "crate_pusher": "puzzles"}
 
 
 def build_summary(project_dir) -> dict:
     """The pre-build summary for a project (see the note above).
 
-    Tolerant of a missing or partial scope: the composition is
-    still derived from whatever text exists (the same derivation
+    Tolerant of a missing or partial scope: the plan is still
+    derived from whatever text exists (the same derivation
     generation will run), and `complete` says how firm it is."""
     from . import world as world_module
 
@@ -1095,32 +1111,35 @@ def build_summary(project_dir) -> dict:
             parsed = None
     if parsed is not None:
         values = _values(parsed)
-    derived = derive_composition(values)
-    preset = derived["preset"]
+    from . import plan as plan_module
+
+    plan = plan_module.derive_plan(values)
     units = content_units(values)
     palette = _palette(values)
     minutes = skeleton_module._session_minutes(
         values.get("Session length (one sitting)", ""))
     round_seconds = skeleton_module._round_seconds(minutes)
+    plan_numbers = plan.get("numbers", {})
 
     numbers: list[dict] = []
-    unit_word = _UNIT_WORDS.get(preset or "", "rounds")
+    unit_word = plan_module.unit_word(plan)
     numbers.append({
         "label": f"Content units ({unit_word})", "value": units,
         "source": "scope" if _INT_RE.search(
             values.get("Content counts (levels / waves / rooms / "
                        "items, as applicable)", "") or "") else "default",
+        "note": "",
     })
-    if preset in ("arena_collector", "arena_3d"):
+    if "targets_per_round" in plan_numbers:
         found = scope_target_count(values)
-        base = found["used"] if found else 5
+        base = plan_numbers["targets_per_round"]
         # The counts each round will actually REQUIRE (D6): a
         # scope-stated number pins every round to it; otherwise
         # the rounds escalate. Stated as the rounds themselves,
         # so a pinned "8" reads "8 in every round" and an
         # escalating build reads "5, 6, 7 across rounds" — the
         # maker sees the real requirement before anything runs.
-        if found:
+        if plan_numbers.get("targets_pinned"):
             per_round = [base] * max(units, 1)
         else:
             per_round = [min(base + i, TARGET_COUNT_MAX)
@@ -1131,7 +1150,8 @@ def build_summary(project_dir) -> dict:
             per_round_text = (", ".join(str(c) for c in per_round)
                               + " across rounds")
         numbers.append({
-            "label": "Targets per round",
+            "label": f"{plan.get('collectible_label', 'Targets')} "
+                     "per round",
             "value": per_round_text,
             "source": "scope" if found else "default",
             "note": (f"your scope says {found['stated']}"
@@ -1142,46 +1162,46 @@ def build_summary(project_dir) -> dict:
             "label": "Round time limit", "value": f"{round_seconds}s",
             "source": "scope" if minutes else "default", "note": "",
         })
+    hazard = next((e for e in plan.get("entities", [])
+                   if e.get("kind") == "hazard"), None)
+    if hazard is not None:
         numbers.append({
             "label": "Hazards",
-            "value": ("2 patrols in round 1, +1 per round, up to 4, "
-                      "plus obstacle blocks" if preset == "arena_3d"
-                      else "2 in round 1, +1 per round, up to 5"),
+            "value": f"{hazard.get('label', 'Hazards')} — "
+                     f"{hazard.get('behaviour', 'patrol')}",
             "source": "default", "note": "",
         })
-    elif preset == "platformer":
-        lives = _scope_int(
-            values,
-            ("Lose / fail condition",
-             "Difficulty target (who it is for, how hard)"),
-            r"(\d+)\s*(?:lives|life)")
+    if plan.get("movement") == "side_view":
         numbers.append({
-            "label": "Lives", "value": lives or 3,
-            "source": "scope" if lives else "default", "note": "",
+            "label": "Lives", "value": plan_numbers.get("lives", 3),
+            "source": "scope" if plan_module._scope_lives(values)
+            else "default", "note": "",
         })
+    if plan.get("movement") == "grid_step":
         numbers.append({
-            "label": "Hazards", "value": "spike pits in every level",
+            "label": "Move budget",
+            "value": "from each puzzle's verified solution "
+                     f"× {plan_numbers.get('move_budget_multiplier', 2.5)}",
             "source": "default", "note": "",
         })
-    composition = derived["composition"] or {}
     return {
         "scope_present": parsed is not None,
         "complete": bool(parsed and parsed.is_complete),
         "approved": bool(parsed and parsed.is_approved),
         "title": values.get("Title (working)", ""),
-        "preset": preset,
-        "bespoke": bool(derived["bespoke"]),
-        "reason": derived["reason"],
-        "composition": derived["composition"],
-        "dimension": composition.get("dimension", "2d"),
+        "plan": plan,
+        "bespoke": plan.get("bespoke_required") is not None,
+        "bespoke_required": plan.get("bespoke_required"),
+        "reason": plan_reason(plan),
+        "dimension": plan.get("dimension", "2d"),
         "units": units,
         "unit_word": unit_word,
         "numbers": numbers,
         "palette": palette,
         "style": values.get(
             "Style sample chosen (id / link to approved sample)", ""),
-        "asset_kinds": list(
-            world_module.ENTITY_KINDS.get(preset or "", [])),
+        "asset_kinds": plan_module.entity_kinds(plan) or ["bespoke"],
+        "collectible_label": plan.get("collectible_label", "Targets"),
     }
 
 
@@ -1251,6 +1271,178 @@ def _write_report(project_dir, report: dict) -> None:
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# The genre-agnostic build path (0.11.0): plan -> config
+
+def plan_reason(plan: dict) -> str:
+    """One sentence for reports: what the plan is and why."""
+    if plan.get("bespoke_required"):
+        required = plan["bespoke_required"]
+        return (f"bespoke — {required['mechanic']} "
+                f"({required['because']})")
+    return (f"plan derived from the scope — movement "
+            f"{plan.get('movement')}, objective "
+            f"{plan.get('objective')}, fail "
+            f"{', '.join(plan.get('fail', [])) or 'move budget'}")
+
+
+def plan_config(plan: dict, values: dict, palette: dict) -> dict:
+    """game_config.json for a plan-built game: the palette, the
+    plan itself, and the plan's numbers as named top-level
+    tunables (round_seconds, hazard_speed, targets_per_round,
+    jump_strength, …) so the patch loop can tune a new game
+    exactly as it tuned the old ones."""
+    from . import plan as plan_module
+
+    numbers = plan.get("numbers", {})
+    config: dict = dict(palette)
+    config.update({
+        "objective_hint": plan_module.objective_hint(plan, values),
+        "dimension": plan.get("dimension", "2d"),
+        "plan": plan,
+        "collectible_label": plan.get("collectible_label", "Targets"),
+        "units": int(numbers.get("units", 5)),
+        "world_seed": int(numbers.get("world_seed", 0)),
+        "round_seconds": float(numbers.get("round_seconds", 60.0)),
+        "lives": int(numbers.get("lives", 1)),
+    })
+    movement = plan.get("movement")
+    if movement in ("top_down_2d", "top_down_3d"):
+        config["rounds"] = config["units"]
+    if "targets_per_round" in numbers:
+        config["targets_per_round"] = int(numbers["targets_per_round"])
+    if "player_speed" in numbers:
+        config["player_speed"] = float(numbers["player_speed"])
+    if "hazard_speed" in numbers:
+        config["hazard_speed"] = float(numbers["hazard_speed"])
+    if movement == "side_view":
+        config["jump_strength"] = float(numbers.get("jump_strength", 545.0))
+        config["gravity"] = float(numbers.get("gravity", 1400.0))
+        config["timer_seconds"] = (
+            float(numbers.get("round_seconds", 60.0))
+            if "timer" in plan.get("fail", []) else 0)
+    if movement == "grid_step":
+        config["move_budget_multiplier"] = float(
+            numbers.get("move_budget_multiplier", 2.5))
+    return config
+
+
+def _brain_tune_plan(project, plan: dict, config: dict, values: dict,
+                     settings_path=None):
+    """The mid-tier tuning pass for a plan build — the same
+    discipline as brain_proposal (strict JSON, validated,
+    clamped, scope-pinned numbers untouchable), with the bounds
+    of the plan's movement. Returns (config, plan, used, note);
+    any failure returns the deterministic config untouched."""
+    from . import plan as plan_module
+
+    _, data = brain_module.resolve_settings(settings_path, project)
+    status = brain_module.tier_status(data, "mid") if data else None
+    if not status or not status["usable"]:
+        reason = status["reason"] if status else "no settings file found"
+        return config, plan, False, f"no usable mid-tier model ({reason})"
+    bounds = plan_module.PLAN_BOUNDS.get(plan.get("movement") or "", {})
+    pinned = {"targets_per_round"} if "scope_numbers" in config else set()
+    wanted = {key: {"current": config.get(key), "min": lo, "max": hi}
+              for key, (lo, hi) in bounds.items()
+              if key not in pinned and key in config}
+    if not wanted:
+        return config, plan, False, "no tunable numbers in this plan"
+    prompt = (
+        f"Game plan: movement {plan.get('movement')}, objective "
+        f"{plan.get('objective')}, fail "
+        f"{', '.join(plan.get('fail', []))}.\n"
+        "Scope in brief: " + "; ".join(
+            f"{name} = {values.get(name, '')}" for name in (
+                "Genre / archetype", "Core verb (what the player does most)",
+                "Difficulty target (who it is for, how hard)")) + "\n"
+        "Tune these numbers (name: {current, min, max}):\n"
+        + json.dumps(wanted) + "\nReturn the JSON object now."
+    )
+    try:
+        result = brain_module.complete(
+            project, "mid",
+            [{"role": "system", "content": _BRAIN_SYSTEM},
+             {"role": "user", "content": prompt}],
+            stage="build", settings_path=settings_path, max_tokens=240)
+    except brain_module.BrainBudgetError as exc:
+        return config, plan, False, f"brain refused by budget ({exc})"
+    if not result.ok:
+        return config, plan, False, f"brain call failed ({result.error})"
+    answers = brain_module._parse_extraction(result.text)
+    tuned = dict(config)
+    new_plan = dict(plan)
+    new_numbers = dict(plan.get("numbers", {}))
+    applied = []
+    for key, (lo, hi) in bounds.items():
+        if key in pinned or key not in answers or key not in tuned:
+            continue
+        try:
+            value = float(answers[key])
+        except (TypeError, ValueError):
+            continue
+        value = min(max(value, lo), hi)
+        tuned[key] = int(value) if isinstance(tuned[key], int) else value
+        if key in new_numbers:
+            new_numbers[key] = tuned[key]
+        applied.append(key)
+    if not applied:
+        return config, plan, False, \
+            "brain replied but no usable numbers were in range"
+    new_plan["numbers"] = new_numbers
+    tuned["plan"] = new_plan
+    note = ("mid tier (%s/%s) proposed, validated and clamped: %s"
+            % (result.provider, result.model, ", ".join(sorted(applied))))
+    if result.warning:
+        note += " " + result.warning
+    return tuned, new_plan, True, note
+
+
+def _prepare_plan_build(project, values: dict, settings_path=None,
+                        use_brain: bool = True, reporter=None) -> dict:
+    """prepare_build's genre-agnostic route: derive the plan,
+    build the config from it, tune if a brain is usable."""
+    from . import plan as plan_module
+
+    plan = plan_module.derive_plan(values)
+    palette = _palette(values)
+    units = content_units(values)
+    reason = plan_reason(plan)
+    if plan.get("bespoke_required"):
+        config = {"archetype": "bespoke", **palette,
+                  "objective_hint": _HINTS["bespoke"],
+                  "plan": plan,
+                  "dimension": plan.get("dimension", "2d")}
+        if reporter is not None:
+            reporter(f"Bespoke mechanics: {reason}; "
+                     f"{units} content unit(s) requested")
+        return {
+            "values": values, "plan": plan, "bespoke": True,
+            "reason": reason, "palette": palette, "units": units,
+            "config": config, "brain_used": False,
+            "brain_note": "bespoke mechanics — no number tuning",
+        }
+    config = plan_config(plan, values, palette)
+    _apply_scope_target_count(config, values)
+    brain_used = False
+    brain_note = "brain not attempted"
+    if reporter is not None:
+        reporter(f"Plan: {reason}; {units} content unit(s) "
+                 "from the scope")
+    if use_brain:
+        config, plan, brain_used, brain_note = _brain_tune_plan(
+            project, plan, config, values, settings_path=settings_path)
+        if reporter is not None:
+            reporter(f"Tuning: {'proposed by the model' if brain_used else 'deterministic'} "
+                     f"— {brain_note}")
+    return {
+        "values": values, "plan": plan, "bespoke": False,
+        "reason": reason, "palette": palette, "units": units,
+        "config": config, "brain_used": brain_used,
+        "brain_note": brain_note,
+    }
+
+
 def prepare_build(project_dir, archetype: str | None = None,
                   settings_path=None, use_brain: bool = True,
                   reporter=None) -> dict:
@@ -1287,6 +1479,15 @@ def prepare_build(project_dir, archetype: str | None = None,
         )
 
     values = _values(parsed)
+    if archetype is None:
+        # The genre-agnostic route (0.11.0): every new build is
+        # planned from the scope. The legacy composition path
+        # below runs only when a caller passes an archetype
+        # explicitly — repair.py does that for projects built
+        # before 0.11.0, and nothing else may.
+        return _prepare_plan_build(
+            project, values, settings_path=settings_path,
+            use_brain=use_brain, reporter=reporter)
     derived = derive_composition(values, override=archetype)
     palette = _palette(values)
     units = content_units(values)
@@ -1355,6 +1556,17 @@ def run_world_step(project_dir, ctx: dict, attempt: int = 0):
     from . import world as world_module
 
     project = Path(project_dir)
+    if isinstance(ctx.get("plan"), dict):
+        # The genre-agnostic route (0.11.0): the world comes
+        # from the plan. A retry shifts the side-view level seed
+        # inside world_from_plan, as the legacy retry did.
+        if ctx.get("bespoke"):
+            world_data = world_module.bespoke_world(ctx)
+        else:
+            world_data = world_module.world_from_plan(
+                ctx["plan"], ctx.get("config", {}), attempt)
+        world_module.write_world(project, world_data)
+        return world_data, world_module.validate_world(world_data)
     if attempt > 0 and ctx.get("preset") == "platformer":
         import zlib
         seed = zlib.crc32(
@@ -1384,6 +1596,107 @@ def run_mechanics_step(project_dir, ctx: dict, world_data: dict):
     return written, issues
 
 
+def _run_assembly_plan_step(project, ctx: dict, world_data: dict,
+                            written: list, godot_path=None,
+                            validate: bool = True,
+                            reporter=None) -> dict:
+    """Assembly for a plan-built game (0.11.0): the same wiring,
+    validation, provenance and known-good discipline as the
+    legacy step, but the config and the report speak plan —
+    movement, objective, entities, derivations — and carry no
+    preset or composition fields at all."""
+    from . import world as world_module
+
+    plan = ctx["plan"]
+    game_dir = project / GAME_DIR_NAME
+    config = dict(ctx["config"])
+    written = list(written)
+    config_rel = f"{GAME_DIR_NAME}/game_config.json"
+    (game_dir / "game_config.json").write_text(
+        json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    if config_rel not in written:
+        written.append(config_rel)
+    world_rel = f"{GAME_DIR_NAME}/world/world.json"
+    if world_rel not in written:
+        written.append(world_rel)
+    written.sort()
+    bespoke = bool(ctx.get("bespoke"))
+    label = ("bespoke" if bespoke else
+             f"{plan.get('movement')} / {plan.get('objective')}")
+    if reporter is not None:
+        reporter(f"Assembled the {label} game ({len(written)} files)")
+
+    report = {
+        "stage": "build",
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "movement": plan.get("movement"),
+        "objective": plan.get("objective"),
+        "plan": {
+            "movement": plan.get("movement"),
+            "objective": plan.get("objective"),
+            "dimension": plan.get("dimension"),
+            "fail": plan.get("fail", []),
+            "entities": [
+                {"kind": e.get("kind"), "label": e.get("label"),
+                 "behaviour": e.get("behaviour")}
+                for e in plan.get("entities", [])],
+            "derivations": plan.get("derivations", []),
+        },
+        "bespoke": bespoke,
+        "world_manifest": world_module.world_manifest(world_data),
+        "brain_used": ctx.get("brain_used", False),
+        "brain_note": ctx.get("brain_note", ""),
+        "config": {k: v for k, v in config.items()
+                   if k not in ("levels", "puzzles")},
+        "units_delivered": (1 if bespoke else
+                            len(world_data.get("units", []))),
+        "units_requested": ctx["units"],
+        "files": written,
+        "validation": {"ran": False, "passed": False},
+        "known_good_tag": None,
+        "commit": None,
+    }
+    if bespoke:
+        report["bespoke_required"] = plan.get("bespoke_required")
+
+    if validate:
+        report["validation"] = skeleton_module.validate_project(
+            project, godot_path=godot_path, reporter=reporter)
+
+    for rel in written:
+        provenance_module.add_record(
+            project, rel, "code", provider=PROVENANCE_PROVIDER,
+            note=f"weaverbird generator — plan {label}")
+    if not ctx.get("brain_used"):
+        ledger_module.add_entry(project, "build", "cheap", 0, 0.0)
+    _write_report(project, report)
+
+    if validate and not report["validation"]["passed"]:
+        digest = skeleton_module._failure_digest(report["validation"])
+        raise GenerationError(
+            "Godot validation failed, so the generated game is not "
+            f"known-good and was not tagged. {digest} "
+            f"Full report: {report_path_for(project)}"
+        )
+
+    vcs_module.init_repo(project)
+    vcs_module.ensure_local_identity(project)
+    try:
+        report["commit"] = vcs_module.commit_all(
+            project, f"Weaverbird build: {label} game from the "
+            "approved scope")
+    except vcs_module.VcsError:
+        report["commit"] = None
+    if validate and KNOWN_GOOD_TAG not in vcs_module.list_tags(project):
+        vcs_module.tag_known_good(project, KNOWN_GOOD_TAG)
+    if validate:
+        report["known_good_tag"] = KNOWN_GOOD_TAG
+    if validate and reporter is not None:
+        reporter("Committed and tagged known-good/build")
+    _write_report(project, report)
+    return report
+
+
 def run_assembly_step(project_dir, ctx: dict, world_data: dict,
                       written: list, godot_path=None,
                       validate: bool = True, reporter=None) -> dict:
@@ -1394,6 +1707,10 @@ def run_assembly_step(project_dir, ctx: dict, world_data: dict,
     from . import world as world_module
 
     project = Path(project_dir)
+    if isinstance(ctx.get("plan"), dict):
+        return _run_assembly_plan_step(
+            project, ctx, world_data, written, godot_path=godot_path,
+            validate=validate, reporter=reporter)
     game_dir = project / GAME_DIR_NAME
     config = dict(ctx["config"])
     config["composition"] = ctx.get("composition")

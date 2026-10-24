@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import filled_scope_text, template_scope_text  # noqa: E402
 
 from weaverbird import finish, generate, scope, state, world  # noqa: E402
+from weaverbird import plan as plan_module  # noqa: E402
 
 WIN = "- REQUIRED Win condition: Filled in for the test"
 COUNTS = ("- REQUIRED Content counts (levels / waves / rooms / items, "
@@ -215,9 +216,9 @@ class ReconciliationTests(unittest.TestCase):
 class PinnedWorldCountsTests(unittest.TestCase):
     """D6: a scope-pinned count is placed in EVERY round; the
     ramp is hazards, not collectibles. Unpinned builds keep the
-    escalation."""
+    escalation. (0.11.0: exercised through plan worlds.)"""
 
-    def _config(self, preset, win_text):
+    def _plan(self, dimension, win_text):
         vals = {
             "Title (working)": "Pup Game",
             "Session length (one sitting)": "10 minutes",
@@ -225,43 +226,38 @@ class PinnedWorldCountsTests(unittest.TestCase):
             "as applicable)": "3 rounds",
             "Win condition": win_text,
             "Lose / fail condition": "Time runs out",
+            "Dimension": dimension,
         }
-        config, _ = generate.deterministic_config(
-            preset, vals, generate._palette(vals), 3)
-        return config
+        return plan_module.derive_plan(vals)
 
-    def _counts(self, preset, config):
-        data = world.world_from_config(
-            preset, config, generate.composition_for_preset(preset))
+    def _counts(self, derived):
+        data = world.world_from_plan(derived)
         self.assertEqual(world.validate_world(data), [])
         return [len(u["collectibles"]) for u in data["units"]], data
 
     def test_pinned_2d_world_places_the_count_every_round(self):
-        config = self._config("arena_collector",
-                              "Collect 8 comet pups each round")
-        counts, data = self._counts("arena_collector", config)
+        counts, data = self._counts(
+            self._plan("2D", "Collect 8 comet pups each round"))
         self.assertEqual(counts, [8, 8, 8])
         self.assertTrue(all(u["targets_pinned"] for u in data["units"]))
 
     def test_pinned_3d_world_places_the_count_every_round(self):
-        config = self._config("arena_3d",
-                              "Collect 8 comet pups each round")
-        counts, data = self._counts("arena_3d", config)
+        counts, data = self._counts(
+            self._plan("3D", "Collect 8 comet pups each round"))
         self.assertEqual(counts, [8, 8, 8])
         self.assertTrue(all(u["targets_pinned"] for u in data["units"]))
 
     def test_unpinned_worlds_still_escalate(self):
-        for preset in ("arena_collector", "arena_3d"):
-            config = self._config(preset, "Collect every pup")
-            counts, data = self._counts(preset, config)
-            self.assertEqual(counts, [5, 6, 7], preset)
+        for dimension in ("2D", "3D"):
+            counts, data = self._counts(
+                self._plan(dimension, "Collect every pup"))
+            self.assertEqual(counts, [5, 6, 7], dimension)
             self.assertFalse(any(u["targets_pinned"]
                                  for u in data["units"]))
 
     def test_gate_catches_a_pinned_round_with_the_wrong_count(self):
-        config = self._config("arena_collector",
-                              "Collect 8 comet pups each round")
-        _counts, data = self._counts("arena_collector", config)
+        _counts, data = self._counts(
+            self._plan("2D", "Collect 8 comet pups each round"))
         data["units"][1]["collectibles"].pop()
         issues = world.validate_world(data)
         self.assertTrue(any("needs 8" in i["detail"] for i in issues),
@@ -278,9 +274,11 @@ class BuildSummaryTests(unittest.TestCase):
             })
             summary = generate.build_summary(project)
             self.assertTrue(summary["complete"])
-            self.assertEqual(summary["preset"], "arena_collector")
+            self.assertEqual(summary["plan"]["movement"], "top_down_2d")
+            self.assertNotIn("preset", summary)
             numbers = {n["label"]: n for n in summary["numbers"]}
-            targets = numbers["Targets per round"]
+            # The row speaks the maker's nouns (the scope's stars).
+            targets = numbers["Stars per round"]
             # D6: the summary states the per-round requirement —
             # a pinned count holds in every round.
             self.assertEqual(targets["value"], "10 in every round")
