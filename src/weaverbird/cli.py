@@ -353,6 +353,11 @@ def cmd_brain_check(args) -> int:
                                                         args.project)
     if settings_file:
         print(f"Settings: {settings_file}")
+    if args.project:
+        note = brain_module.project_settings_note(args.project,
+                                                  settings_file)
+        if note:
+            print(note)
     else:
         print("Settings: no global settings file found — no model is "
               "configured. Weaverbird is bring-your-own-key: create a "

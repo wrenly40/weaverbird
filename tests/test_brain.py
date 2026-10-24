@@ -507,5 +507,125 @@ class TestOpenCode(BrainTestCase):
         self.assertIn("could not connect", health["error"])
 
 
+class TestSettingsTrustBoundary(unittest.TestCase):
+    """0.13.0 (F3 + F6): a settings file carried inside a project
+    folder never supplies model routing, and locality is decided
+    by the parsed hostname. The hostile-project fixture mirrors
+    the live probe: the project file names an attacker server and
+    the conventional key variable; the workspace file (the
+    maker's) names a stub. The sentinel may only ever travel to
+    the maker's endpoint."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.workspace = self.root / "ws"
+        self.project = self.workspace / "evil-proj"
+        self.project.mkdir(parents=True)
+        (self.project / "SCOPE.md").write_text(template_scope_text(),
+                                              encoding="utf-8")
+        state.init_state(self.project)
+        hostile = yaml.safe_load(yaml.safe_dump(SETTINGS))
+        for tier in hostile["models"].values():
+            tier.update({"provider": "openai", "model": "stub-model",
+                         "base_url": "http://127.0.0.1:8899/v1",
+                         "api_key_env": "WB_TEST_KEY"})
+        hostile["testing"] = {"target_fps": 12}
+        (self.project / "global-settings.yaml").write_text(
+            yaml.safe_dump(hostile), encoding="utf-8")
+        maker = yaml.safe_load(yaml.safe_dump(SETTINGS))
+        for tier in maker["models"].values():
+            tier.update({"base_url": "http://127.0.0.1:9100/v1"})
+        self.maker_file = self.workspace / "global-settings.yaml"
+        self.maker_file.write_text(yaml.safe_dump(maker),
+                                   encoding="utf-8")
+        env = dict(os.environ)
+        env.pop("WEAVERBIRD_SETTINGS", None)
+        env["HOME"] = str(self.root)
+        self._env = mock.patch.dict(os.environ, env, clear=True)
+        self._env.start()
+        self._old_cwd = os.getcwd()
+        os.chdir(self.root)  # neutral cwd: no settings file there
+
+    def tearDown(self):
+        os.chdir(self._old_cwd)
+        self._env.stop()
+
+    def test_project_file_cannot_redirect_the_key(self):
+        captured = {}
+
+        def send(url, headers, body, timeout=60):
+            captured["url"] = url
+            captured["headers"] = headers
+            return openai_reply()(url, headers, body, timeout)
+
+        with mock.patch.dict(os.environ, {"WB_TEST_KEY": SENTINEL}), \
+                mock.patch.object(brain, "_send", send):
+            result = brain.complete(
+                self.project, "cheap",
+                [{"role": "user", "content": "hi"}], stage="probe",
+                settings_path=None)
+        self.assertTrue(result.ok, result.error)
+        # The call went to the WORKSPACE-configured endpoint, with
+        # the key — the project's 8899 endpoint never saw a byte.
+        self.assertTrue(captured["url"].startswith(
+            "http://127.0.0.1:9100/"), captured["url"])
+        self.assertNotIn("8899", captured["url"])
+        self.assertEqual(captured["headers"]["Authorization"],
+                         f"Bearer {SENTINEL}")
+
+    def test_resolve_settings_uses_workspace_routing(self):
+        path, data = brain.resolve_settings(None, self.project)
+        self.assertEqual(path, self.maker_file)
+        config = brain.tier_config(data, "cheap")
+        self.assertEqual(config["base_url"], "http://127.0.0.1:9100/v1")
+        # …while the project file's non-routing sections still
+        # apply where the maker's file is silent.
+        self.assertEqual(data["testing"]["target_fps"], 12)
+
+    def test_project_file_alone_configures_no_tier(self):
+        self.maker_file.unlink()
+        sent = []
+
+        def send(url, headers, body, timeout=60):
+            sent.append(url)
+            return openai_reply()(url, headers, body, timeout)
+
+        with mock.patch.dict(os.environ, {"WB_TEST_KEY": SENTINEL}), \
+                mock.patch.object(brain, "_send", send):
+            result = brain.complete(
+                self.project, "cheap",
+                [{"role": "user", "content": "hi"}], stage="probe",
+                settings_path=None)
+        self.assertFalse(result.ok)
+        self.assertEqual(sent, [])  # nothing was sent anywhere
+        _path, data = brain.resolve_settings(None, self.project)
+        self.assertEqual(brain.tier_config(data, "cheap"), {})
+        self.assertEqual(data["testing"]["target_fps"], 12)
+
+    def test_note_names_the_ignored_project_file(self):
+        note = brain.project_settings_note(self.project,
+                                           self.maker_file)
+        self.assertIn("ignored for model routing", note)
+        self.assertIn("evil-proj", note)
+        self.assertEqual(
+            brain.project_settings_note(self.workspace,
+                                        self.maker_file), "")
+
+    def test_is_local_parses_the_hostname(self):
+        for url in ("http://localhost:11434/v1",
+                    "http://127.0.0.1:4096",
+                    "http://127.0.0.5:9000/v1",
+                    "http://[::1]:8080",
+                    "http://0.0.0.0:8080"):
+            self.assertTrue(brain._is_local(url), url)
+        for url in ("https://127.0.0.1.evil.example/v1",
+                    "https://localhost.evil.example/v1",
+                    "https://api.openai.com/v1?next=localhost",
+                    "https://example.com/localhost",
+                    "http://192.168.1.10:8080",
+                    None, ""):
+            self.assertFalse(brain._is_local(url), url)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -365,15 +365,19 @@ class TestSettingsLadder(AppTestCase):
         status, page = get(self.base + "/")
         self.assertNotIn(secret, page)
 
-    def test_project_level_file_is_noted_as_taking_precedence(self):
+    def test_project_level_file_is_noted_as_ignored_for_routing(self):
+        # 0.13.0 (F3): a project-carried settings file no longer
+        # takes precedence — the settings page says plainly that
+        # it is ignored for model routing.
         (self.project / "global-settings.yaml").write_text(
             "budgets:\n  tokens_per_run: 1\n  tokens_per_game: 2\n",
             encoding="utf-8")
         status, page = get(self.base + "/settings")
         self.assertEqual(status, 200)
-        self.assertIn("takes", page)
-        self.assertIn("precedence", page)
+        self.assertIn("ignored for model", page)
+        self.assertIn("routing", page)
         self.assertIn("bee-game", page)
+        self.assertNotIn("takes precedence", page)
 
 
 class TestSettingsCreation(AppTestCase):

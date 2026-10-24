@@ -30,14 +30,31 @@ the global per-game token cap, and the result carries a loud warning
 when a call crosses the cap. When no key, no configuration or no
 network is available, callers get a plain BrainUnavailable-style
 result — never a crash.
+
+**Settings trust boundary (0.13.0, finding F3).** Model routing —
+provider, model, base URL and the key-variable name for every tier —
+is read ONLY from a maker-controlled settings file: an explicit
+``--settings`` path, ``$WEAVERBIRD_SETTINGS``, the workspace-root
+``global-settings.yaml``, the current directory's, or
+``~/.weaverbird/``'s. A ``global-settings.yaml`` carried INSIDE a
+project folder never supplies routing: before 0.13.0 it silently
+outranked the workspace file, so merely using an untrusted project
+sent the maker's API key to the project's chosen server. A project
+file's non-routing sections (engine, testing, repair, interview
+defaults, …) are still merged in, under the maker's file, and
+surfaces that resolve settings for a project say plainly that the
+project file is ignored for routing (see
+:func:`project_settings_note`).
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,7 +75,7 @@ _DEFAULT_KEY_ENVS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
-_LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+SETTINGS_FILENAME = "global-settings.yaml"
 
 
 class BrainError(Exception):
@@ -93,12 +110,68 @@ class BrainResult:
 # ---------------------------------------------------------------------------
 # Settings and tier configuration
 
-def resolve_settings(settings_path=None, project_dir=None):
-    """Find the global settings file. Returns (path, data) or (None, None).
+def _load_settings(candidate: Path):
+    """One settings file's data, {} when it does not parse."""
+    try:
+        return settings_module.load_settings(candidate)
+    except settings_module.SettingsError:
+        return {}
 
-    Order: the explicit path, $WEAVERBIRD_SETTINGS, the project's own
-    directory, the workspace above the project, the current directory,
-    and ~/.weaverbird/.
+
+def project_settings_path(project_dir) -> Path | None:
+    """The settings file carried inside a project folder, if any."""
+    if not project_dir:
+        return None
+    candidate = Path(project_dir) / SETTINGS_FILENAME
+    return candidate if candidate.is_file() else None
+
+
+def project_settings_note(project_dir, resolved_path=None) -> str:
+    """The plain warning owed when a project carries its own
+    settings file: it is ignored for model routing. '' when the
+    project carries none — or when the file it carries IS the
+    resolved maker file (a project that is its own workspace)."""
+    carried = project_settings_path(project_dir)
+    if carried is None:
+        return ""
+    if resolved_path is not None \
+            and carried.resolve() == Path(resolved_path).resolve():
+        return ""
+    return (f"Note: {carried} sits inside the project folder, so it "
+            "is ignored for model routing — provider, model, base "
+            "URL and key-variable names come only from the "
+            "maker-controlled settings file. Its other sections "
+            "still apply where that file is silent.")
+
+
+def _merge_under(maker_data: dict, project_data: dict) -> dict:
+    """Project-file data merged UNDER the maker's data, section by
+    section (the maker's value wins every key it sets). The models
+    ladder never comes from the project file at all."""
+    merged = dict(project_data)
+    merged.pop("models", None)
+    for key, value in maker_data.items():
+        existing = merged.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            combined = dict(existing)
+            combined.update(value)
+            merged[key] = combined
+        else:
+            merged[key] = value
+    return merged
+
+
+def resolve_settings(settings_path=None, project_dir=None):
+    """Find the global settings. Returns (path, data) or (None, None).
+
+    The maker-controlled chain, in order: the explicit path,
+    $WEAVERBIRD_SETTINGS, the workspace above the project, the
+    current directory, ~/.weaverbird/. A settings file inside the
+    project folder itself is NEVER in this chain (finding F3): it
+    cannot supply model routing. When one exists, its non-routing
+    sections are merged under the maker's file (and are all that
+    applies when no maker file exists) — see project_settings_note
+    for the warning surfaces owe the maker about it.
     """
     candidates: list[Path] = []
     if settings_path:
@@ -107,17 +180,27 @@ def resolve_settings(settings_path=None, project_dir=None):
     if env_value:
         candidates.append(Path(env_value))
     if project_dir:
-        project = Path(project_dir)
-        candidates.append(project / "global-settings.yaml")
-        candidates.append(project.parent / "global-settings.yaml")
-    candidates.append(Path.cwd() / "global-settings.yaml")
-    candidates.append(Path.home() / ".weaverbird" / "global-settings.yaml")
+        candidates.append(Path(project_dir).parent / SETTINGS_FILENAME)
+    candidates.append(Path.cwd() / SETTINGS_FILENAME)
+    candidates.append(Path.home() / ".weaverbird" / SETTINGS_FILENAME)
+    maker_path = None
+    maker_data = None
     for candidate in candidates:
         if candidate.is_file():
-            try:
-                return candidate, settings_module.load_settings(candidate)
-            except settings_module.SettingsError:
-                return candidate, {}
+            maker_path, maker_data = candidate, _load_settings(candidate)
+            break
+    carried = project_settings_path(project_dir)
+    if carried is not None and (maker_path is None
+                                or carried.resolve()
+                                != maker_path.resolve()):
+        project_data = _load_settings(carried)
+        if maker_data is None:
+            merged = dict(project_data)
+            merged.pop("models", None)
+            return carried, merged
+        return maker_path, _merge_under(maker_data, project_data)
+    if maker_path is not None:
+        return maker_path, maker_data
     return None, None
 
 
@@ -174,9 +257,25 @@ def _parse_opencode_model(model: str) -> tuple[str, str] | None:
 
 
 def _is_local(base_url: str | None) -> bool:
+    """True when *base_url* points at this machine — decided by
+    its PARSED hostname only (localhost, or a loopback IP such as
+    127.0.0.0/8 or ::1; 0.0.0.0 counts, as connecting to it reaches
+    this machine). Before 0.13.0 this was a substring test over the
+    whole URL, so a remote host named 127.0.0.1.evil.example counted
+    as 'local' and its tier showed as keyless (finding F6)."""
     if not base_url:
         return False
-    return any(host in base_url for host in _LOCAL_HOSTS)
+    hostname = urllib.parse.urlparse(str(base_url)).hostname
+    if not hostname:
+        return False
+    hostname = hostname.lower()
+    if hostname == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
 
 
 def tier_status(data: dict | None, tier: str) -> dict:

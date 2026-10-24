@@ -55,11 +55,29 @@ file** (the shipped template, byte-identical to
 `init --with-settings`), and the page edits the whole file —
 budgets and the model ladder, provider / model / base URL /
 `api_key_env` per tier. The app edits the workspace-root file only;
-when a project carries its own settings file the page says that
-project files take precedence for that project. Key values are
+when a project carries its own settings file the page says so
+plainly. Key values are
 never accepted, displayed or stored — the form takes the *name* of
 each key's environment variable only, and saves validate through
 `settings.py` before anything is written.
+
+**The settings trust boundary (0.13.0).** Model routing —
+provider, model, base URL and `api_key_env` for every tier — is
+resolved ONLY from maker-controlled settings files: an explicit
+`--settings` path, `$WEAVERBIRD_SETTINGS`, the workspace-root
+`global-settings.yaml`, the current directory's, or
+`~/.weaverbird/`'s. A `global-settings.yaml` inside a project
+folder can never supply routing (before 0.13.0 it silently
+outranked the workspace file, so using an untrusted project could
+send the maker's API key to the project's chosen server). A
+project file's non-routing sections still merge in under the
+maker's file, and when a project carries one, the surfaces say so
+plainly — the Settings page note and `brain check --project` both
+state that the project file is ignored for model routing. The
+app's job path and the CLI follow the same rule, because both go
+through the one resolver. Whether a base URL counts as a local
+(keyless) server is decided by its parsed hostname — localhost or
+a loopback IP — never by substring matching.
 
 Three interview contracts were hardened in the same pass. Surplus
 answers: a message with more answer lines than the pending group

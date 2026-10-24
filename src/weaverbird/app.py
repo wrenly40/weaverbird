@@ -1190,14 +1190,20 @@ SETTINGS_FILENAME = "global-settings.yaml"
 
 def _project_settings_note(server) -> str:
     """One plain line when a project carries its own settings
-    file: brain.resolve_settings prefers project files, so the
-    maker's project file wins for that project — say so."""
+    file: since 0.13.0 (finding F3) a project file is IGNORED for
+    model routing — provider, model, base URL and key-variable
+    names come only from maker-controlled settings — and the page
+    says so plainly instead of letting it silently win."""
+    root = Path(server.workspace) / SETTINGS_FILENAME
     for project in find_projects(server.workspace):
-        if (Path(project["path"]) / SETTINGS_FILENAME).exists():
+        carried = Path(project["path"]) / SETTINGS_FILENAME
+        if carried.exists() and carried.resolve() != root.resolve():
             return (f"Note: project {project['name']} has its own "
-                    "global-settings.yaml — a project file takes "
-                    "precedence over this workspace file for that "
-                    "project.")
+                    "global-settings.yaml — it is ignored for model "
+                    "routing: provider, model, base URL and "
+                    "key-variable names come only from the "
+                    "workspace-root file. Its other sections still "
+                    "apply where that file is silent.")
     return ""
 
 
